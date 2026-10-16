@@ -1,0 +1,1143 @@
+"""PySide6 desktop GUI - research / paper trading only (NO LIVE ORDER CODE)."""
+from __future__ import annotations
+import json
+import hashlib
+import uuid
+from datetime import datetime, timedelta
+from pathlib import Path
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QPushButton, QFrame, QStackedWidget, QListWidget, QTableWidget,
+    QTableWidgetItem, QHeaderView, QMessageBox, QComboBox, QSpinBox,
+    QDoubleSpinBox, QCheckBox, QFormLayout, QLineEdit, QScrollArea, QFileDialog,
+    QInputDialog, QAbstractItemView, QTextEdit
+)
+
+from app.config import Settings, Credentials, data_dir
+from app.storage import Database
+from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
+from app.strategy import evaluate, auto_paper_exit, create_proposals
+from app.shadow import ShadowEngine
+from app.backtest import load_ohlcv_csv, run_experiments, export_results
+from app.krx_history import HistoryStore, KRXDailyClient
+from app.research import evaluate_research, export_report
+
+STYLE = '''
+QMainWindow,QWidget {background:#0b1220;color:#e6edf7;font:10pt 'Malgun Gothic';}
+QFrame#Sidebar{background:#111e31;border-right:1px solid #293448;}
+QFrame#Card{background:#152237;border:1px solid #2a3c56;border-radius:11px;}
+QFrame#Panel{background:#121f33;border:1px solid #293b55;border-radius:10px;}
+QLabel#H1{font-size:21pt;font-weight:700;color:#f4f8ff;}
+QLabel#H2{font-size:13pt;font-weight:700;color:#dceaff;}
+QLabel#Metric{font-size:23pt;font-weight:700;color:#5fd5c4;}
+QLabel#Muted{color:#9bacc4;}
+QListWidget{background:transparent;border:0;padding:12px 4px;outline:0;}
+QListWidget::item{height:46px;border-radius:7px;padding:7px 13px;color:#b7c8df;}
+QListWidget::item:selected{background:#173d56;color:#78e3d1;font-weight:700;}
+QPushButton{background:#263a53;color:#f4f7fb;border:1px solid #3a526c;border-radius:7px;padding:9px 13px;font-weight:600;}
+QPushButton:hover{background:#36506a;}
+QPushButton#Primary{background:#087b76;border-color:#11a49a;color:white;}
+QPushButton#Primary:hover{background:#0f9589;}
+QPushButton#Danger{background:#6d2935;border-color:#b04b59;}
+QTableWidget{background:#101d2f;alternate-background-color:#14243a;border:1px solid #293e58;gridline-color:#29394f;
+ selection-background-color:#1a6574;selection-color:#ffffff;}
+QHeaderView::section{background:#1c304b;color:#bdcee6;font-weight:700;padding:10px;border:0;border-right:1px solid #2b3b50;}
+QTableWidget::item{padding:6px;}
+QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QTextEdit{
+ background:#192b43;color:white;border:1px solid #36506c;border-radius:6px;padding:7px;min-height:23px;}
+QComboBox QAbstractItemView{background:#1b2d47;selection-background-color:#1a6774;}
+QCheckBox{spacing:8px;color:#d5e3f3;}
+QScrollArea{border:0;}
+QStatusBar{background:#111e31;color:#b1c6df;}
+'''
+
+
+class Work(QThread):
+    succeeded = Signal(object)
+    failed = Signal(str)
+    def __init__(self, func):
+        super().__init__()
+        self.func = func
+    def run(self):
+        try:
+            self.succeeded.emit(self.func())
+        except Exception as ex:
+            self.failed.emit(str(ex))
+
+
+def lbl(text, style=None):
+    x = QLabel(text)
+    if style:
+        x.setObjectName(style)
+    return x
+
+
+def make_table(cols):
+    t = QTableWidget(0, len(cols))
+    t.setHorizontalHeaderLabels(cols)
+    t.setAlternatingRowColors(True)
+    t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    t.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+    t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    t.verticalHeader().setVisible(False)
+    t.horizontalHeader().setStretchLastSection(False)
+    t.horizontalHeader().setMinimumSectionSize(70)
+    t.horizontalHeader().setDefaultSectionSize(130)
+    t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    t.setSortingEnabled(False)
+    return t
+
+
+def cell(value, align=Qt.AlignmentFlag.AlignCenter, positive=None):
+    x = QTableWidgetItem(str(value))
+    x.setTextAlignment(align)
+    if positive is not None:
+        from PySide6.QtGui import QColor
+        x.setForeground(QColor('#6de2bc' if positive >= 0 else '#ff8290'))
+    return x
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.settings = Settings()
+        self.cfg = self.settings.values
+        self.creds = Credentials()
+        self.db = Database(data_dir() / 'trading.db')
+        self.demo = DemoMarket()
+        self.shadow = ShadowEngine(self.db)
+        self.history = HistoryStore(data_dir() / 'research.db')
+        self.research_report = None
+        self.research_run_id = None
+        self.shadow.initialize_defaults(dict(self.cfg), self.cfg['data_mode'])
+        self.backtest_runs = []
+        self.backtest_file = ''
+        self.last_backtest_dir = None
+        self.results = []
+        self.stocks = []
+        self.work = None
+        self.scanning = False
+        self.setWindowTitle('KRX Trading Lab  ·  연구 / 가상매매 v0.3')
+        self.resize(1390, 860)
+        self.setMinimumSize(1100, 690)
+        self.setStyleSheet(STYLE)
+        self.build()
+        self.timer = QTimer(self)
+        self.timer.setInterval(max(10, int(self.cfg['scan_interval_sec'])) * 1000)
+        self.timer.timeout.connect(self.scan)
+        self.refresh_stats()
+        self.refresh_trades()
+        self.refresh_proposals()
+        self.refresh_shadow()
+        self.daily_research_timer=QTimer(self)
+        self.daily_research_timer.setInterval(10*60*1000)
+        self.daily_research_timer.timeout.connect(self.maybe_daily_research)
+        self.daily_research_timer.start()
+        QTimer.singleShot(25000,self.maybe_daily_research)
+        self.db.log('START', 'GUI 실행 - 실계좌 주문 기능 없음')
+
+    def build(self):
+        main = QWidget()
+        self.setCentralWidget(main)
+        layout = QHBoxLayout(main)
+        layout.setContentsMargins(0,0,0,0)
+        layout.setSpacing(0)
+        sidebar = QFrame(objectName='Sidebar')
+        sidebar.setFixedWidth(218)
+        left = QVBoxLayout(sidebar)
+        left.setContentsMargins(13,25,13,18)
+        left.addWidget(lbl('  ◉  KRX AI LAB', 'H2'))
+        left.addWidget(lbl('    TRADING LAB  /  v0.3', 'Muted'))
+        left.addSpacing(30)
+        self.nav = QListWidget()
+        for item in ['▦  대시보드','◈  종목 스크리너','▤  가상 매매기록',
+                     '◫  미적용 전략 경쟁','▥  과거 CSV 백테스트',
+                     '◉  종목 선정 연구','⚙  전략 조건 설정','◇  전략 개선안','⛓  API · 텔레그램']:
+            self.nav.addItem(item)
+        left.addWidget(self.nav,1)
+        self.demo_badge = lbl('● 실계좌 주문 기능 없음', 'Muted')
+        self.demo_badge.setWordWrap(True)
+        left.addWidget(self.demo_badge)
+        layout.addWidget(sidebar)
+        outer = QVBoxLayout()
+        outer.setContentsMargins(23,18,23,15)
+        outer.setSpacing(13)
+        bar = QHBoxLayout()
+        self.title = lbl('대시보드', 'H1')
+        bar.addWidget(self.title)
+        bar.addStretch()
+        self.connection = lbl('● DEMO', 'Muted')
+        bar.addWidget(self.connection)
+        self.scan_button = QPushButton('지금 검색',objectName='Primary')
+        self.scan_button.clicked.connect(self.scan)
+        bar.addWidget(self.scan_button)
+        self.auto_button = QPushButton('자동 검색 시작')
+        self.auto_button.clicked.connect(self.toggle_auto)
+        bar.addWidget(self.auto_button)
+        outer.addLayout(bar)
+        self.notice = lbl('데모 모드의 종목·가격은 생성된 가상 데이터입니다. 이 프로그램은 실주문을 수행하지 않습니다.','Muted')
+        self.notice.setWordWrap(True)
+        outer.addWidget(self.notice)
+        self.stack = QStackedWidget()
+        outer.addWidget(self.stack,1)
+        for fn in (self.make_dashboard, self.make_screener, self.make_trades,
+                   self.make_shadow, self.make_backtest, self.make_research, self.make_strategy, self.make_optimizer, self.make_integrations):
+            self.stack.addWidget(fn())
+        layout.addLayout(outer,1)
+        self.statusBar().showMessage(f'데이터 저장 위치: {data_dir()}')
+        self.nav.currentRowChanged.connect(self.move_tab)
+        self.nav.setCurrentRow(0)
+        self.update_connection()
+
+    def move_tab(self, row):
+        if row < 0:
+            return
+        self.stack.setCurrentIndex(row)
+        self.title.setText(['대시보드','실시간 종목 스크리너','가상 매수·매도 기록','섀도 전략별 누적 성과','과거 일봉 백테스트', '종목 선정 조건 연구','전략 조건 편집기',
+                            '전략 개선안 · 승인','외부 서비스 연동'][row])
+        if row == 2:
+            self.refresh_trades()
+        if row == 3:
+            self.refresh_shadow()
+        if row == 5:
+            self.refresh_research()
+        if row == 7:
+            self.refresh_proposals()
+
+    def card(self, heading, name):
+        frame = QFrame(objectName='Card')
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(19,14,19,14)
+        v.addWidget(lbl(heading,'Muted'))
+        metric = lbl('—','Metric')
+        metric.setObjectName('Metric')
+        metric.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        v.addWidget(metric)
+        setattr(self, name, metric)
+        return frame
+
+    def make_dashboard(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setSpacing(15)
+        cards = QHBoxLayout()
+        cards.addWidget(self.card('가상 실현손익 (세금·비용 차감)', 'kpi_pnl'))
+        cards.addWidget(self.card('가상 거래 승률', 'kpi_win'))
+        cards.addWidget(self.card('완료된 가상 거래', 'kpi_count'))
+        cards.addWidget(self.card('현재 가상 보유', 'kpi_open'))
+        v.addLayout(cards)
+        v.addWidget(lbl('최근 검색 종목 · 추천 상위', 'H2'))
+        self.dashboard_table = make_table(['종목','시장','현재가','등락률','점수','선정'])
+        v.addWidget(self.dashboard_table,2)
+        bottom = QFrame(objectName='Panel')
+        b = QHBoxLayout(bottom)
+        b.addWidget(lbl('실험 메모  |  수익률·손절·승률은 가상체결 기준이며 실제 체결이나 미래 수익을 보장하지 않습니다.','Muted'))
+        v.addWidget(bottom)
+        return page
+
+    def make_screener(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        bar = QHBoxLayout()
+        bar.addWidget(lbl('조건 충족 종목은 상단에 표시됩니다. 점수는 예측 승률이 아닌 휴리스틱 점수입니다.','Muted'))
+        bar.addStretch()
+        self.count_info = lbl('검색 전','Muted')
+        bar.addWidget(self.count_info)
+        v.addLayout(bar)
+        self.screen_table = make_table(['순위','종목코드','종목명','시장','현재가','등락률',
+                                        '거래대금(억)','전일 거래량비(%)','시총(억)','점수','필터'])
+        v.addWidget(self.screen_table)
+        control = QHBoxLayout()
+        control.addWidget(lbl('※ LIVE 조회는 키움 순위 API의 후보군 기반이며 전 종목 완전 스캔이 아닙니다.','Muted'))
+        control.addStretch()
+        btn = QPushButton('선택 종목 가상매수 (1주)', objectName='Primary')
+        btn.clicked.connect(self.paper_buy)
+        control.addWidget(btn)
+        telegram = QPushButton('추천 목록 텔레그램 발송')
+        telegram.clicked.connect(self.telegram_recommend)
+        control.addWidget(telegram)
+        v.addLayout(control)
+        return page
+
+    def make_trades(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        row = QHBoxLayout()
+        self.stats_line = lbl('거래내역 없음','H2')
+        row.addWidget(self.stats_line)
+        row.addStretch()
+        close_btn = QPushButton('선택 가상 포지션 즉시 청산')
+        close_btn.clicked.connect(self.paper_manual_close)
+        row.addWidget(close_btn)
+        exp = QPushButton('매매기록 CSV 내보내기')
+        exp.clicked.connect(self.export_trades)
+        row.addWidget(exp)
+        v.addLayout(row)
+        self.trade_table = make_table(['ID','종목','구분','수량','매수가','매도가','손익(원)',
+                                       '손익률','매수일','청산일','사유'])
+        v.addWidget(self.trade_table)
+        v.addWidget(lbl('가상체결은 최신 조회가 기준의 단순 근사입니다. 미끄러짐/수수료/세금은 설정한 가정값으로 계산합니다.','Muted'))
+        return page
+
+    def make_shadow(self):
+        page=QWidget(); v=QVBoxLayout(page)
+        intro=lbl('미적용 조건도 다음 관측일 첫 스캔 시세로 독립 가상매매 · 사용자 승인 전 전략 자동적용 금지', 'Muted')
+        intro.setWordWrap(True);v.addWidget(intro)
+        self.shadow_summary=lbl('시장 데이터 수집 전','H2');v.addWidget(self.shadow_summary)
+        self.shadow_table=make_table(['ID','실험 전략','데이터','상태','누적 수익률','실현손익','승률','거래','보유','MDD','마지막 기록'])
+        self.shadow_table.itemSelectionChanged.connect(self.refresh_shadow_detail)
+        v.addWidget(self.shadow_table,2)
+        bar=QHBoxLayout()
+        refresh=QPushButton('성과 새로고침');refresh.clicked.connect(self.refresh_shadow);bar.addWidget(refresh)
+        export=QPushButton('섀도 전략 4종 CSV 내보내기',objectName='Primary');export.clicked.connect(self.export_shadow);bar.addWidget(export)
+        bar.addStretch();v.addLayout(bar)
+        v.addWidget(lbl('선택 전략의 일별 자산 변동 및 미체결/가격제한 사유', 'H2'))
+        self.shadow_history=make_table(['날짜','자산 평가액','누적 실현','미실현','청산 거래','보유','시세 누락'])
+        v.addWidget(self.shadow_history,1)
+        self.shadow_pending=make_table(['추천일','종목','추천가','진입상태','평가일','사유'])
+        v.addWidget(self.shadow_pending,1)
+        v.addWidget(lbl('주의: DEMO는 합성시세입니다. 실제 키움 순위 데이터 역시 전일 거래량비이며, 첫 스캔 가격은 오전 8시 시가가 아닙니다. 호가·부분체결 미반영.','Muted'))
+        return page
+
+    def refresh_shadow(self):
+        if not hasattr(self,'shadow_table'):return
+        data=self.shadow.standings()
+        sid=None
+        if self.shadow_table.currentRow()>=0 and self.shadow_table.item(self.shadow_table.currentRow(),0):
+            sid=int(self.shadow_table.item(self.shadow_table.currentRow(),0).text())
+        self.shadow_table.blockSignals(True)
+        self.shadow_table.setRowCount(len(data))
+        for i,s in enumerate(data):
+            val=('—' if not s['closed'] else f'{s["winrate"]:.1f}%')
+            row=[s['id'],s['name'],s['data_source'],s['status'],f'{s["return_pct"]:+.2f}%',
+                 f'{s["realized"]:+,.0f}',val,s['closed'],s['open'],f'{s["mdd"]:.2f}%',s['last_day']]
+            for j,x in enumerate(row):
+                self.shadow_table.setItem(i,j,cell(x,positive=s['return_pct'] if j in (4,5) else None))
+            if sid==s['id']: self.shadow_table.selectRow(i)
+        self.shadow_table.blockSignals(False)
+        self.shadow_summary.setText(f'독립 가상전략 {len(data)}개 · {self.shadow.summarize_comparison(5,10)}')
+        self.refresh_shadow_detail()
+
+    def refresh_shadow_detail(self):
+        if not hasattr(self,'shadow_table'):return
+        idx=self.shadow_table.currentRow()
+        sid=(int(self.shadow_table.item(idx,0).text())
+             if idx>=0 and self.shadow_table.item(idx,0) else None)
+        history=self.shadow.daily_history(sid) if sid is not None else []
+        self.shadow_history.setRowCount(len(history))
+        for i,r in enumerate(history):
+            cols=[r['day'],f'{r["equity"]:,.0f}',f'{r["realized_pnl"]:+,.0f}',
+                  f'{r["unrealized_pnl"]:+,.0f}',r['closed_count'],r['open_count'],r['stale_marks']]
+            for j,x in enumerate(cols):self.shadow_history.setItem(i,j,cell(x))
+        pending=self.shadow.pending_history(sid) if sid is not None else []
+        self.shadow_pending.setRowCount(min(150,len(pending)))
+        for i,r in enumerate(pending[:150]):
+            cols=[r['signal_day'],r['name'],f'{r["signal_price"]:,.0f}',
+                  r['status'],r['resolved_day'] or '—',r['reason'] or '—']
+            for j,x in enumerate(cols):self.shadow_pending.setItem(i,j,cell(x))
+
+    def export_shadow(self):
+        path=QFileDialog.getExistingDirectory(self,'섀도 전략 CSV 내보낼 폴더',str(Path.home()))
+        if path:
+            files=self.shadow.export(path)
+            QMessageBox.information(self,'내보내기',f'{len(files)}개 CSV 저장 완료\n{path}')
+
+    def make_backtest(self):
+        page=QWidget();v=QVBoxLayout(page)
+        note=lbl('실제 OHLCV CSV를 직접 불러와 과거 20거래일 평균 거래량비 → 다음 거래일 정규장 시가 진입을 검증합니다. NXT 프리마켓 재현 아님.','Muted')
+        note.setWordWrap(True);v.addWidget(note)
+        top=QHBoxLayout()
+        sample=str(Path(__file__).resolve().parent.parent/'sample_data'/'DEMO_synthetic_ohlcv.csv')
+        saved=self.cfg.get('last_backtest_csv','')
+        self.bt_path=QLineEdit(saved if saved and Path(saved).is_file() else sample)
+        self.bt_path.setPlaceholderText('OHLCV CSV: date,code,market,open,high,low,close,volume,trade_value_eok,cap_eok')
+        top.addWidget(self.bt_path,1)
+        select=QPushButton('CSV 선택');select.clicked.connect(self.choose_backtest_csv);top.addWidget(select)
+        start=QPushButton('조건별 백테스트 실행',objectName='Primary');start.clicked.connect(self.do_backtest);top.addWidget(start)
+        v.addLayout(top)
+        self.bt_status=lbl('CSV 파일을 선택하세요 · 14개 사전등록 실험 조합을 동일한 데이터에 적용합니다.','H2')
+        v.addWidget(self.bt_status)
+        self.bt_table=make_table(['실험','분류','매수신호','진입건','갭 제한 탈락','승률','실현 순손익','평가 수익률','MDD'])
+        self.bt_table.itemSelectionChanged.connect(self.show_backtest_detail)
+        v.addWidget(self.bt_table,2)
+        v.addWidget(lbl('선택 전략의 실제로 가정한 매수·매도 기록 / 탈락 이유', 'H2'))
+        self.bt_trades=make_table(['종목','신호일','매수일','매수가','매도일','매도가','매도사유','순손익','순수익률'])
+        v.addWidget(self.bt_trades,1)
+        self.bt_note=lbl('데이터 부족, 시가총액 미제공, 거래량 기준 불충족, 갭 제한 등 탈락 사유를 CSV로 내보낼 수 있습니다.','Muted')
+        self.bt_note.setWordWrap(True);v.addWidget(self.bt_note)
+        save=QPushButton('모든 실험·신호·매매·일별 자산 4종 CSV 내보내기');save.clicked.connect(self.export_backtest)
+        v.addWidget(save)
+        return page
+
+    def choose_backtest_csv(self):
+        path,_=QFileDialog.getOpenFileName(self,'일별 OHLCV CSV 선택',str(Path.home()),'CSV (*.csv)')
+        if path:self.bt_path.setText(path)
+
+    def do_backtest(self):
+        path=self.bt_path.text().strip()
+        if not Path(path).is_file():
+            QMessageBox.warning(self,'파일 오류','존재하는 CSV를 선택하세요.');return
+        cfg=dict(self.cfg)
+        def runner():
+            rows=load_ohlcv_csv(path)
+            runs=run_experiments(rows,cfg)
+            folder=(data_dir()/'backtest_history'/
+                    (datetime.now().strftime('%Y%m%d_%H%M%S_')+uuid.uuid4().hex[:7]))
+            export_results(folder,runs)
+            digest=hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            (folder/'manifest.json').write_text(json.dumps({
+                'generated_at':datetime.now().isoformat(timespec='seconds'),
+                'input_file':Path(path).name,'input_sha256':digest,
+                'bar_count':len(rows),'strategies':len(runs),
+                'parameters':cfg,'data_kind':'USER CSV / HISTORICAL PAPER',
+                'execution_model':'NEXT SESSION OPEN / OHLC STOP FIRST'
+            },ensure_ascii=False,indent=2),encoding='utf-8')
+            return len(rows),runs,folder
+        self.bt_status.setText('계산 중… · 과거 자료를 읽고 있습니다.')
+        self.run_task(runner,self.on_backtest,'과거 데이터 실험 완료')
+
+    def on_backtest(self,result):
+        num,runs,folder=result
+        self.backtest_runs=runs
+        self.last_backtest_dir=folder
+        self.bt_table.setRowCount(len(runs))
+        for i,r in enumerate(runs):
+            s=r['summary']
+            cols=[r['name'],r['category'],s['signals'],s['bought'],s['skip_gap'],
+                  f'{s["winrate"]:.1f}%' if s['winrate'] is not None else '표본 없음',
+                  f'{s["realized_pnl"]:+,.0f}원',f'{s["return_pct"]:+.2f}%',f'{s["mdd"]:.2f}%']
+            for j,x in enumerate(cols):self.bt_table.setItem(i,j,cell(x,positive=s['realized_pnl'] if j in (6,7) else None))
+        self.bt_status.setText(f'{num:,}개 OHLCV 행 · 전략 {len(runs)}개 · 자동 저장: {folder} · 실제 체결 아님.')
+        self.cfg['last_backtest_csv']=self.bt_path.text().strip()
+        self.settings.save()
+        self.db.log('BACKTEST',f'과거 CSV 실험 {num}행, {len(runs)}전략 (데이터 원본 로컬 경로 미기록)')
+        self.bt_table.selectRow(0)
+
+    def show_backtest_detail(self):
+        idx=self.bt_table.currentRow()
+        if idx<0 or idx>=len(self.backtest_runs):return
+        r=self.backtest_runs[idx]
+        trades=r['trades']
+        self.bt_trades.setRowCount(len(trades))
+        for i,t in enumerate(trades):
+            cols=[t['name'],t['signal_day'],t['entry_day'],f'{t["entry_fill"]:,.0f}',
+                  t['exit_day'],f'{t["exit_fill"]:,.0f}',t['exit_reason'],
+                  f'{t["pnl"]:+,.0f}',f'{t["pnl_pct"]:+.2f}%']
+            for j,x in enumerate(cols):self.bt_trades.setItem(i,j,cell(x,positive=t['pnl'] if j in (7,8) else None))
+        s=r['summary']
+        self.bt_note.setText(f'추천 신호 {s["signals"]}건 / 매수 {s["bought"]}건 / 갭상승 거절 {s["skip_gap"]}건 / '
+                             f'보유종목 제한 {s["skip_capacity"]}건 / 자금 부족 {s["skip_cash"]}건 / '
+                             '손절·익절 동시 터치 시 손절 우선 · 체결가는 비용을 반영한 가정값입니다.')
+
+    def export_backtest(self):
+        if not self.backtest_runs:
+            QMessageBox.information(self,'기록 없음','먼저 백테스트를 실행하세요.');return
+        folder=QFileDialog.getExistingDirectory(self,'결과 CSV 내보낼 폴더',str(Path.home()))
+        if folder:
+            files=export_results(folder,self.backtest_runs)
+            QMessageBox.information(self,'내보내기',f'{len(files)}개 CSV 저장\n{folder}')
+
+    def make_research(self):
+        page=QWidget(); v=QVBoxLayout(page);v.setSpacing(12)
+        title=lbl('종목을 얼마나 잘 고르는지 검증하는 연구실','H2');v.addWidget(title)
+        note=lbl('KRX 시세·시가총액의 일봉 기준입니다. 매일 종가에 선정 → 다음 거래일 시가 가상진입, 1·3·5일 보유 수익률 검증.\n'
+                 '실제 자동주문·AI 예측확률이 아닙니다. 미적용 조건은 독립 비교되며 사용자 승인 없이 실전 적용되지 않습니다.','Muted')
+        note.setWordWrap(True);v.addWidget(note)
+        box=QFrame(objectName='Panel');form=QGridLayout(box)
+        self.research_source=QComboBox();self.research_source.addItems(['CSV_USER','KRX','DEMO_SYNTHETIC'])
+        form.addWidget(lbl('연구 데이터'),0,0);form.addWidget(self.research_source,0,1)
+        self.research_source.currentTextChanged.connect(self.research_source_changed)
+        self.research_k=QSpinBox();self.research_k.setRange(1,50);self.research_k.setValue(5)
+        form.addWidget(lbl('일별 추천 Top-K'),0,2);form.addWidget(self.research_k,0,3)
+        self.research_start=QLineEdit((datetime.now()-timedelta(days=180)).strftime('%Y-%m-%d'))
+        form.addWidget(lbl('KRX 수집 시작일'),1,0);form.addWidget(self.research_start,1,1)
+        self.research_end=QLineEdit(datetime.now().strftime('%Y-%m-%d'))
+        form.addWidget(lbl('KRX 수집 종료일'),1,2);form.addWidget(self.research_end,1,3)
+        self.research_auto=QCheckBox('KRX 키 등록 후, GUI 실행 중 매 거래일 17시 이후 자동 수집·조건 비교')
+        self.research_auto.setChecked(bool(self.cfg.get('research_auto_daily',False)))
+        self.research_auto.toggled.connect(self.save_auto_research)
+        v.addWidget(box)
+        v.addWidget(self.research_auto)
+        buttons=QHBoxLayout()
+        for label,fn in [('CSV 불러오기',self.import_research_csv),('합성 예제 가져오기',self.import_research_demo),
+                         ('KRX 과거 시세 수집',self.collect_krx),('48개 조건 검증',self.run_research),
+                         ('결과 CSV 내보내기',self.export_research)]:
+            b=QPushButton(label,objectName='Primary' if label=='48개 조건 검증' else '')
+            b.clicked.connect(fn);buttons.addWidget(b)
+        v.addLayout(buttons)
+        decision=QHBoxLayout()
+        a=QPushButton('선택 조건 연구 프리셋 승인');a.clicked.connect(lambda:self.review_research(True));decision.addWidget(a)
+        b=QPushButton('선택 조건 거부');b.clicked.connect(lambda:self.review_research(False));decision.addWidget(b)
+        decision.addStretch();v.addLayout(decision)
+        self.research_status=lbl('시세를 준비한 후 조건 검증을 시작하세요.','Muted')
+        self.research_status.setWordWrap(True);v.addWidget(self.research_status)
+        self.research_result=lbl('학습 구간에서만 선정한 후보 전략을 검증 구간에서 확인합니다.','H2')
+        self.research_result.setWordWrap(True);v.addWidget(self.research_result)
+        self.research_table=make_table(['실험 조건','시장','학습 거래일','학습 초과수익 3일','검증 거래일',
+                                        '검증 초과수익 3일','검증 Rank IC','결과'])
+        self.research_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
+        self.research_table.itemSelectionChanged.connect(self.research_detail)
+        v.addWidget(self.research_table,4)
+        self.research_detail_label=lbl('선택한 조건의 세부 검증 결과가 표시됩니다.','Muted')
+        self.research_detail_label.setWordWrap(True);v.addWidget(self.research_detail_label)
+        v.addWidget(lbl('※ 3일 수익률은 다음 날 시가→3번째 거래일 종가, 왕복 비용 0.25%p 가정. '
+                        '일별 추천이 겹치므로 수익률을 누적 실전계좌 수익처럼 해석하면 안 됩니다.','Muted'))
+        return page
+
+    def research_source_changed(self):
+        self.research_report=None
+        self.research_run_id=None
+        self.refresh_research()
+
+    def save_auto_research(self,checked):
+        self.cfg['research_auto_daily']=bool(checked)
+        self.settings.save()
+
+    def maybe_daily_research(self):
+        # Runs ONLY while GUI is alive; no hidden service. Does not send real orders.
+        now=datetime.now()
+        key=self.creds.get('krx_api_key')
+        today=now.date().isoformat()
+        if (not self.cfg.get('research_auto_daily') or now.hour<17 or now.weekday()>4
+            or self.cfg.get('research_last_update')==today or not key
+            or (self.work is not None and self.work.isRunning())):return
+        start=(now-timedelta(days=7)).date().isoformat()
+        def run():
+            result=self.history.fetch_range(KRXDailyClient(key),start,today)
+            bars=self.history.load_bars('KRX')
+            if len(bars)<100:return result,None
+            report=evaluate_research(bars,topk=5)
+            rid=self.history.save_run('KRX',{'source':'KRX','topk':5,'auto':True},report)
+            return result,(rid,report)
+        def finish(output):
+            self.cfg['research_last_update']=today
+            self.settings.save()
+            if output[1] is not None:
+                self.research_source.setCurrentText('KRX')
+                self.research_run_id=output[1][0]
+                self.show_research(output[1][1],show_message=False)
+            self.statusBar().showMessage('KRX 일간 데이터·조건 평가 갱신 (승인 전 미적용)')
+        self.run_task(run,finish,'KRX 자동 조건 평가 완료')
+
+    def refresh_research(self):
+        source=self.research_source.currentText()
+        n=self.history.count(source)
+        self.research_status.setText(f'[{source}] 저장 {n[0]:,}행 / {n[1]}거래일 / {n[2]}종목 / {n[3] or "—"} ~ {n[4] or "—"}  ·  연구 데이터 DB: research.db')
+        latest=self.history.last_run(source)
+        if latest and self.research_report is None:
+            self.research_run_id=latest[0]
+            self.research_report=latest[2]
+            self.show_research(latest[2],show_message=False)
+
+    def import_research_csv(self):
+        path,_=QFileDialog.getOpenFileName(self,'실제 OHLCV CSV 불러오기',str(Path.home()),'CSV (*.csv)')
+        if not path:return
+        self.run_task(lambda:self.history.import_csv(path,'CSV_USER'),
+                      lambda n:(self.research_source.setCurrentText('CSV_USER'),self.refresh_research(),
+                                QMessageBox.information(self,'CSV 저장',f'{n:,}행을 CSV_USER 데이터베이스에 등록했습니다.')),
+                      'CSV 수집 완료')
+
+    def import_research_demo(self):
+        path=Path(__file__).resolve().parent.parent/'sample_data'/'DEMO_research_ohlcv.csv'
+        if not path.exists():
+            QMessageBox.warning(self,'예제 없음','예제 CSV를 찾지 못했습니다.');return
+        self.run_task(lambda:self.history.import_csv(path,'DEMO_SYNTHETIC'),
+                      lambda n:(self.research_source.setCurrentText('DEMO_SYNTHETIC'),self.refresh_research(),
+                                QMessageBox.information(self,'합성 데이터',f'{n:,}행을 가져왔습니다. 실제 주가가 아닙니다.')),
+                      '합성 예제 준비 완료')
+
+    def collect_krx(self):
+        key=self.secrets['krx_api_key'].text().strip() or self.creds.get('krx_api_key')
+        if not key:
+            QMessageBox.information(self,'KRX 인증키 필요','[API · 텔레그램]에서 별도의 KRX OPEN API 인증키를 먼저 등록하세요.');return
+        start=self.research_start.text().strip();end=self.research_end.text().strip()
+        if QMessageBox.question(self,'KRX 과거 시세 수집',
+              f'{start} ~ {end}의 KOSPI·KOSDAQ 일봉을 KRX에 요청합니다.\n'
+              'KRX API의 각 서비스 이용 승인 및 데이터 사용 약관을 확인했나요?') != QMessageBox.StandardButton.Yes:return
+        self.run_task(lambda:self.history.fetch_range(KRXDailyClient(key),start,end),
+                      lambda r:(self.research_source.setCurrentText('KRX'),self.refresh_research(),
+                                QMessageBox.information(self,'KRX 저장',f'신규 응답 {r["requests"]}회 / {r["rows"]:,}행 저장')),
+                      'KRX 수집 완료')
+
+    def run_research(self):
+        source=self.research_source.currentText()
+        self.research_report=None
+        topk=self.research_k.value()
+        def run():
+            bars=self.history.load_bars(source)
+            if len(bars)<100:raise ValueError('자료가 부족합니다. CSV 또는 KRX 데이터를 먼저 수집하세요.')
+            report=evaluate_research(bars,topk=topk)
+            run_id=self.history.save_run(source,{'topk':topk,'source':source},report)
+            return run_id,report
+        def done(output):
+            self.research_run_id=output[0]
+            self.show_research(output[1])
+        self.run_task(run,done,'종목 선정 조건 검증 완료')
+
+    def show_research(self,report,show_message=True):
+        self.research_report=report
+        self.research_table.setRowCount(0)
+        states=self.history.research_states(self.research_source.currentText())
+        for r in report['variants']:
+            i=self.research_table.rowCount();self.research_table.insertRow(i)
+            def fmt(x):return '—' if x is None else f'{x:+.3f}'
+            values=[r['name'],r['market'],str(r['train_days']),fmt(r['train_excess3']),
+                    str(r['test_days']),fmt(r['test_excess3']),fmt(r['test_ic']),
+                    states.get(r['id'], ('표본 부족' if r['train_days']<12 or r['test_days']<5 else '관찰 중'))]
+            for j,t in enumerate(values):self.research_table.setItem(i,j,cell(t))
+        chosen=next((x for x in report['variants'] if x['id']==report['chosen_on_train_only']),None)
+        self.research_result.setText('학습 구간 우선 후보: '+(chosen['name'] if chosen else '표본 부족으로 선정하지 않음'))
+        self.research_status.setText(f'{report["data_begin"]} ~ {report["data_end"]} | '
+                     f'{report["symbols"]}종목, {report["data_rows"]:,}행, {len(report["variants"])}개 조건 | '
+                     'TRAIN으로 조건 순위 선정 / TEST는 미사용 기간 평가')
+        if show_message:
+            QMessageBox.information(self,'조건 검증 완료',
+                '조건별 일별 추천·검증 수익을 DB에 기록했습니다.\n'
+                '이 결과는 연구용이며 적용이나 실제 주문으로 이어지지 않습니다.')
+
+    def research_detail(self):
+        i=self.research_table.currentRow()
+        if not self.research_report or i<0 or i>=len(self.research_report['variants']):return
+        r=self.research_report['variants'][i]
+        def f(k):return '자료 없음' if r.get(k) is None else f'{r[k]:+.3f}'
+        self.research_detail_label.setText(
+            f'학습(이전 기간): {r["train_days"]}일 / {r["train_signals"]}추천 · 평균 순수익 {f("train_return3")}% · '
+            f'초과수익 {f("train_excess3")}%p  |  '
+            f'검증(미사용 기간): {r["test_days"]}일 / {r["test_signals"]}추천 · '
+            f'평균 순수익 {f("test_return3")}% · 초과수익 {f("test_excess3")}%p · Rank IC {f("test_ic")} · 종목별 수익 비율 {f("test_signal_win_pct")}%\n'
+            '성과는 날짜별 추천 종목의 동일 가중 평균이며 실계좌 투자수익률이 아닙니다.')
+
+    def review_research(self,approve):
+        ix=self.research_table.currentRow()
+        if not self.research_report or ix<0 or self.research_run_id is None:return
+        v=self.research_report['variants'][ix]
+        label='연구 프리셋 승인' if approve else '연구 조건 거부'
+        if QMessageBox.question(self,label,f'{v["name"]}\n\n'
+              '실제 매수·매도 또는 키움 실시간 필터로 연결되지 않습니다.\n'
+              '향후 데이터로 검증할 연구 전략 상태만 저장합니다. 계속할까요?') != QMessageBox.StandardButton.Yes:return
+        self.history.decide_research(self.research_source.currentText(),self.research_run_id,v,approve)
+        self.show_research(self.research_report,show_message=False)
+
+    def export_research(self):
+        if not self.research_report:
+            QMessageBox.information(self,'결과 없음','먼저 조건 검증을 실행하세요.');return
+        folder=QFileDialog.getExistingDirectory(self,'결과를 저장할 폴더',str(Path.home()))
+        if not folder:return
+        dest=Path(folder)/('KRX_research_'+datetime.now().strftime('%Y%m%d_%H%M%S'))
+        export_report(self.research_report,dest)
+        QMessageBox.information(self,'저장 완료',f'{dest}\nsummary.csv / signals.csv / manifest.json')
+
+    def make_strategy(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        grid = QGridLayout(body)
+        grid.setColumnStretch(0,1)
+        grid.setColumnStretch(1,1)
+        self.fields = {}
+        filter_items = [
+            ('market','시장','choice',['전체','KOSPI','KOSDAQ']),
+            ('candidate_limit','키움 순위 후보 수','int',5,100),
+            ('recommend_count','추천 상위 표시 수','int',1,50),
+            ('on_price','주가 범위 적용','bool'),
+            ('min_price','최소 주가 (원)','double',0,1000000),
+            ('max_price','최대 주가 (원)','double',100,10000000),
+            ('on_cap','시가총액 범위 적용','bool'),
+            ('min_cap_eok','최소 시총 (억 원)','double',0,10000000),
+            ('max_cap_eok','최대 시총 (억 원)','double',0,10000000),
+            ('on_value','거래대금 하한 적용','bool'),
+            ('min_value_eok','최소 거래대금 (억 원)','double',0,100000),
+            ('on_volratio','전일 거래량비 조건','bool'),
+            ('min_vol_ratio','거래량 전일비 최소 (%)','double',0,5000),
+            ('on_change','등락률 범위 적용','bool'),
+            ('min_change_pct','최소 등락률 (%)','double',-30,30),
+            ('max_change_pct','최대 등락률 (%)','double',-30,30),
+        ]
+        risk_items = [
+            ('exit_stop_pct','가상 손절 (%)','double',0.1,30),
+            ('exit_take_pct','가상 익절 (%)','double',0.1,50),
+            ('exit_max_days','가상 보유 제한 (달력일)','int',1,30),
+            ('max_paper_positions','동시 가상 보유종목','int',1,20),
+            ('paper_fee_pct','편도 가상 수수료 (%)','double',0,1),
+            ('paper_sell_tax_pct','가상 매도세금 (%)','double',0,1),
+            ('paper_slippage_pct','편도 가상 슬리피지 (%)','double',0,3),
+            ('scan_interval_sec','검색 간격 (초)','int',10,600),
+            ('min_strategy_trades','개선안 검토 최소 거래건수','int',20,2000),
+            ('backtest_gap_limit','다음 날 가상매수 갭상승 상한 (%)','double',0,20),
+        ]
+        for col, title, options in [(0,'종목 검색·필터',filter_items),(1,'가상매매·위험관리',risk_items)]:
+            panel = QFrame(objectName='Panel')
+            p = QVBoxLayout(panel)
+            p.addWidget(lbl(title,'H2'))
+            form = QFormLayout()
+            form.setSpacing(12)
+            for item in options:
+                key, name, kind, *extra = item
+                if kind == 'bool':
+                    w = QCheckBox('사용')
+                    w.setChecked(bool(self.cfg[key]))
+                elif kind == 'choice':
+                    w = QComboBox()
+                    w.addItems(extra[0])
+                    w.setCurrentText(str(self.cfg[key]))
+                elif kind == 'int':
+                    w = QSpinBox()
+                    w.setRange(*extra)
+                    w.setValue(int(self.cfg[key]))
+                else:
+                    w = QDoubleSpinBox()
+                    w.setRange(*extra)
+                    w.setDecimals(2)
+                    w.setSingleStep(0.5)
+                    w.setValue(float(self.cfg[key]))
+                    w.setGroupSeparatorShown(True)
+                form.addRow(name, w)
+                self.fields[key] = w
+            p.addLayout(form)
+            p.addStretch()
+            grid.addWidget(panel,0,col)
+        scroll.setWidget(body)
+        v.addWidget(scroll)
+        controls = QHBoxLayout()
+        controls.addWidget(lbl('모든 수정은 저장 후 신규 스캔·신규 가상매수부터 적용됩니다. 기존 포지션의 손절/익절은 매수 당시 값 유지.','Muted'))
+        controls.addStretch()
+        save = QPushButton('조건 저장',objectName='Primary')
+        save.clicked.connect(self.save_strategy)
+        controls.addWidget(save)
+        v.addLayout(controls)
+        return page
+
+    def make_optimizer(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.addWidget(lbl('전략 변경은 자동 적용되지 않습니다. 누적 거래 기반의 탐색적 가설만 제안합니다.','Muted'))
+        self.opt_status = lbl('데이터 축적 중','H2')
+        v.addWidget(self.opt_status)
+        self.proposal_table = make_table(['번호','생성일','실험 제안','근거','상태'])
+        v.addWidget(self.proposal_table)
+        buttons = QHBoxLayout()
+        create = QPushButton('지금 개선안 분석')
+        create.clicked.connect(self.create_optimizer)
+        buttons.addWidget(create)
+        accept = QPushButton('선택 개선안 승인 · 조건 적용',objectName='Primary')
+        accept.clicked.connect(lambda: self.review_proposal(True))
+        buttons.addWidget(accept)
+        decline = QPushButton('선택 개선안 거부')
+        decline.clicked.connect(lambda: self.review_proposal(False))
+        buttons.addWidget(decline)
+        buttons.addStretch()
+        v.addLayout(buttons)
+        v.addWidget(lbl('주의: 현재는 기술통계 기반 비교 기능입니다. 머신러닝, 워크포워드 백테스트, 자동 학습은 후속 버전 예정입니다.','Muted'))
+        return page
+
+    def make_integrations(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setSpacing(15)
+        self.secrets = {}
+        box = QFrame(objectName='Panel')
+        formbox = QVBoxLayout(box)
+        formbox.addWidget(lbl('키움증권 REST API · 조회 전용','H2'))
+        f = QFormLayout()
+        self.data_mode = QComboBox()
+        self.data_mode.addItems(['DEMO','KIWOOM'])
+        self.data_mode.setCurrentText(self.cfg['data_mode'])
+        f.addRow('데이터 소스',self.data_mode)
+        self.kiwoom_env = QComboBox()
+        self.kiwoom_env.addItems(['MOCK','REAL'])
+        self.kiwoom_env.setCurrentText(self.cfg['kiwoom_env'])
+        f.addRow('키움 조회 환경',self.kiwoom_env)
+        for key, title in [('kiwoom_appkey','App Key'),('kiwoom_secret','App Secret')]:
+            line = QLineEdit()
+            line.setEchoMode(QLineEdit.EchoMode.Password)
+            line.setPlaceholderText('OS 보안 저장소에 별도 보관')
+            line.setText(self.creds.get(key))
+            f.addRow(title,line)
+            self.secrets[key] = line
+        krx_line=QLineEdit()
+        krx_line.setEchoMode(QLineEdit.EchoMode.Password)
+        krx_line.setPlaceholderText('KRX 별도 인증키 (일봉 연구용, 선택)')
+        krx_line.setText(self.creds.get('krx_api_key'))
+        self.secrets['krx_api_key']=krx_line
+        f.addRow('KRX OPEN API Key',krx_line)
+        formbox.addLayout(f)
+        v.addWidget(box)
+        tg = QFrame(objectName='Panel')
+        t = QVBoxLayout(tg)
+        t.addWidget(lbl('텔레그램 알림 설정','H2'))
+        tf = QFormLayout()
+        token = QLineEdit()
+        token.setEchoMode(QLineEdit.EchoMode.Password)
+        token.setText(self.creds.get('telegram_token'))
+        self.secrets['telegram_token'] = token
+        tf.addRow('Bot Token',token)
+        self.chat = QLineEdit(self.cfg['telegram_chat_id'])
+        tf.addRow('Chat ID',self.chat)
+        self.telegram_auto = QCheckBox('프로그램이 실행 중일 때 매일 16시 이후 첫 검색 결과를 자동 발송')
+        self.telegram_auto.setChecked(bool(self.cfg['telegram_auto_send']))
+        tf.addRow('자동 알림',self.telegram_auto)
+        t.addLayout(tf)
+        v.addWidget(tg)
+        buttons = QHBoxLayout()
+        save = QPushButton('연동 정보 안전하게 저장',objectName='Primary')
+        save.clicked.connect(self.save_integrations)
+        buttons.addWidget(save)
+        testki = QPushButton('키움 API 연결 테스트')
+        testki.clicked.connect(self.test_kiwoom)
+        buttons.addWidget(testki)
+        testtg = QPushButton('텔레그램 테스트 메시지')
+        testtg.clicked.connect(self.test_telegram)
+        buttons.addWidget(testtg)
+        buttons.addStretch()
+        v.addLayout(buttons)
+        v.addWidget(lbl('API 키와 Bot Token은 JSON에 저장하지 않습니다. Windows Credential Manager(keyring)로 보관됩니다.','Muted'))
+        v.addWidget(lbl('키움 REAL은 조회만 수행합니다. KRX OPEN API는 별도 서비스 승인 필요. 이 버전은 실전 주문을 지원하지 않습니다.','Muted'))
+        v.addStretch()
+        return page
+
+    def update_connection(self):
+        mode = self.cfg['data_mode']
+        self.connection.setText('● 생성 데이터 · DEMO' if mode == 'DEMO' else
+                                f'● 키움 {self.cfg["kiwoom_env"]} · 조회 전용')
+        self.notice.setText('데모 종목·가격은 가상 데이터입니다.' if mode == 'DEMO' else
+            '키움 순위 API로 수집하는 관찰용 시세입니다. 실시간 전종목 감시는 미지원. 실제 주문은 차단되어 있습니다.')
+
+    def run_task(self, fn, ok, success_text='완료'):
+        if self.work is not None and self.work.isRunning():
+            self.statusBar().showMessage('요청 작업이 진행 중입니다.')
+            return
+        worker = Work(fn)
+        self.work = worker
+        self.scan_button.setEnabled(False)
+        worker.succeeded.connect(lambda result: self.complete_task(ok, result, success_text))
+        worker.failed.connect(self.task_failed)
+        worker.finished.connect(lambda: self.scan_button.setEnabled(True))
+        worker.start()
+
+    def complete_task(self, callback, result, text):
+        try:
+            callback(result)
+            self.statusBar().showMessage(text)
+        except Exception as ex:
+            self.task_failed(str(ex))
+
+    def task_failed(self, message):
+        self.scanning = False
+        self.db.log('ERROR', message)
+        self.statusBar().showMessage('오류: ' + message)
+        QMessageBox.warning(self, '작업 실패', message)
+
+    def scan(self):
+        if self.work and self.work.isRunning():
+            return
+        cfg = dict(self.cfg)
+        mode = cfg['data_mode']
+        self.statusBar().showMessage(f'조회 중: {mode}')
+        def fetch():
+            if mode == 'DEMO':
+                return self.demo.scan(cfg['market'], cfg['candidate_limit'])
+            client = KiwoomMarket(self.creds.get('kiwoom_appkey'), self.creds.get('kiwoom_secret'), cfg['kiwoom_env'])
+            return client.scan(cfg['market'], cfg['candidate_limit'])
+        self.run_task(fetch, lambda rows: self.on_scan(rows,cfg,mode), '종목 검색 및 DB 저장 완료')
+
+    def on_scan(self, stocks, cfg, mode):
+        self.stocks = stocks
+        self.results = evaluate(stocks, cfg)
+        scan_id=self.db.save_scan(stocks, self.results, cfg, cfg['market'], mode)
+        self.shadow.initialize_defaults(cfg,mode)
+        self.shadow.ensure_active_reference(cfg,mode)
+        shadow_events=self.shadow.process_scan(scan_id,stocks)
+        for ev in shadow_events:
+            self.db.log('SHADOW',f'{ev.name} / {ev.code} / {ev.event}, pnl={ev.pnl}')
+        self.refresh_shadow()
+        events = auto_paper_exit(self.db, stocks, cfg)
+        for name, reason, pnl in events:
+            self.db.log('PAPER_EXIT', f'{name}: {reason}, 가상손익 {pnl:,.0f}원')
+        self.fill_stock_tables()
+        self.refresh_stats()
+        self.refresh_trades()
+        self.maybe_daily_jobs()
+        self.count_info.setText(f'후보 {len(stocks)}개 · 필터 통과 {sum(r.passed for r in self.results)}개')
+        if events:
+            QMessageBox.information(self,'가상매매 자동청산', '\n'.join(f'{name}: {reason}  {pnl:+,.0f}원' for name,reason,pnl in events))
+
+    def fill_stock_tables(self):
+        self.screen_table.setRowCount(len(self.results))
+        filtered = [r for r in self.results if r.passed][:self.cfg['recommend_count']]
+        for row_idx, r in enumerate(self.results):
+            st = r.stock
+            cols = [row_idx+1,st.code,st.name,st.market,f'{st.price:,.0f}', f'{st.change_pct:+.2f}%',
+                    f'{st.trade_value_eok:,.1f}',f'{st.vol_ratio_pct:,.0f}' if st.vol_ratio_pct is not None else '자료 없음',
+                    f'{st.cap_eok:,.0f}' if st.cap_eok is not None else '자료 없음',f'{r.score:.0f}',
+                    '✓ 통과' if r.passed else r.reason]
+            for j,x in enumerate(cols):
+                self.screen_table.setItem(row_idx,j,cell(x))
+        self.dashboard_table.setRowCount(len(filtered))
+        for i,r in enumerate(filtered):
+            s = r.stock
+            for j,x in enumerate([s.name,s.market,f'{s.price:,.0f}',f'{s.change_pct:+.2f}%',
+                                  f'{r.score:.0f}', '조건 충족']):
+                self.dashboard_table.setItem(i,j,cell(x))
+
+    def paper_buy(self):
+        row_idx = self.screen_table.currentRow()
+        if row_idx < 0 or row_idx >= len(self.results):
+            QMessageBox.information(self,'종목 선택','스크리너에서 먼저 종목을 선택하세요.')
+            return
+        result = self.results[row_idx]
+        if not result.passed:
+            QMessageBox.warning(self,'선정 조건 미충족','필터를 통과한 종목만 가상매수할 수 있습니다.')
+            return
+        st = result.stock
+        qty,ok = QInputDialog.getInt(self,'가상매수 수량',f'{st.name} · 가상체결 (주)',1,1,100,1)
+        if not ok:
+            return
+        if QMessageBox.question(self, '가상매수 확인',
+                f'{st.name} {qty}주 · 관측가 {st.price:,.0f}원\n가상매매이며 실제 증권계좌에 주문하지 않습니다.\n진행할까요?') != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            fill = self.db.paper_open(st,qty,self.cfg['exit_stop_pct'],self.cfg['exit_take_pct'],
+                self.cfg['exit_max_days'],self.cfg['paper_fee_pct'],self.cfg['paper_slippage_pct'],
+                dict(self.cfg),self.cfg['max_paper_positions'])
+            self.db.log('PAPER_BUY',f'{st.code} {qty}주 가상매수 {fill:,.1f}원')
+            self.refresh_stats()
+            self.refresh_trades()
+            self.statusBar().showMessage(f'가상매수: {st.name} × {qty}주')
+        except Exception as ex:
+            QMessageBox.warning(self,'가상매수 실패',str(ex))
+
+    def paper_manual_close(self):
+        idx = self.trade_table.currentRow()
+        if idx < 0:
+            return
+        trade_id = int(self.trade_table.item(idx,0).text())
+        trade = next((x for x in self.db.open_trades() if x['id']==trade_id),None)
+        if not trade:
+            QMessageBox.information(self,'선택 오류','이미 청산된 거래입니다.')
+            return
+        st = next((s for s in self.stocks if s.code == trade['code']),None)
+        if st is None or datetime.now() - datetime.fromisoformat(st.stamp) > timedelta(minutes=3):
+            QMessageBox.warning(self,'가격 갱신 필요','최신 가격이 없습니다. 먼저 [지금 검색]을 눌러주세요.')
+            return
+        if QMessageBox.question(self,'가상 즉시청산', f'{trade["name"]} 관측가 {st.price:,.0f}원에 가상청산할까요?') != QMessageBox.StandardButton.Yes:
+            return
+        self.db.paper_close(trade_id,st.price,'가상 수동청산',self.cfg['paper_fee_pct'],
+                            self.cfg['paper_sell_tax_pct'],self.cfg['paper_slippage_pct'])
+        self.refresh_trades()
+        self.refresh_stats()
+
+    def refresh_stats(self):
+        st = self.db.stats()
+        self.kpi_pnl.setText(f'{st["pnl"]:+,.0f}원')
+        self.kpi_win.setText(f'{st["winrate"]:.1f}%')
+        self.kpi_count.setText(f'{st["count"]}건')
+        self.kpi_open.setText(f'{st["open_count"]}종목')
+        self.stats_line.setText(f'가상 실현손익 {st["pnl"]:+,.0f}원  |  총이익 +{st["gain"]:,.0f}원  |  총손실 -{st["loss"]:,.0f}원  |  승률 {st["winrate"]:.1f}%')
+
+    def refresh_trades(self):
+        trades = self.db.trades()
+        self.trade_table.setRowCount(len(trades))
+        for i,t in enumerate(trades):
+            pnl = t['pnl']
+            data = [t['id'],t['name'], '보유 중' if t['closed_at'] is None else '청산',
+                    t['qty'],f'{t["buy_fill"]:,.0f}',f'{t["close_fill"]:,.0f}' if t['close_fill'] is not None else '—',
+                    f'{pnl:+,.0f}' if pnl is not None else '미실현',
+                    f'{t["pnl_pct"]:+.2f}%' if t['pnl_pct'] is not None else '—',
+                    t['opened_at'][:16],t['closed_at'][:16] if t['closed_at'] else '—', t['close_reason'] or '—']
+            for j,x in enumerate(data):
+                self.trade_table.setItem(i,j,cell(x, positive=pnl if j in (6,7) and pnl is not None else None))
+
+    def save_strategy(self):
+        cfg = dict(self.cfg)
+        for key,w in self.fields.items():
+            if isinstance(w,QCheckBox):
+                cfg[key] = w.isChecked()
+            elif isinstance(w,QComboBox):
+                cfg[key] = w.currentText()
+            else:
+                cfg[key] = w.value()
+        if cfg['min_price'] > cfg['max_price'] or cfg['min_cap_eok'] > cfg['max_cap_eok'] or cfg['min_change_pct'] > cfg['max_change_pct']:
+            QMessageBox.warning(self,'조건 오류','최소값이 최대값보다 클 수 없습니다.')
+            return
+        cfg['strategy_version'] += 1
+        self.cfg.update(cfg)
+        self.settings.save()
+        self.timer.setInterval(max(10, int(cfg['scan_interval_sec']))*1000)
+        self.db.log('CONFIG','전략 설정 변경, 버전 '+str(cfg['strategy_version']))
+        self.shadow.ensure_active_reference(dict(self.cfg),self.cfg['data_mode'])
+        self.refresh_shadow()
+        QMessageBox.information(self,'저장 완료','전략 조건을 저장했습니다. 다음 신규 검색부터 반영됩니다.')
+
+    def refresh_strategy_fields(self):
+        for k,w in self.fields.items():
+            val = self.cfg[k]
+            if isinstance(w,QCheckBox):
+                w.setChecked(bool(val))
+            elif isinstance(w,QComboBox):
+                w.setCurrentText(str(val))
+            else:
+                w.setValue(val)
+
+    def create_optimizer(self):
+        status = create_proposals(self.db, self.cfg)
+        for proposal in self.db.proposals():
+            if proposal['state']=='PENDING':
+                candidate=dict(self.cfg)
+                candidate.update(json.loads(proposal['patch_json']))
+                self.shadow.add_proposal_variant(candidate,proposal['id'],self.cfg['data_mode'])
+        self.refresh_shadow()
+        self.refresh_proposals()
+        QMessageBox.information(self,'전략 분석',status)
+
+    def refresh_proposals(self):
+        proposals = self.db.proposals()
+        self.proposal_table.setRowCount(len(proposals))
+        for i,p in enumerate(proposals):
+            for j,x in enumerate([p['id'],p['created_at'][:16],p['title'],p['rationale'],p['state']]):
+                self.proposal_table.setItem(i,j,cell(x))
+        n = len(self.db.closed_trades())
+        self.opt_status.setText(f'가상청산 {n}건 · 개선안 생성 최소 {max(20,self.cfg["min_strategy_trades"])}건')
+
+    def review_proposal(self, accept):
+        row = self.proposal_table.currentRow()
+        if row < 0:
+            return
+        pid = int(self.proposal_table.item(row,0).text())
+        prop = next((p for p in self.db.proposals() if p['id']==pid),None)
+        if not prop:
+            return
+        verb = '승인 · 적용' if accept else '거부'
+        if QMessageBox.question(self,'전략 개선안 검토',f'{prop["title"]}\n\n{prop["rationale"]}\n\n{verb}할까요?') != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            patch = json.loads(prop['patch_json'])
+            if accept and any(k not in self.cfg for k in patch):
+                raise ValueError('알 수 없는 전략 변경값입니다.')
+            patch = self.db.review(pid,accept)
+            if accept:
+                self.cfg.update(patch)
+                self.cfg['strategy_version'] += 1
+                self.settings.save()
+                self.refresh_strategy_fields()
+                self.shadow.ensure_active_reference(dict(self.cfg),self.cfg['data_mode'])
+                self.refresh_shadow()
+            self.db.log('PROPOSAL',f'{pid}: {verb}')
+            self.refresh_proposals()
+        except Exception as ex:
+            QMessageBox.warning(self,'변경 실패',str(ex))
+
+    def save_integrations(self):
+        try:
+            for key,w in self.secrets.items():
+                self.creds.save(key,w.text().strip(),persist=True)
+            self.cfg['data_mode'] = self.data_mode.currentText()
+            self.cfg['kiwoom_env'] = self.kiwoom_env.currentText()
+            self.cfg['telegram_chat_id'] = self.chat.text().strip()
+            self.cfg['telegram_auto_send'] = self.telegram_auto.isChecked()
+            self.settings.save()
+            self.shadow.initialize_defaults(dict(self.cfg), self.cfg['data_mode'])
+            self.shadow.ensure_active_reference(dict(self.cfg), self.cfg['data_mode'])
+            self.update_connection()
+            self.db.log('SETTINGS','연동 설정 갱신 (토큰/Secret 미기록)')
+            QMessageBox.information(self,'저장 완료','인증정보를 OS 보안 저장소에 저장했습니다.')
+        except Exception as ex:
+            QMessageBox.warning(self,'연동 설정 저장 실패',str(ex))
+
+    def test_kiwoom(self):
+        key = self.secrets['kiwoom_appkey'].text().strip()
+        secret = self.secrets['kiwoom_secret'].text().strip()
+        env = self.kiwoom_env.currentText()
+        self.run_task(lambda: KiwoomMarket(key,secret,env).login(),
+                      lambda _: QMessageBox.information(self,'키움 API 연결','접근토큰 발급 성공. 실계좌 주문은 불가능합니다.'), '키움 인증 완료')
+
+    def test_telegram(self):
+        token = self.secrets['telegram_token'].text().strip()
+        chat_id = self.chat.text().strip()
+        self.run_task(lambda: Telegram(token,chat_id).send('✅ KRX AI Trading v0.3 연결 테스트 (주문 미지원)'),
+                      lambda _: QMessageBox.information(self,'텔레그램','테스트 메시지 전송 성공'), '텔레그램 전송 완료')
+
+    def telegram_recommend(self):
+        filtered = [r for r in self.results if r.passed][:self.cfg['recommend_count']]
+        if not self.stocks:
+            QMessageBox.information(self,'추천 없음','먼저 종목 검색을 실행하세요.')
+            return
+        class Decor:
+            def __init__(self,r):
+                self.__dict__.update(r.stock.__dict__)
+                self.score = r.score
+        rows = [Decor(x) for x in filtered]
+        self.send_recs(rows)
+
+    def send_recs(self,rows, on_success=None):
+        tok = self.creds.get('telegram_token')
+        chat = self.cfg['telegram_chat_id']
+        text = recommendation_text(rows, demo=self.cfg['data_mode']=='DEMO')
+        def sent(_):
+            self.db.log('TELEGRAM','추천 메시지 발송')
+            if on_success:
+                on_success()
+        self.run_task(lambda: Telegram(tok,chat).send(text), sent,
+                      '추천 목록을 텔레그램으로 전송했습니다.')
+
+    def maybe_daily_jobs(self):
+        now = datetime.now()
+        if now.hour >= 16:
+            key = now.strftime('%Y-%m-%d')
+            if self.cfg.get('last_optimize_day','') != key:
+                create_proposals(self.db, self.cfg)
+                for prop in self.db.proposals():
+                    if prop['state']=='PENDING':
+                        variant=dict(self.cfg)
+                        variant.update(json.loads(prop['patch_json']))
+                        self.shadow.add_proposal_variant(variant,prop['id'],self.cfg['data_mode'])
+                self.refresh_shadow()
+                self.cfg['last_optimize_day'] = key
+                self.settings.save()
+                self.refresh_proposals()
+            if self.cfg['telegram_auto_send'] and self.cfg['last_notification_day'] != key:
+                filtered = [r for r in self.results if r.passed][:self.cfg['recommend_count']]
+                class Decor:
+                    def __init__(self,r):
+                        self.__dict__.update(r.stock.__dict__)
+                        self.score = r.score
+                def mark_sent():
+                    self.cfg['last_notification_day'] = key
+                    self.settings.save()
+                self.send_recs([Decor(x) for x in filtered], on_success=mark_sent)
+
+    def toggle_auto(self):
+        if self.timer.isActive():
+            self.timer.stop()
+            self.auto_button.setText('자동 검색 시작')
+        else:
+            self.timer.start()
+            self.auto_button.setText('자동 검색 중지')
+            self.scan()
+
+    def export_trades(self):
+        path,_ = QFileDialog.getSaveFileName(self,'가상 매매기록 내보내기',
+            str(Path.home() / 'paper_trades.csv'),'CSV (*.csv)')
+        if path:
+            self.db.export_trades(path)
+            self.statusBar().showMessage('CSV 저장: '+path)
+
+    def closeEvent(self,event):
+        self.timer.stop()
+        if self.work and self.work.isRunning():
+            QMessageBox.information(self,'조회 진행 중','진행 중인 요청이 종료된 뒤 닫아주세요.')
+            event.ignore()
+            return
+        event.accept()
+
+
+def main():
+    import sys
+    app = QApplication(sys.argv)
+    app.setFont(QFont('Malgun Gothic',10))
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec())
