@@ -3,6 +3,7 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from app.db import ClosingConnection
 
 
 def now():
@@ -16,7 +17,7 @@ class Database:
         self.initialize()
 
     def connect(self):
-        db = sqlite3.connect(str(self.path), timeout=20)
+        db = sqlite3.connect(str(self.path), timeout=20, factory=ClosingConnection)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA busy_timeout=10000')
         return db

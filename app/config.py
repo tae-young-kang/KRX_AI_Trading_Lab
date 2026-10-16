@@ -23,7 +23,6 @@ DEFAULTS = {
     'data_mode': 'DEMO',
     'kiwoom_env': 'MOCK',
     'scan_interval_sec': 60,
-    'candidate_limit': 30,
     'recommend_count': 15,
     'min_price': 2000.0,
     'max_price': 200000.0,

@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from app.backtest import Bar, load_ohlcv_csv
+from app.db import ClosingConnection
 
 API_ROOT = 'https://data-dbg.krx.co.kr/svc/apis/sto/'
 ENDPOINTS = {'KOSPI': 'stk_bydd_trd', 'KOSDAQ': 'ksq_bydd_trd'}
@@ -79,7 +80,7 @@ class HistoryStore:
         self._init()
 
     def connect(self):
-        db = sqlite3.connect(self.path,timeout=30)
+        db = sqlite3.connect(self.path,timeout=30,factory=ClosingConnection)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA busy_timeout=20000')
         return db

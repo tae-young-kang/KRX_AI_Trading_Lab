@@ -20,6 +20,7 @@ class Stock:
     volume: int = 0
     source: str = 'DEMO'
     stamp: str = ''
+    quote_stamp: str = ''
 
     def as_dict(self):
         return asdict(self)
@@ -31,6 +32,8 @@ def numeric(obj, default=None, abs_value=False):
         if not raw:
             return default
         value = float(raw)
+        if not math.isfinite(value):
+            return default
         return abs(value) if abs_value else value
     except (ValueError, TypeError):
         return default
@@ -57,7 +60,7 @@ class DemoMarket:
         self.random = random.Random(1012)
         self.prices = {item[0]: float(item[3]) for item in self.BASE}
 
-    def scan(self, market='전체', candidate_limit=30):
+    def scan(self, market='전체'):
         self.step += 1
         result = []
         for i, (code, name, mrkt, _, cap, vr) in enumerate(self.BASE):
@@ -69,7 +72,7 @@ class DemoMarket:
                 result.append(Stock(code, name, mrkt, max(1, round(price)), round(change, 2),
                                     round(value, 1), vr + self.random.randint(-22, 22), cap,
                                     110000 + (i * 39541) + self.step * 87, 'DEMO', datetime.now().isoformat(timespec='seconds')))
-        return result[:candidate_limit]
+        return result
 
 
 class KiwoomMarket:
@@ -97,58 +100,130 @@ class KiwoomMarket:
         self.token_ts = time.time()
         return True
 
-    def query(self, api_id, path, body):
+    def query(self, api_id, path, body, cont_yn='N', next_key='',
+              include_headers=False, cancelled=None):
+        """Retry read-only requests; never expose credentials in request errors."""
         if not self.token or time.time() - self.token_ts > 20 * 3600:
             self.login()
-        delay = 1.1 if 'mockapi' in self.url else 0.26
-        interval = time.monotonic() - self.last_api_call
-        if interval < delay:
-            time.sleep(delay - interval)
-        self.last_api_call = time.monotonic()
-        resp = self.session.post(self.url + path, headers={
-            'authorization': f'Bearer {self.token}', 'api-id': api_id,
-            'Content-Type': 'application/json;charset=UTF-8', 'cont-yn': 'N', 'next-key': ''
-        }, json=body, timeout=12)
-        resp.raise_for_status()
-        data = resp.json()
-        rc = data.get('return_code', data.get('returnCode', 0))
-        if str(rc) not in ('0', '20'):
-            raise RuntimeError(f'{api_id} 오류 ({rc}): {data.get("return_msg", data.get("returnMsg", ""))}')
-        return data
-
-    def scan(self, market='전체', candidate_limit=30):
-        markets = ['KOSPI', 'KOSDAQ'] if market == '전체' else [market]
-        found = {}
-        for mrkt in markets:
-            market_id = {'KOSPI': '001', 'KOSDAQ': '101'}[mrkt]
-            # Official ka10030 example: trde_amt is generally in million KRW.
-            raw = self.query('ka10030', '/api/dostk/rkinfo', {
-                'mrkt_tp': market_id, 'sort_tp': '3', 'mang_stk_incls': '4',
-                'crd_tp': '0', 'trde_qty_tp': '0', 'pric_tp': '0',
-                'trde_prica_tp': '0', 'mrkt_open_tp': '0', 'stex_tp': '1'
-            })
-            for row in raw.get('tdy_trde_qty_upper', []):
-                code = row.get('stk_cd', '').split('_')[0]
-                if not code or code in found:
+        for attempt in range(3):
+            self._check_cancelled(cancelled)
+            delay = 1.1 if 'mockapi' in self.url else 0.26
+            interval = time.monotonic() - self.last_api_call
+            if interval < delay:
+                time.sleep(delay - interval)
+            self.last_api_call = time.monotonic()
+            try:
+                resp = self.session.post(self.url + path, headers={
+                    'authorization': f'Bearer {self.token}', 'api-id': api_id,
+                    'Content-Type': 'application/json;charset=UTF-8',
+                    'cont-yn': cont_yn, 'next-key': next_key
+                }, json=body, timeout=12)
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    if attempt < 2:
+                        time.sleep(2 ** attempt)
+                        continue
+                resp.raise_for_status()
+                data = resp.json()
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
                     continue
-                amount_million = numeric(row.get('trde_amt'))
-                found[code] = Stock(
-                    code, row.get('stk_nm', code), mrkt,
-                    numeric(row.get('cur_prc'), 0, True), numeric(row.get('flu_rt'), 0),
-                    amount_million / 100 if amount_million is not None else 0,
-                    numeric(row.get('pred_rt')), None,
-                    int(numeric(row.get('trde_qty'), 0) or 0), 'KIWOOM',
-                    datetime.now().isoformat(timespec='seconds')
-                )
-        ordered = sorted(found.values(), key=lambda x: x.trade_value_eok, reverse=True)[:candidate_limit]
-        # cap field's official documentation lists market cap as 100M KRW (eok) unit.
-        for stock in ordered:
-            info = self.query('ka10001', '/api/dostk/stkinfo', {'stk_cd': stock.code})
-            stock.cap_eok = numeric(info.get('mac'))
-            if stock.cap_eok is None:
-                # Important: unknown cap is NEVER treated as zero or a pass.
-                pass
-        return ordered
+                raise RuntimeError(f'{api_id} 조회 연결 실패 (3회 시도)') from None
+            except (requests.RequestException, ValueError):
+                raise RuntimeError(f'{api_id} 조회 응답 오류') from None
+            if not isinstance(data, dict):
+                raise RuntimeError(f'{api_id} 응답 형식 오류')
+            rc = data.get('return_code', data.get('returnCode'))
+            if str(rc) != '0':
+                raise RuntimeError(f'{api_id} 조회 실패: 전체 종목 조회를 완료하지 못했습니다.')
+            return (data, resp.headers) if include_headers else data
+
+    @staticmethod
+    def _check_cancelled(cancelled):
+        if cancelled and cancelled():
+            raise RuntimeError('전체 종목 조회를 취소했습니다. 미완료 결과는 추천에 사용하지 않습니다.')
+
+    def _rows(self, api_id, body, field, cancelled=None):
+        cont_yn, next_key, seen = 'N', '', set()
+        while True:
+            self._check_cancelled(cancelled)
+            data, headers = self.query(api_id, '/api/dostk/stkinfo', body,
+                                       cont_yn, next_key, True, cancelled)
+            rows = data.get(field)
+            if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+                raise RuntimeError(f'{api_id} 종목 목록 응답 형식 오류')
+            yield from rows
+            if headers.get('cont-yn', 'N') != 'Y':
+                break
+            next_key = headers.get('next-key', '')
+            if not next_key or next_key in seen or not rows:
+                raise RuntimeError(f'{api_id} 연속조회 중단: 전체 종목 조회 미완료')
+            seen.add(next_key)
+            cont_yn = 'Y'
+
+    def scan(self, market='전체', progress=None, cancelled=None):
+        """Enumerate the selected markets before screening every listed symbol.
+
+        Official specs: ka10099 (0=KOSPI, 10=KOSDAQ), ka10095
+        (pipe-separated KRX codes; stk_cd documented length 20).
+        Small batches respect that documented input length, with no universe cap.
+        """
+        if market not in ('전체', 'KOSPI', 'KOSDAQ'):
+            raise ValueError('시장은 전체, KOSPI, KOSDAQ 중 선택하세요.')
+        notify = progress or (lambda text: None)
+        markets = ['KOSPI', 'KOSDAQ'] if market == '전체' else [market]
+        universe = {}
+        for mrkt in markets:
+            notify(f'{mrkt} 전체 종목 목록 수집 중')
+            market_count = 0
+            for row in self._rows('ka10099', {'mrkt_tp': {'KOSPI':'0', 'KOSDAQ':'10'}[mrkt]}, 'list', cancelled):
+                code = str(row.get('code', '')).strip()
+                if len(code) != 6 or not code.isascii() or not code.isalnum():
+                    raise RuntimeError(f'{mrkt} 종목코드 형식 오류: 전체 조회 미완료')
+                if code in universe and universe[code][0] != mrkt:
+                    raise RuntimeError('시장별 종목 목록이 서로 일치하지 않습니다.')
+                universe[code] = (mrkt, row.get('name') or code)
+                market_count += 1
+            if not market_count:
+                raise RuntimeError(f'{mrkt} 전체 종목 목록이 비어 있습니다.')
+        codes = list(universe)
+        found = {}
+        notify(f'전체 대상 {len(codes):,}개 · 시세 조회 0개')
+        for start in range(0, len(codes), 2):
+            self._check_cancelled(cancelled)
+            batch = codes[start:start+2]
+            received = {}
+            for row in self._rows('ka10095', {'stk_cd':'|'.join(batch)}, 'atn_stk_infr', cancelled):
+                code = str(row.get('stk_cd', '')).strip()
+                if code not in batch:
+                    raise RuntimeError('요청과 다른 종목 시세 응답: 전체 조회 미완료')
+                amount = numeric(row.get('trde_prica'))  # million KRW -> eok
+                price = numeric(row.get('cur_prc'), None, True)
+                change = numeric(row.get('flu_rt'))
+                volume = numeric(row.get('trde_qty'))
+                if (price is None or change is None or volume is None or
+                        amount is None or price < 0 or volume < 0 or amount < 0):
+                    raise RuntimeError('종목 시세 필수값 누락: 전체 조회 미완료')
+                mrkt, name = universe[code]
+                # Keep receipt time separate from the exchange's quote time.
+                quote_stamp = ''
+                try:
+                    quote_stamp = datetime.strptime(
+                        str(row.get('dt', '')) + str(row.get('cntr_tm', '')),
+                        '%Y%m%d%H%M%S').isoformat(timespec='seconds')
+                except ValueError:
+                    pass
+                received[code] = Stock(
+                    code, name, mrkt, price, change, amount / 100,
+                    numeric(row.get('pred_trde_qty_pre')), numeric(row.get('mac')),
+                    int(volume), 'KIWOOM', datetime.now().isoformat(timespec='seconds'), quote_stamp)
+            if set(received) != set(batch):
+                missing = len(set(batch) - set(received))
+                raise RuntimeError(f'시세 {missing}개 누락: 전체 조회 미완료. 추천을 생성하지 않습니다.')
+            found.update(received)
+            notify(f'전체 대상 {len(codes):,}개 · 시세 조회 {len(found):,}개 · 누락 0개')
+        self._check_cancelled(cancelled)
+        return sorted(found.values(), key=lambda x: x.trade_value_eok, reverse=True)
 
 
 class Telegram:
@@ -171,7 +246,8 @@ class Telegram:
 def recommendation_text(rows, demo=False):
     lines = ['📊 KOSPI AI Trading · 종목 스크리닝',
              '⚠️ 가상 데이터 / 데모 테스트' if demo else '키움 시세 조회 · 투자권유 아님',
-             datetime.now().strftime('%Y-%m-%d %H:%M'), '']
+             '알림 생성: ' + datetime.now().strftime('%Y-%m-%d %H:%M'),
+             '조회 당시 제공 시세 기준 · 장마감 후에도 조회·알림 가능', '']
     if not rows:
         lines.append('현재 설정 조건을 통과한 종목이 없습니다.')
     for i, row in enumerate(rows[:15], 1):
@@ -179,5 +255,7 @@ def recommendation_text(rows, demo=False):
                      f'  {row.price:,.0f}원 / {row.change_pct:+.1f}% / 점수 {getattr(row, "score", 0):.0f}\n'
                      f'  거래대금 {row.trade_value_eok:,.0f}억 · 시총 {row.cap_eok:,.0f}억' if row.cap_eok is not None
                      else f'{i}. {row.name} ({row.code}) · 시총 미수집')
+        if not demo:
+            lines.append('  시세 기준: ' + (getattr(row, 'quote_stamp', '') or 'API 제공 시각 확인 불가'))
     lines += ['', '이 버전은 알림 및 GUI 가상매매 전용입니다. 텔레그램 자동주문 미지원.']
     return '\n'.join(lines)

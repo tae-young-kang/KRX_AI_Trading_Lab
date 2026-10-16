@@ -57,12 +57,16 @@ QStatusBar{background:#111e31;color:#b1c6df;}
 class Work(QThread):
     succeeded = Signal(object)
     failed = Signal(str)
-    def __init__(self, func):
+    progress = Signal(str)
+    def __init__(self, func, with_progress=False):
         super().__init__()
         self.func = func
+        self.with_progress = with_progress
     def run(self):
         try:
-            self.succeeded.emit(self.func())
+            result = (self.func(self.progress.emit, self.isInterruptionRequested)
+                      if self.with_progress else self.func())
+            self.succeeded.emit(result)
         except Exception as ex:
             self.failed.emit(str(ex))
 
@@ -173,6 +177,10 @@ class MainWindow(QMainWindow):
         self.scan_button = QPushButton('지금 검색',objectName='Primary')
         self.scan_button.clicked.connect(self.scan)
         bar.addWidget(self.scan_button)
+        self.cancel_scan_button = QPushButton('조회 취소')
+        self.cancel_scan_button.setEnabled(False)
+        self.cancel_scan_button.clicked.connect(self.cancel_scan)
+        bar.addWidget(self.cancel_scan_button)
         self.auto_button = QPushButton('자동 검색 시작')
         self.auto_button.clicked.connect(self.toggle_auto)
         bar.addWidget(self.auto_button)
@@ -247,10 +255,10 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.count_info)
         v.addLayout(bar)
         self.screen_table = make_table(['순위','종목코드','종목명','시장','현재가','등락률',
-                                        '거래대금(억)','전일 거래량비(%)','시총(억)','점수','필터'])
+                                        '거래대금(억)','전일 거래량비(%)','시총(억)','점수','필터','시세 기준','조회 시각'])
         v.addWidget(self.screen_table)
         control = QHBoxLayout()
-        control.addWidget(lbl('※ LIVE 조회는 키움 순위 API의 후보군 기반이며 전 종목 완전 스캔이 아닙니다.','Muted'))
+        control.addWidget(lbl('※ 선택 시장 전체 종목을 조회한 뒤 필터링합니다. 순차 조회이며 실시간 동시 시세가 아닙니다.','Muted'))
         control.addStretch()
         btn = QPushButton('선택 종목 가상매수 (1주)', objectName='Primary')
         btn.clicked.connect(self.paper_buy)
@@ -641,7 +649,6 @@ class MainWindow(QMainWindow):
         self.fields = {}
         filter_items = [
             ('market','시장','choice',['전체','KOSPI','KOSDAQ']),
-            ('candidate_limit','키움 순위 후보 수','int',5,100),
             ('recommend_count','추천 상위 표시 수','int',1,50),
             ('on_price','주가 범위 적용','bool'),
             ('min_price','최소 주가 (원)','double',0,1000000),
@@ -804,18 +811,21 @@ class MainWindow(QMainWindow):
         self.connection.setText('● 생성 데이터 · DEMO' if mode == 'DEMO' else
                                 f'● 키움 {self.cfg["kiwoom_env"]} · 조회 전용')
         self.notice.setText('데모 종목·가격은 가상 데이터입니다.' if mode == 'DEMO' else
-            '키움 순위 API로 수집하는 관찰용 시세입니다. 실시간 전종목 감시는 미지원. 실제 주문은 차단되어 있습니다.')
+            '선택 시장 전체 종목을 순차 조회합니다. 완료까지 수분 이상 걸릴 수 있으며 시세 시각은 서로 다릅니다. 실제 주문은 차단되어 있습니다.')
 
-    def run_task(self, fn, ok, success_text='완료'):
+    def run_task(self, fn, ok, success_text='완료', with_progress=False):
         if self.work is not None and self.work.isRunning():
             self.statusBar().showMessage('요청 작업이 진행 중입니다.')
             return
-        worker = Work(fn)
+        worker = Work(fn, with_progress)
         self.work = worker
         self.scan_button.setEnabled(False)
+        self.cancel_scan_button.setEnabled(with_progress)
+        worker.progress.connect(self.show_scan_progress)
         worker.succeeded.connect(lambda result: self.complete_task(ok, result, success_text))
         worker.failed.connect(self.task_failed)
         worker.finished.connect(lambda: self.scan_button.setEnabled(True))
+        worker.finished.connect(lambda: self.cancel_scan_button.setEnabled(False))
         worker.start()
 
     def complete_task(self, callback, result, text):
@@ -826,6 +836,8 @@ class MainWindow(QMainWindow):
             self.task_failed(str(ex))
 
     def task_failed(self, message):
+        if self.scanning:
+            self.count_info.setText('전체 조회 미완료 · 추천 없음 · ' + message)
         self.scanning = False
         self.db.log('ERROR', message)
         self.statusBar().showMessage('오류: ' + message)
@@ -836,15 +848,38 @@ class MainWindow(QMainWindow):
             return
         cfg = dict(self.cfg)
         mode = cfg['data_mode']
+        self.scanning = True
+        self.stocks = []
+        self.results = []
+        self.fill_stock_tables()
+        self.count_info.setText('전체 종목 조회 준비 중 · 이전 추천 초기화')
         self.statusBar().showMessage(f'조회 중: {mode}')
-        def fetch():
+        def fetch(progress, cancelled):
             if mode == 'DEMO':
-                return self.demo.scan(cfg['market'], cfg['candidate_limit'])
+                return self.demo.scan(cfg['market'])
             client = KiwoomMarket(self.creds.get('kiwoom_appkey'), self.creds.get('kiwoom_secret'), cfg['kiwoom_env'])
-            return client.scan(cfg['market'], cfg['candidate_limit'])
-        self.run_task(fetch, lambda rows: self.on_scan(rows,cfg,mode), '종목 검색 및 DB 저장 완료')
+            try:
+                return client.scan(cfg['market'], progress=progress, cancelled=cancelled)
+            finally:
+                client.session.close()
+        self.run_task(fetch, lambda rows: self.on_scan(rows,cfg,mode), '전체 대상 검색 및 DB 저장 완료', with_progress=True)
+
+    def show_scan_progress(self, message):
+        self.count_info.setText(message)
+        self.statusBar().showMessage(message)
+
+    def cancel_scan(self):
+        if self.work and self.work.isRunning() and self.cancel_scan_button.isEnabled():
+            self.work.requestInterruption()
+            self.timer.stop()
+            self.auto_button.setText('자동 검색 시작')
+            self.cancel_scan_button.setEnabled(False)
+            self.show_scan_progress('조회 취소 대기 중 · 현재 요청 종료 후 중지')
 
     def on_scan(self, stocks, cfg, mode):
+        if self.work and self.work.isInterruptionRequested():
+            raise RuntimeError('조회가 취소되어 추천을 생성하지 않았습니다.')
+        self.scanning = False
         self.stocks = stocks
         self.results = evaluate(stocks, cfg)
         scan_id=self.db.save_scan(stocks, self.results, cfg, cfg['market'], mode)
@@ -861,7 +896,8 @@ class MainWindow(QMainWindow):
         self.refresh_stats()
         self.refresh_trades()
         self.maybe_daily_jobs()
-        self.count_info.setText(f'후보 {len(stocks)}개 · 필터 통과 {sum(r.passed for r in self.results)}개')
+        label = '합성 예제' if mode == 'DEMO' else '선택 시장 전체 조회 완료'
+        self.count_info.setText(f'{label} {len(stocks):,}개 · 필터 통과 {sum(r.passed for r in self.results):,}개')
         if events:
             QMessageBox.information(self,'가상매매 자동청산', '\n'.join(f'{name}: {reason}  {pnl:+,.0f}원' for name,reason,pnl in events))
 
@@ -873,7 +909,8 @@ class MainWindow(QMainWindow):
             cols = [row_idx+1,st.code,st.name,st.market,f'{st.price:,.0f}', f'{st.change_pct:+.2f}%',
                     f'{st.trade_value_eok:,.1f}',f'{st.vol_ratio_pct:,.0f}' if st.vol_ratio_pct is not None else '자료 없음',
                     f'{st.cap_eok:,.0f}' if st.cap_eok is not None else '자료 없음',f'{r.score:.0f}',
-                    '✓ 통과' if r.passed else r.reason]
+                    '✓ 통과' if r.passed else r.reason,
+                    st.quote_stamp or ('합성 예제' if st.source == 'DEMO' else '확인 불가'), st.stamp]
             for j,x in enumerate(cols):
                 self.screen_table.setItem(row_idx,j,cell(x))
         self.dashboard_table.setRowCount(len(filtered))

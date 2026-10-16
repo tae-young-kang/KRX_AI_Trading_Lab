@@ -16,7 +16,7 @@ def test_config_roundtrip(tmp_path):
 
 def test_demo_and_screener(tmp_path):
     cfg=Settings(tmp_path).values
-    stocks=DemoMarket().scan('전체',30)
+    stocks=DemoMarket().scan('전체')
     assert len(stocks)>5 and all(s.source=='DEMO' for s in stocks)
     results=evaluate(stocks,cfg)
     assert len(results)==len(stocks)

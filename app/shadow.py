@@ -35,7 +35,7 @@ def seed_variants(cfg):
             c=dict(cfg)
             c.update(market=mrkt,on_volratio=True,min_vol_ratio=float(threshold))
             out.append((f'{mrkt} · 전일 거래량비 {threshold}%',c,
-                        '순위 API의 전일 거래량비. 20일 평균 기반 CSV 백테스트와 별개.'))
+                        '키움 시세의 전일 거래량비. 20일 평균 기반 CSV 백테스트와 별개.'))
     return out
 
 

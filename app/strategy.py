@@ -14,6 +14,8 @@ def evaluate(stocks, cfg):
     results = []
     for st in stocks:
         failures = []
+        if st.price <= 0:
+            failures.append('유효 시세 없음')
         if cfg['on_price'] and not cfg['min_price'] <= st.price <= cfg['max_price']:
             failures.append('주가 범위')
         if cfg['on_cap'] and (st.cap_eok is None or not cfg['min_cap_eok'] <= st.cap_eok <= cfg['max_cap_eok']):
