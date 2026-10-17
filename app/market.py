@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 from dataclasses import dataclass, asdict
 import requests
+from app.trading_clock import PRICE_BASIS_NOTICE
 
 
 @dataclass
@@ -300,6 +301,8 @@ def recommendation_text(rows, demo=False):
              '⚠️ 가상 데이터 / 데모 테스트' if demo else '키움 시세 조회 · 투자권유 아님',
              '알림 생성: ' + datetime.now().strftime('%Y-%m-%d %H:%M'),
              '조회 당시 제공 시세 기준 · 장마감 후에도 조회·알림 가능', '']
+    if not demo:
+        lines.append(PRICE_BASIS_NOTICE)
     if not rows:
         lines.append('현재 설정 조건을 통과한 종목이 없습니다.')
     for i, row in enumerate(rows[:15], 1):

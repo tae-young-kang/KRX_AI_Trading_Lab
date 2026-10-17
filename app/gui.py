@@ -24,6 +24,7 @@ from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
 from app.research import evaluate_research, export_report
 from app.modes import MODES, current_mode, practice_db_name, credential_names
+from app.trading_clock import PRICE_BASIS_NOTICE
 
 STYLE = '''
 QMainWindow,QWidget {background:#0b1220;color:#e6edf7;font:10pt 'Malgun Gothic';}
@@ -231,6 +232,7 @@ class MainWindow(QMainWindow):
             label.setVisible(enabled)
             widget.setVisible(enabled)
         self.risk_panel.setVisible(enabled)
+        self.order_demo_button.setVisible(enabled)
         if persist:
             self.cfg['show_advanced'] = bool(enabled)
             self.settings.save()
@@ -874,6 +876,9 @@ class MainWindow(QMainWindow):
         legacy = QPushButton('이전 버전의 연습 기록 보기 (모드 구분 전)')
         legacy.clicked.connect(self.show_legacy_trades)
         v.addWidget(legacy)
+        self.order_demo_button = QPushButton('가짜 서버로 주문 흐름 시험 · 실제 돈 사용 안 함')
+        self.order_demo_button.clicked.connect(self.test_order_flow)
+        v.addWidget(self.order_demo_button)
         v.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -937,10 +942,18 @@ class MainWindow(QMainWindow):
         mode = current_mode(self.cfg)
         self.connection.setText(mode.title + ' · 실제 주문 잠금')
         self.connection.setStyleSheet(f'color:{mode.color};font-weight:700;')
-        self.notice.setText(mode.description)
+        self.notice.setText(mode.description + ('\n' + PRICE_BASIS_NOTICE if mode.key != 'DEMO' else ''))
+        self.notice.setToolTip(PRICE_BASIS_NOTICE)
         self.home_mode.setText('현재: ' + mode.title + '\n' + mode.description)
         self.home_mode.setStyleSheet(f'color:{mode.color};')
         self.demo_badge.setText('실제 돈의 주문: 잠금\n현재 기록은 모두 연습입니다.')
+
+    def test_order_flow(self):
+        from app.order_demo import run_order_demo
+        def done(report):
+            QMessageBox.information(self, '가짜 서버 시험 완료',
+                                    '\n\n'.join(report['steps']) + '\n\n' + report['notice'])
+        self.run_task(run_order_demo, done, '오프라인 가짜 주문 흐름 확인 완료')
 
     def run_task(self, fn, ok, success_text='완료', with_progress=False):
         if self.work is not None and self.work.isRunning():
