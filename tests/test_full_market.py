@@ -49,6 +49,8 @@ def test_all_symbols_across_pages_and_market_selection(broker, tmp_path, selecti
         assert url.endswith('/api/dostk/stkinfo')
         if headers['api-id'] == 'ka10099':
             market = json['mrkt_tp']
+            if market == '8':
+                return response({'list': [dict(code='999999', name='FAKE ETF')]})
             requested_markets.append(market)
             codes = listings[market]
             if headers['cont-yn'] == 'N':
@@ -56,13 +58,13 @@ def test_all_symbols_across_pages_and_market_selection(broker, tmp_path, selecti
             assert headers['next-key'] == 'page2'
             return response({'list': [dict(code=c, name='FAKE') for c in codes[20:]]})
         assert headers['api-id'] == 'ka10095'
-        assert len(json['stk_cd']) <= 20
+        assert len(json['stk_cd'].split('|')) <= 100
         codes = json['stk_cd'].split('|')
         if headers['cont-yn'] == 'N':
             requested_codes.extend(codes)
-            return response({'atn_stk_infr': [quote(codes[0])]}, len(codes) > 1, 'quote2')
+            return response({'atn_stk_infr': [quote(c) for c in codes[:len(codes)//2]]}, True, 'quote2')
         assert headers['next-key'] == 'quote2'
-        return response({'atn_stk_infr': [quote(codes[1])]})
+        return response({'atn_stk_infr': [quote(c) for c in codes[len(codes)//2:]]})
 
     broker.session.post.side_effect = post
     progress = []
@@ -83,6 +85,7 @@ def test_all_symbols_across_pages_and_market_selection(broker, tmp_path, selecti
 def test_missing_quote_blocks_recommendations(broker):
     broker.session.post.side_effect = [
         response({'list': [dict(code='900001'), dict(code='900002')]}),
+        response({'list': [dict(code='999999')]}),
         response({'atn_stk_infr': [quote('900001')]})]
     with pytest.raises(RuntimeError, match='누락'):
         broker.scan('KOSPI')
@@ -104,6 +107,7 @@ def test_empty_selected_market_is_not_silently_skipped(broker):
 
 def test_cancellation_does_not_return_partial_results(broker):
     broker.session.post.side_effect = [response({'list': [dict(code='900001')]}),
+                                       response({'list': [dict(code='999999')]}),
                                        response({'atn_stk_infr': [quote('900001')]})]
     cancelled = False
 
@@ -155,3 +159,79 @@ def test_transaction_closes_connection_and_rolls_back(tmp_path, store_class):
             raise ValueError('rollback')
     with store.connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM lifecycle').fetchone()[0] == 0
+
+
+def test_4307_symbols_need_only_44_quote_requests(broker):
+    codes = [f'{i:06d}' for i in range(1, 4308)]
+    batches = []
+
+    def post(url, headers, json, timeout):
+        if headers['api-id'] == 'ka10099':
+            listing = ['999999'] if json['mrkt_tp'] == '8' else codes
+            return response({'list': [dict(code=c, name='FAKE') for c in listing]})
+        batch = json['stk_cd'].split('|')
+        batches.append(batch)
+        return response({'atn_stk_infr': [quote(c) for c in batch]})
+
+    broker.session.post.side_effect = post
+    stocks = broker.scan('KOSPI')
+    assert len(stocks) == 4307
+    assert len(batches) == 44
+    assert [c for batch in batches for c in batch] == codes
+
+
+@pytest.mark.parametrize('include_etf', [True, False])
+def test_official_etf_membership_controls_quote_universe(broker, tmp_path, include_etf):
+    # Names intentionally misleading: classification must use list type 8.
+    broker.session.post.side_effect = [
+        response({'list': [dict(code='900001', name='ordinary-looking ETF'),
+                            dict(code='900002', name='ETF word but ordinary stock')]}),
+        response({'list': [dict(code='900001', name='official ETF')]}),
+        response({'atn_stk_infr': [quote(c) for c in
+                                  (['900001', '900002'] if include_etf else ['900002'])]})]
+    stocks = broker.scan('KOSPI', include_etf=include_etf)
+    assert {s.code for s in stocks} == ({'900001', '900002'} if include_etf else {'900002'})
+    if include_etf:
+        etf = next(s for s in stocks if s.code == '900001')
+        assert etf.is_etf and ' · ETF' in recommendation_text([etf])
+        cfg = Settings(tmp_path).values
+        cfg['include_etf'] = False
+        assert not evaluate([etf], cfg)[0].passed
+
+
+def test_empty_etf_classification_fails_closed(broker):
+    broker.session.post.side_effect = [response({'list': [dict(code='900001')]}),
+                                       response({'list': []})]
+    with pytest.raises(RuntimeError, match='ETF 분류'):
+        broker.scan('KOSPI', include_etf=False)
+
+
+@pytest.mark.parametrize('failure', ['rejected', 'truncated'])
+def test_large_batch_recovery_never_drops_symbols(broker, failure):
+    codes = [f'{i:06d}' for i in range(1, 101)]
+    calls = []
+
+    def post(url, headers, json, timeout):
+        batch = json['stk_cd'].split('|')
+        calls.append(batch)
+        if len(batch) > 10:
+            if failure == 'rejected':
+                return response({'return_code': 7})
+            batch = batch[:10]
+        return response({'atn_stk_infr': [quote(c) for c in batch]})
+
+    broker.session.post.side_effect = post
+    rows = broker._quote_rows(codes, None, lambda text: None)
+    assert len(rows) == 100 and {r['stk_cd'] for r in rows} == set(codes)
+    assert len(calls) > 1
+
+
+def test_unrecoverable_missing_symbol_still_blocks_large_batch(broker):
+    codes = [f'{i:06d}' for i in range(1, 101)]
+
+    def post(url, headers, json, timeout):
+        return response({'atn_stk_infr': [quote(c) for c in json['stk_cd'].split('|') if c != codes[-1]]})
+
+    broker.session.post.side_effect = post
+    with pytest.raises(RuntimeError, match='누락'):
+        broker._quote_rows(codes, None, lambda text: None)

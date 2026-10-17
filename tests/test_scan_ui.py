@@ -17,6 +17,7 @@ def window(tmp_path, monkeypatch):
     monkeypatch.setenv('KOSPI_AI_DATA_DIR', str(tmp_path))
     monkeypatch.setattr(gui, 'Credentials', lambda: type('NoCredentials', (), {'get': lambda self, key: ''})())
     monkeypatch.setattr(QMessageBox, 'warning', lambda *args: None)
+    monkeypatch.setattr(QMessageBox, 'information', lambda *args: None)
     app = QApplication.instance() or QApplication([])
     win = gui.MainWindow()
     win.daily_research_timer.stop()
@@ -60,7 +61,7 @@ def test_failed_full_scan_clears_previous_recommendations(window, monkeypatch):
     class BrokenMarket:
         session = type('Session', (), {'close': lambda self: None})()
 
-        def scan(self, market, progress, cancelled):
+        def scan(self, market, progress, cancelled, include_etf=True):
             progress('전체 대상 100개 · 시세 조회 2개')
             raise RuntimeError('시세 누락')
 
@@ -79,7 +80,7 @@ def test_cancel_stops_auto_scan_and_does_not_publish(window, monkeypatch):
     class WaitingMarket:
         session = type('Session', (), {'close': lambda self: None})()
 
-        def scan(self, market, progress, cancelled):
+        def scan(self, market, progress, cancelled, include_etf=True):
             while not cancelled():
                 time.sleep(.01)
             raise RuntimeError('전체 조회 취소')
@@ -93,3 +94,28 @@ def test_cancel_stops_auto_scan_and_does_not_publish(window, monkeypatch):
     assert not win.timer.isActive()
     assert not win.stocks and not win.results
     assert '취소' in win.count_info.text()
+
+
+def test_etf_checkbox_persists_and_clears_stale_recommendations(window):
+    from app.config import Settings
+    app, win = window
+    win.scan()
+    finish(app, win)
+    assert win.results
+    win.fields['include_etf'].setChecked(False)
+    win.save_strategy()
+    assert Settings().get('include_etf') is False
+    assert not win.results and not win.stocks
+    assert win.screen_table.rowCount() == 0
+    win.fields['include_etf'].setChecked(True)
+    win.save_strategy()
+    assert Settings().get('include_etf') is True
+
+
+def test_etf_settings_cannot_change_during_an_active_scan(window):
+    app, win = window
+    win.scanning = True
+    win.fields['include_etf'].setChecked(False)
+    win.save_strategy()
+    assert win.cfg['include_etf'] is True
+    win.scanning = False

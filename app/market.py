@@ -21,6 +21,7 @@ class Stock:
     source: str = 'DEMO'
     stamp: str = ''
     quote_stamp: str = ''
+    is_etf: bool = False
 
     def as_dict(self):
         return asdict(self)
@@ -75,8 +76,13 @@ class DemoMarket:
         return result
 
 
+class KiwoomAPIError(RuntimeError):
+    """A rejected request, without broker response contents or credentials."""
+
+
 class KiwoomMarket:
     """Read-only REST screener. KRX quotes only for consistent early-stage data tests."""
+    QUOTE_BATCH_SIZE = 100
     def __init__(self, appkey, secretkey, env='MOCK'):
         if not appkey or not secretkey:
             raise ValueError('키움 App Key / Secret을 설정해주세요.')
@@ -135,7 +141,7 @@ class KiwoomMarket:
                 raise RuntimeError(f'{api_id} 응답 형식 오류')
             rc = data.get('return_code', data.get('returnCode'))
             if str(rc) != '0':
-                raise RuntimeError(f'{api_id} 조회 실패: 전체 종목 조회를 완료하지 못했습니다.')
+                raise KiwoomAPIError(f'{api_id} 조회 실패: 전체 종목 조회를 완료하지 못했습니다.')
             return (data, resp.headers) if include_headers else data
 
     @staticmethod
@@ -161,12 +167,46 @@ class KiwoomMarket:
             seen.add(next_key)
             cont_yn = 'Y'
 
-    def scan(self, market='전체', progress=None, cancelled=None):
+    def _quote_rows(self, codes, cancelled, notify):
+        """Retry smaller batches if a server rejects or truncates a large one.
+
+        Never accept a partial universe. Two-code failures still stop the scan.
+        Transport errors and broken pagination are not mistaken for size limits.
+        """
+        try:
+            rows = list(self._rows('ka10095', {'stk_cd': '|'.join(codes)},
+                                   'atn_stk_infr', cancelled))
+        except KiwoomAPIError:
+            if len(codes) <= 2:
+                raise
+            notify('묶음 요청 거부 · 작은 묶음으로 재조회 중')
+            middle = len(codes) // 2
+            return (self._quote_rows(codes[:middle], cancelled, notify) +
+                    self._quote_rows(codes[middle:], cancelled, notify))
+        received = {}
+        for row in rows:
+            code = str(row.get('stk_cd', '')).strip()
+            if code not in codes:
+                raise RuntimeError('요청과 다른 종목 시세 응답: 전체 조회 미완료')
+            received[code] = row
+        missing = [code for code in codes if code not in received]
+        if missing:
+            if len(codes) <= 2:
+                raise RuntimeError(f'시세 {len(missing)}개 누락: 전체 조회 미완료. 추천을 생성하지 않습니다.')
+            notify(f'묶음 응답 {len(missing)}개 누락 · 누락 종목 재조회 중')
+            if len(missing) == len(codes):
+                middle = len(codes) // 2
+                return (self._quote_rows(codes[:middle], cancelled, notify) +
+                        self._quote_rows(codes[middle:], cancelled, notify))
+            rows = list(received.values()) + self._quote_rows(missing, cancelled, notify)
+        return rows
+
+    def scan(self, market='전체', progress=None, cancelled=None, include_etf=True):
         """Enumerate the selected markets before screening every listed symbol.
 
         Official specs: ka10099 (0=KOSPI, 10=KOSDAQ), ka10095
-        (pipe-separated KRX codes; stk_cd documented length 20).
-        Small batches respect that documented input length, with no universe cap.
+        (pipe-separated KRX codes). Live read-only probes confirmed 100 codes
+        per request; smaller batches are retried if the server disagrees.
         """
         if market not in ('전체', 'KOSPI', 'KOSDAQ'):
             raise ValueError('시장은 전체, KOSPI, KOSDAQ 중 선택하세요.')
@@ -186,14 +226,25 @@ class KiwoomMarket:
                 market_count += 1
             if not market_count:
                 raise RuntimeError(f'{mrkt} 전체 종목 목록이 비어 있습니다.')
+        notify('ETF 분류 목록 수집 중')
+        etfs = set()
+        for row in self._rows('ka10099', {'mrkt_tp': '8'}, 'list', cancelled):
+            code = str(row.get('code', '')).strip()
+            if len(code) != 6 or not code.isascii() or not code.isalnum():
+                raise RuntimeError('ETF 종목코드 형식 오류: 전체 조회 미완료')
+            etfs.add(code)
+        if not etfs:
+            raise RuntimeError('ETF 분류 목록이 비어 있습니다. 포함 여부를 확인할 수 없습니다.')
+        if not include_etf:
+            universe = {code: meta for code, meta in universe.items() if code not in etfs}
         codes = list(universe)
         found = {}
-        notify(f'전체 대상 {len(codes):,}개 · 시세 조회 0개')
-        for start in range(0, len(codes), 2):
+        notify(f'ETF {"포함" if include_etf else "제외"} · 전체 대상 {len(codes):,}개 · 시세 조회 0개')
+        for start in range(0, len(codes), self.QUOTE_BATCH_SIZE):
             self._check_cancelled(cancelled)
-            batch = codes[start:start+2]
+            batch = codes[start:start+self.QUOTE_BATCH_SIZE]
             received = {}
-            for row in self._rows('ka10095', {'stk_cd':'|'.join(batch)}, 'atn_stk_infr', cancelled):
+            for row in self._quote_rows(batch, cancelled, notify):
                 code = str(row.get('stk_cd', '')).strip()
                 if code not in batch:
                     raise RuntimeError('요청과 다른 종목 시세 응답: 전체 조회 미완료')
@@ -216,7 +267,8 @@ class KiwoomMarket:
                 received[code] = Stock(
                     code, name, mrkt, price, change, amount / 100,
                     numeric(row.get('pred_trde_qty_pre')), numeric(row.get('mac')),
-                    int(volume), 'KIWOOM', datetime.now().isoformat(timespec='seconds'), quote_stamp)
+                    int(volume), 'KIWOOM', datetime.now().isoformat(timespec='seconds'), quote_stamp,
+                    code in etfs)
             if set(received) != set(batch):
                 missing = len(set(batch) - set(received))
                 raise RuntimeError(f'시세 {missing}개 누락: 전체 조회 미완료. 추천을 생성하지 않습니다.')
@@ -251,7 +303,8 @@ def recommendation_text(rows, demo=False):
     if not rows:
         lines.append('현재 설정 조건을 통과한 종목이 없습니다.')
     for i, row in enumerate(rows[:15], 1):
-        lines.append(f'{i}. {row.name} ({row.code}) · {row.market}\n'
+        kind = ' · ETF' if getattr(row, 'is_etf', False) else ''
+        lines.append(f'{i}. {row.name} ({row.code}) · {row.market}{kind}\n'
                      f'  {row.price:,.0f}원 / {row.change_pct:+.1f}% / 점수 {getattr(row, "score", 0):.0f}\n'
                      f'  거래대금 {row.trade_value_eok:,.0f}억 · 시총 {row.cap_eok:,.0f}억' if row.cap_eok is not None
                      else f'{i}. {row.name} ({row.code}) · 시총 미수집')

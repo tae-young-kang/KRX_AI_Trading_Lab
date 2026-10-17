@@ -649,6 +649,7 @@ class MainWindow(QMainWindow):
         self.fields = {}
         filter_items = [
             ('market','시장','choice',['전체','KOSPI','KOSDAQ']),
+            ('include_etf','ETF 포함','bool'),
             ('recommend_count','추천 상위 표시 수','int',1,50),
             ('on_price','주가 범위 적용','bool'),
             ('min_price','최소 주가 (원)','double',0,1000000),
@@ -811,7 +812,7 @@ class MainWindow(QMainWindow):
         self.connection.setText('● 생성 데이터 · DEMO' if mode == 'DEMO' else
                                 f'● 키움 {self.cfg["kiwoom_env"]} · 조회 전용')
         self.notice.setText('데모 종목·가격은 가상 데이터입니다.' if mode == 'DEMO' else
-            '선택 시장 전체 종목을 순차 조회합니다. 완료까지 수분 이상 걸릴 수 있으며 시세 시각은 서로 다릅니다. 실제 주문은 차단되어 있습니다.')
+            '선택 시장 전체 종목을 조회합니다. ETF 포함 여부는 전략 조건에서 설정하며 종목별 시세 시각은 서로 다릅니다. 실제 주문은 차단되어 있습니다.')
 
     def run_task(self, fn, ok, success_text='완료', with_progress=False):
         if self.work is not None and self.work.isRunning():
@@ -859,7 +860,8 @@ class MainWindow(QMainWindow):
                 return self.demo.scan(cfg['market'])
             client = KiwoomMarket(self.creds.get('kiwoom_appkey'), self.creds.get('kiwoom_secret'), cfg['kiwoom_env'])
             try:
-                return client.scan(cfg['market'], progress=progress, cancelled=cancelled)
+                return client.scan(cfg['market'], progress=progress, cancelled=cancelled,
+                                   include_etf=cfg['include_etf'])
             finally:
                 client.session.close()
         self.run_task(fetch, lambda rows: self.on_scan(rows,cfg,mode), '전체 대상 검색 및 DB 저장 완료', with_progress=True)
@@ -897,6 +899,7 @@ class MainWindow(QMainWindow):
         self.refresh_trades()
         self.maybe_daily_jobs()
         label = '합성 예제' if mode == 'DEMO' else '선택 시장 전체 조회 완료'
+        label += ' · ETF ' + ('포함' if cfg['include_etf'] else '제외')
         self.count_info.setText(f'{label} {len(stocks):,}개 · 필터 통과 {sum(r.passed for r in self.results):,}개')
         if events:
             QMessageBox.information(self,'가상매매 자동청산', '\n'.join(f'{name}: {reason}  {pnl:+,.0f}원' for name,reason,pnl in events))
@@ -909,7 +912,7 @@ class MainWindow(QMainWindow):
             cols = [row_idx+1,st.code,st.name,st.market,f'{st.price:,.0f}', f'{st.change_pct:+.2f}%',
                     f'{st.trade_value_eok:,.1f}',f'{st.vol_ratio_pct:,.0f}' if st.vol_ratio_pct is not None else '자료 없음',
                     f'{st.cap_eok:,.0f}' if st.cap_eok is not None else '자료 없음',f'{r.score:.0f}',
-                    '✓ 통과' if r.passed else r.reason,
+                    ('✓ 통과 · ETF' if st.is_etf else '✓ 통과') if r.passed else r.reason,
                     st.quote_stamp or ('합성 예제' if st.source == 'DEMO' else '확인 불가'), st.stamp]
             for j,x in enumerate(cols):
                 self.screen_table.setItem(row_idx,j,cell(x))
@@ -989,6 +992,9 @@ class MainWindow(QMainWindow):
                 self.trade_table.setItem(i,j,cell(x, positive=pnl if j in (6,7) and pnl is not None else None))
 
     def save_strategy(self):
+        if self.scanning:
+            QMessageBox.information(self, '조회 진행 중', '조회가 끝나거나 취소한 뒤 조건을 저장하세요.')
+            return
         cfg = dict(self.cfg)
         for key,w in self.fields.items():
             if isinstance(w,QCheckBox):
@@ -1003,6 +1009,11 @@ class MainWindow(QMainWindow):
         cfg['strategy_version'] += 1
         self.cfg.update(cfg)
         self.settings.save()
+        # A previous scan may have excluded ETFs; it cannot satisfy new settings.
+        self.stocks = []
+        self.results = []
+        self.fill_stock_tables()
+        self.count_info.setText('조건 변경 · 새 설정으로 다시 검색하세요.')
         self.timer.setInterval(max(10, int(cfg['scan_interval_sec']))*1000)
         self.db.log('CONFIG','전략 설정 변경, 버전 '+str(cfg['strategy_version']))
         self.shadow.ensure_active_reference(dict(self.cfg),self.cfg['data_mode'])

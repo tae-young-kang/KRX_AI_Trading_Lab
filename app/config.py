@@ -20,6 +20,7 @@ def data_dir():
 
 DEFAULTS = {
     'market': '전체',
+    'include_etf': True,
     'data_mode': 'DEMO',
     'kiwoom_env': 'MOCK',
     'scan_interval_sec': 60,

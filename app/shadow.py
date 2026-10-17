@@ -14,7 +14,7 @@ from app.storage import now
 
 # Fields that may be promoted to an active user screener strategy.
 STRATEGY_KEYS = frozenset({
-    'market', 'min_price', 'max_price', 'min_cap_eok', 'max_cap_eok',
+    'market', 'include_etf', 'min_price', 'max_price', 'min_cap_eok', 'max_cap_eok',
     'min_value_eok', 'min_vol_ratio', 'min_change_pct', 'max_change_pct',
     'on_price', 'on_cap', 'on_value', 'on_volratio', 'on_change',
     'exit_stop_pct', 'exit_take_pct', 'exit_max_days',

@@ -14,6 +14,8 @@ def evaluate(stocks, cfg):
     results = []
     for st in stocks:
         failures = []
+        if not cfg.get('include_etf', True) and getattr(st, 'is_etf', False):
+            failures.append('ETF 제외')
         if st.price <= 0:
             failures.append('유효 시세 없음')
         if cfg['on_price'] and not cfg['min_price'] <= st.price <= cfg['max_price']:
