@@ -23,6 +23,8 @@ DEFAULTS = {
     'include_etf': True,
     'data_mode': 'DEMO',
     'kiwoom_env': 'MOCK',
+    'legacy_kiwoom_env': '',
+    'show_advanced': False,
     'scan_interval_sec': 60,
     'recommend_count': 15,
     'min_price': 2000.0,
@@ -80,6 +82,9 @@ class Settings:
                     self.values.update({k: v for k, v in loaded.items() if k in DEFAULTS})
             except (OSError, ValueError):
                 pass
+        # Freeze the provenance of pre-separation keys before switching servers.
+        if not self.values['legacy_kiwoom_env']:
+            self.values['legacy_kiwoom_env'] = self.values['kiwoom_env']
 
     def get(self, key):
         return self.values[key]

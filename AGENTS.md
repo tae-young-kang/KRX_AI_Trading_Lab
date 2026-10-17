@@ -8,3 +8,6 @@
 - Never force-push, delete remote branches, rewrite history or change repository visibility without explicit user authorization.
 - Version control work must not launch main.py, the GUI, live market clients, or order endpoints. Use offline tests with temporary data only.
 - These rules govern Codex task completion; they are not an unattended background scheduler.
+- Follow DEVELOPMENT_ROADMAP.md in order; record the current stage and remaining validation, and never equate offline tests with real executions.
+- Keep the default UI understandable to a middle-school student: plain Korean, short guided steps, and optional advanced research screens.
+- Clearly separate synthetic practice, Kiwoom mock investment, real quote viewing, and actual real-money execution. Keep mode-specific data and credentials separate. Real quotes do not authorize real orders.
