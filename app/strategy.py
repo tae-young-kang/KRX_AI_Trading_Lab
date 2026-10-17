@@ -66,22 +66,24 @@ def auto_paper_exit(db, stocks, cfg):
 
 
 def create_proposals(db, cfg):
-    """Conservative descriptive experiment proposal; never modifies live settings."""
-    closed = db.closed_trades()
+    """Compare actually tried conditions. No invented thresholds or auto-apply."""
+    from app.trade_review import FILTER_KEYS, EXIT_KEYS, COST_KEYS
     min_n = max(20, int(cfg['min_strategy_trades']))
-    if len(closed) < min_n:
-        return f'완료된 가상거래 {len(closed)}건 / 제안 최소 {min_n}건. 데이터 축적 중입니다.'
-    # Analyze only realized paper trades; no spurious 'machine learning' claims.
-    high_loss = [t for t in closed if t['pnl_pct'] < -2]
-    if len(high_loss) / len(closed) >= 0.40 and cfg['exit_stop_pct'] > 1:
-        patch = {'exit_stop_pct': round(max(1.0, cfg['exit_stop_pct'] - 0.5), 1)}
-        db.propose('손절폭 축소 실험',
-            f'{len(closed)}건 중 손실 -2% 초과 {len(high_loss)}건. '
-            '다음 가상전략에서 손절폭을 좁혀 비교해볼 후보입니다. 개선 효과 미검증.', patch)
-    pf = db.stats()['profit_factor']
-    if pf < 1 and cfg['min_vol_ratio'] < 350:
-        patch = {'min_vol_ratio': round(cfg['min_vol_ratio'] + 25, 1)}
-        db.propose('거래량 조건 강화 실험',
-            f'가상매매 {len(closed)}건 기준 Profit Factor {pf:.2f}. '
-            '거래량 최소 기준을 올린 별도 실험을 제안합니다. 인과관계나 개선 보장은 없습니다.', patch)
-    return f'{len(closed)}건을 분석해 실험 후보를 갱신했습니다. 승인 전에 독립 기간 재검증이 필요합니다.'
+    reviews = db.condition_reviews(min_n)
+    candidates = 0
+    for r in reviews:
+        old = r['settings']
+        if not r['eligible'] or any(old[k] != cfg[k] for k in ('data_mode', 'kiwoom_env') + COST_KEYS):
+            continue
+        if any(r['exit_costs'][k] != cfg[k] for k in COST_KEYS):
+            continue
+        patch = {k: old[k] for k in FILTER_KEYS + EXIT_KEYS if old[k] != cfg[k]}
+        if not patch:
+            continue
+        candidates += int(db.propose('기록에서 찾은 조건 비교 후보',
+            f"{r['mode']} · {r['label']} / 비용 차감 후 앞 기록 {r['train']['count']}건 "
+            f"평균 {r['train']['mean_pct']:+.2f}%, 뒤 기록 {r['test']['count']}건 "
+            f"평균 {r['test']['mean_pct']:+.2f}%. 사용자 선택 기록의 탐색 비교이며 "
+            '미래 수익을 보장하지 않습니다. 추가 관찰 후 적용 여부를 결정하세요.', patch))
+    return (f'{len(reviews)}개 조건 비교 · 새 후보 {candidates}개. 조건별 앞 기록 {min_n}건·5일 이상, '
+            '뒤 기록 10건·3일 이상 및 양쪽 수익이 필요합니다. 데이터 축적·추가 검증 중이며 자동 적용하지 않습니다.')

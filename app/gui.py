@@ -25,6 +25,7 @@ from app.krx_history import HistoryStore, KRXDailyClient
 from app.research import evaluate_research, export_report
 from app.modes import MODES, current_mode, practice_db_name, credential_names
 from app.trading_clock import PRICE_BASIS_NOTICE
+from app.trade_review import outcome, condition_label, settings_snapshot
 
 STYLE = '''
 QMainWindow,QWidget {background:#0b1220;color:#e6edf7;font:10pt 'Malgun Gothic';}
@@ -320,11 +321,26 @@ class MainWindow(QMainWindow):
         exp = QPushButton('매매기록 CSV 내보내기')
         exp.clicked.connect(self.export_trades)
         row.addWidget(exp)
+        detail = QPushButton('선택 매매의 당시 조건 보기')
+        detail.clicked.connect(self.show_trade_conditions)
+        row.addWidget(detail)
         v.addLayout(row)
         self.trade_table = make_table(['ID','종목','구분','수량','매수가','매도가','손익(원)',
-                                       '손익률','매수일','청산일','사유'])
+                                       '손익률','매수일','청산일','사유','승패'])
         v.addWidget(self.trade_table)
         v.addWidget(lbl('가상체결은 최신 조회가 기준의 단순 근사입니다. 미끄러짐/수수료/세금은 설정한 가정값으로 계산합니다.','Muted'))
+        v.addWidget(lbl('내가 쓴 조건의 성적표', 'H2'))
+        note = lbl('매수 당시 조건을 보관하고 매도 후 비용을 뺀 결과로 승·패·본전을 나눕니다. '
+                   '보유 중인 종목은 승률에서 제외합니다. 조건 기록이 없는 이전 매매는 성적표에서 제외합니다. '
+                   '아래 기록은 모두 연습이며 실제 체결 기록이 아닙니다.', 'Muted')
+        note.setWordWrap(True)
+        v.addWidget(note)
+        self.condition_table = make_table(['매수 당시 조건','완료 / 보유','승 / 패 / 본전',
+                                          '승률','평균 손익률','기록 종류','평가'])
+        v.addWidget(self.condition_table)
+        compare = QPushButton('이 기록으로 조건 비교하기')
+        compare.clicked.connect(self.create_optimizer)
+        v.addWidget(compare)
         return page
 
     def make_shadow(self):
@@ -1071,6 +1087,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self,'종목 선택','스크리너에서 먼저 종목을 선택하세요.')
             return
         result = self.results[row_idx]
+        # A saved filter can change after the scan. Attribute the trade only to
+        # the conditions actually checked at entry, never a stale passed flag.
+        result = evaluate([result.stock], self.cfg)[0]
         if not result.passed:
             QMessageBox.warning(self,'선정 조건 미충족','필터를 통과한 종목만 가상매수할 수 있습니다.')
             return
@@ -1129,9 +1148,47 @@ class MainWindow(QMainWindow):
                     t['qty'],f'{t["buy_fill"]:,.0f}',f'{t["close_fill"]:,.0f}' if t['close_fill'] is not None else '—',
                     f'{pnl:+,.0f}' if pnl is not None else '미실현',
                     f'{t["pnl_pct"]:+.2f}%' if t['pnl_pct'] is not None else '—',
-                    t['opened_at'][:16],t['closed_at'][:16] if t['closed_at'] else '—', t['close_reason'] or '—']
+                    t['opened_at'][:16],t['closed_at'][:16] if t['closed_at'] else '—', t['close_reason'] or '—', outcome(t)]
             for j,x in enumerate(data):
                 self.trade_table.setItem(i,j,cell(x, positive=pnl if j in (6,7) and pnl is not None else None))
+        reviews = self.db.condition_reviews(max(20, int(self.cfg['min_strategy_trades'])))
+        self.condition_table.setRowCount(len(reviews))
+        for i, review in enumerate(reviews):
+            st = review['total']
+            policy = review['settings']
+            label = (review['label'] + f" · 손절 {policy['exit_stop_pct']:g}% / "
+                     f"익절 {policy['exit_take_pct']:g}% / 최대 {policy['exit_max_days']:g}일")
+            values = [label, f"{st['count']} / {review['open_count']}",
+                      f"{st['wins']} / {st['losses']} / {st['draws']}",
+                      f"{st['winrate']:.1f}%" if st['count'] else '—',
+                      f"{st['mean_pct']:+.2f}%" if st['count'] else '—', review['mode'], review['state']]
+            for j, value in enumerate(values):
+                item = cell(value)
+                item.setToolTip(label + '\n수수료·세금·미끄러짐 가정이 다르면 별도로 집계합니다.\n'
+                                '사용자가 선택한 매매 기록 비교이며 모든 추천 종목의 성과를 뜻하지 않습니다.')
+                self.condition_table.setItem(i, j, item)
+
+    def show_trade_conditions(self):
+        row = self.trade_table.currentRow()
+        if row < 0:
+            return
+        trade_id = int(self.trade_table.item(row, 0).text())
+        trade = next((t for t in self.db.trades() if t['id'] == trade_id), None)
+        if trade is None:
+            return
+        try:
+            cfg = settings_snapshot(json.loads(trade['strat_json']))
+            text = condition_label(cfg)
+            text += (f"\n손절 {trade['stop_pct']:g}% · 익절 {trade['take_pct']:g}% · 최대 {trade['max_days']}일"
+                     f"\n결과: {outcome(trade)}\n매수 수수료 {trade['buy_fee']:,.2f}원")
+            if trade['closed_at']:
+                text += f"\n매도 수수료 {trade['close_fee']:,.2f}원 · 세금 {trade['close_tax']:,.2f}원"
+            else:
+                text += '\n보유 중인 종목은 매도 후 승패가 정해집니다.'
+            text += '\n\n연습 매매의 비용 가정으로 계산한 기록이며 실제 체결을 뜻하지 않습니다.'
+        except (ValueError, TypeError):
+            text = '이전 기록의 조건을 확인할 수 없습니다.'
+        QMessageBox.information(self, '매수 당시 조건 · 연습 기록', text)
 
     def save_strategy(self):
         if self.scanning:
@@ -1190,7 +1247,7 @@ class MainWindow(QMainWindow):
             for j,x in enumerate([p['id'],p['created_at'][:16],p['title'],p['rationale'],p['state']]):
                 self.proposal_table.setItem(i,j,cell(x))
         n = len(self.db.closed_trades())
-        self.opt_status.setText(f'가상청산 {n}건 · 개선안 생성 최소 {max(20,self.cfg["min_strategy_trades"])}건')
+        self.opt_status.setText(f'연습 매도 완료 {n}건 · 조건별 앞 기록 {max(20,self.cfg["min_strategy_trades"])}건 + 뒤 기록 10건부터 비교')
 
     def review_proposal(self, accept):
         row = self.proposal_table.currentRow()
