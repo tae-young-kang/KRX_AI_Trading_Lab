@@ -88,7 +88,7 @@ class KiwoomAPIError(RuntimeError):
 class KiwoomMarket:
     """Read-only REST screener. KRX quotes only for consistent early-stage data tests."""
     QUOTE_BATCH_SIZE = 100
-    def __init__(self, appkey, secretkey, env='MOCK'):
+    def __init__(self, appkey, secretkey, env='MOCK', *, batch_profile=None):
         if not appkey or not secretkey:
             raise ValueError('키움 App Key / Secret을 설정해주세요.')
         self.url = 'https://mockapi.kiwoom.com' if env == 'MOCK' else 'https://api.kiwoom.com'
@@ -98,6 +98,8 @@ class KiwoomMarket:
         self.token_ts = 0
         self.last_api_call = 0
         self.session = requests.Session()
+        self.batch_profile = batch_profile
+        self._scan_batch_size = self.QUOTE_BATCH_SIZE
 
     def login(self):
         resp = self.session.post(self.url + '/oauth2/token', json={
@@ -186,6 +188,7 @@ class KiwoomMarket:
                 raise
             notify('묶음 요청 거부 · 작은 묶음으로 재조회 중')
             middle = len(codes) // 2
+            self._scan_batch_size=min(self._scan_batch_size,middle)
             return (self._quote_rows(codes[:middle], cancelled, notify) +
                     self._quote_rows(codes[middle:], cancelled, notify))
         received = {}
@@ -201,8 +204,10 @@ class KiwoomMarket:
             notify(f'묶음 응답 {len(missing)}개 누락 · 누락 종목 재조회 중')
             if len(missing) == len(codes):
                 middle = len(codes) // 2
+                self._scan_batch_size=min(self._scan_batch_size,middle)
                 return (self._quote_rows(codes[:middle], cancelled, notify) +
                         self._quote_rows(codes[middle:], cancelled, notify))
+            self._scan_batch_size=min(self._scan_batch_size,len(received))
             rows = list(received.values()) + self._quote_rows(missing, cancelled, notify)
         return rows
 
@@ -216,6 +221,7 @@ class KiwoomMarket:
         if market not in ('전체', 'KOSPI', 'KOSDAQ'):
             raise ValueError('시장은 전체, KOSPI, KOSDAQ 중 선택하세요.')
         notify = progress or (lambda text: None)
+        self._scan_batch_size=(self.batch_profile.limit(self.url) if self.batch_profile else self.QUOTE_BATCH_SIZE)
         markets = ['KOSPI', 'KOSDAQ'] if market == '전체' else [market]
         universe = {}
         for mrkt in markets:
@@ -249,9 +255,10 @@ class KiwoomMarket:
         codes = list(universe)
         found = {}
         notify(f'ETF {"포함" if include_etf else "제외"} · 전체 대상 {len(codes):,}개 · 시세 조회 0개')
-        for start in range(0, len(codes), self.QUOTE_BATCH_SIZE):
+        start=0
+        while start<len(codes):
             self._check_cancelled(cancelled)
-            batch = codes[start:start+self.QUOTE_BATCH_SIZE]
+            batch = codes[start:start+self._scan_batch_size]
             received = {}
             for row in self._quote_rows(batch, cancelled, notify):
                 code = str(row.get('stk_cd', '')).strip()
@@ -282,8 +289,11 @@ class KiwoomMarket:
                 missing = len(set(batch) - set(received))
                 raise RuntimeError(f'시세 {missing}개 누락: 전체 조회 미완료. 추천을 생성하지 않습니다.')
             found.update(received)
+            start+=len(batch)
             notify(f'전체 대상 {len(codes):,}개 · 시세 조회 {len(found):,}개 · 누락 0개')
         self._check_cancelled(cancelled)
+        if self.batch_profile:
+            self.batch_profile.completed(self.url,self._scan_batch_size)
         return sorted(found.values(), key=lambda x: x.trade_value_eok, reverse=True)
 
 

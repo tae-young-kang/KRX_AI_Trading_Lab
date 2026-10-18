@@ -11,6 +11,7 @@ from app.krx_history import HistoryStore
 from app.market import DemoMarket, KiwoomMarket, recommendation_text
 from app.storage import Database
 from app.strategy import evaluate
+from app.quote_batch_profile import QuoteBatchProfile
 
 
 def quote(code):
@@ -89,6 +90,46 @@ def test_missing_quote_blocks_recommendations(broker):
         response({'atn_stk_infr': [quote('900001')]})]
     with pytest.raises(RuntimeError, match='누락'):
         broker.scan('KOSPI')
+
+
+def test_successful_batch_hint_reduces_rejected_calls_without_caching_quotes(broker):
+    broker.batch_profile=QuoteBatchProfile()
+    codes=[f'{i:06d}' for i in range(1,201)]
+    calls=[]
+    round_number=[0]
+    omit_last=[False]
+    def post(url,headers,json,timeout):
+        if headers['api-id']=='ka10099':
+            rows=[dict(code=code,name='시험') for code in codes] if json['mrkt_tp']=='0' else [dict(code='999999',name='시험ETF')]
+            return response(dict(list=rows))
+        batch=json['stk_cd'].split('|')
+        calls.append(len(batch))
+        if len(batch)>25: return response(dict(return_code=1))
+        return response(dict(atn_stk_infr=[dict(quote(code),cur_prc=str(10000+round_number[0])) for code in batch
+                                         if not omit_last[0] or code!=codes[-1]]))
+    broker.session.post.side_effect=post
+    first=broker.scan('KOSPI')
+    first_count=len(calls);calls.clear();round_number[0]=1
+    second=broker.scan('KOSPI')
+    assert first_count==11 and len(calls)==8 and max(calls)==25
+    assert {row.code for row in first}=={row.code for row in second}==set(codes)
+    assert all(row.price==10001 for row in second)
+    broker.batch_profile=QuoteBatchProfile()
+    omit_last[0]=True
+    with pytest.raises(RuntimeError,match='누락'):
+        broker.scan('KOSPI')
+    assert broker.batch_profile.limit(broker.url)==100
+
+
+def test_batch_hint_expiry_clock_reversal_and_server_scope():
+    clock=[0]
+    profile=QuoteBatchProfile(clock=lambda:clock[0])
+    profile.completed('mock',25)
+    assert profile.limit('mock')==25 and profile.limit('real')==100
+    clock[0]=600
+    assert profile.limit('mock')==100
+    clock[0]=-1
+    assert profile.limit('mock')==100
 
 
 @pytest.mark.parametrize('key', ['', 'same'])

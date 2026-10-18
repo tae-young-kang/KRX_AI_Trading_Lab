@@ -21,6 +21,7 @@ from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
 from app.strategy import evaluate, auto_paper_exit, create_proposals
 from app.practice_quotes import fresh_practice_price
 from app.recommendation_request import RecommendationRequest
+from app.quote_batch_profile import QuoteBatchProfile
 from app.recommendation_schedule import summary as recommendation_schedule_summary
 from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
@@ -131,6 +132,7 @@ class MainWindow(QMainWindow):
         self.creds = Credentials()
         self.db = Database(data_dir() / practice_db_name(self.cfg))
         self.demo = DemoMarket()
+        self.quote_batch_profile=QuoteBatchProfile()
         self.shadow = ShadowEngine(self.db)
         self.history = HistoryStore(data_dir() / 'research.db')
         self.research_report = None
@@ -1604,7 +1606,7 @@ class MainWindow(QMainWindow):
             if mode == 'DEMO':
                 return self.demo.scan(cfg['market'])
             key, secret = self.broker_keys(cfg['kiwoom_env'])
-            client = KiwoomMarket(key, secret, cfg['kiwoom_env'])
+            client = KiwoomMarket(key, secret, cfg['kiwoom_env'],batch_profile=self.quote_batch_profile)
             try:
                 return client.scan(cfg['market'], progress=progress, cancelled=cancelled,
                                    include_etf=cfg['include_etf'])
