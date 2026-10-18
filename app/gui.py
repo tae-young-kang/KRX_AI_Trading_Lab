@@ -23,7 +23,8 @@ from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
 from app.research import evaluate_research, export_report
-from app.modes import MODES, current_mode, practice_db_name, credential_names
+from app.modes import (MODES, current_mode, practice_db_name, credential_names,
+                       telegram_start_guidance, MOCK_REFRESH_GUIDANCE, MOCK_LISTEN_GUIDANCE)
 from app.trading_clock import PRICE_BASIS_NOTICE, KST
 from app.trade_review import outcome, condition_label, settings_snapshot
 from app.telegram_worker import TelegramOrderWorker
@@ -1078,13 +1079,12 @@ class MainWindow(QMainWindow):
         worker = self.mock_watch_worker
         if worker and worker.isRunning() and not worker.isInterruptionRequested():
             self.mock_listen.setEnabled(False)
-            self.mock_status.setText('모의 주문 알림을 준비하고 있어요. 주문 기능은 잠겨 있어요.')
+            self.mock_status.setText(MOCK_LISTEN_GUIDANCE)
             worker.start_listening()
 
     def mock_notice_received(self, text):
         self.mock_last_notice.setText(text)
-        self.mock_balance.setText('새 알림이 왔어요. 이전 잔고는 최신 값이 아니에요.\n'
-                                  '알림 받기를 중지한 뒤 1번으로 계좌·잔고를 다시 확인해 주세요.')
+        self.mock_balance.setText(MOCK_REFRESH_GUIDANCE)
 
     def stop_mock_notices(self):
         if self.mock_watch_worker:
@@ -1171,9 +1171,7 @@ class MainWindow(QMainWindow):
             return
         orders_enabled = self.cfg['data_mode'] == 'DEMO'
         if QMessageBox.question(self, '텔레그램 명령 받기',
-                '등록한 개인 대화에서 추천 조건을 확인하고 바꿀 수 있어요.\n'
-                + ('가상 연습 주문도 가능해요. 실제 돈은 사용하지 않아요.\n' if orders_enabled else '이 모드에서는 주문할 수 없어요.\n')
-                + '시작할까요?') != QMessageBox.StandardButton.Yes:
+                telegram_start_guidance(self.cfg) + '\n텔레그램 명령 받기를 시작할까요?') != QMessageBox.StandardButton.Yes:
             return
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
         self.condition_commands.sync(self.cfg, self.settings.save, now=datetime.now().timestamp(), busy=True)
