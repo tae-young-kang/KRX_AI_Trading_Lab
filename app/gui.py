@@ -20,6 +20,7 @@ from app.storage import Database
 from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
 from app.strategy import evaluate, auto_paper_exit, create_proposals
 from app.practice_quotes import fresh_practice_price
+from app.practice_details import sale_details
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
@@ -390,6 +391,12 @@ class MainWindow(QMainWindow):
         close_btn = QPushButton('선택한 연습 종목 팔기')
         close_btn.clicked.connect(self.paper_manual_close)
         row.addWidget(close_btn)
+        sales_btn = QPushButton('선택 종목의 매도 내역')
+        sales_btn.clicked.connect(self.show_practice_sales)
+        row.addWidget(sales_btn)
+        v.addLayout(row)
+        row = QHBoxLayout()
+        row.addStretch()
         exp = QPushButton('매매기록 CSV 내보내기')
         exp.clicked.connect(self.export_trades)
         row.addWidget(exp)
@@ -1512,6 +1519,29 @@ class MainWindow(QMainWindow):
         if path:
             self.db.export_paper_exits(path)
             QMessageBox.information(self,'연습 내역 저장','가정 비용을 포함한 연습 매도 내역을 저장했어요. 실제 증권사 체결 내역이 아니에요.')
+
+    def show_practice_sales(self):
+        selected=self.trade_table.currentRow()
+        if selected<0:
+            QMessageBox.information(self,'종목 선택','연습 기록에서 먼저 종목을 선택하세요.')
+            return
+        trade_id=int(self.trade_table.item(selected,0).text())
+        trade=next((row for row in self.db.trades() if row['id']==trade_id),None)
+        if trade is None:
+            QMessageBox.information(self,'기록 확인','기록을 새로 불러온 뒤 다시 선택하세요.')
+            return
+        dialog=QDialog(self)
+        dialog.setWindowTitle('선택 종목의 연습 매도 내역')
+        dialog.resize(700,520)
+        layout=QVBoxLayout(dialog)
+        view=QTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(sale_details(trade,self.db.paper_exit_history(trade_id)))
+        layout.addWidget(view)
+        done=QPushButton('닫기')
+        done.clicked.connect(dialog.accept)
+        layout.addWidget(done)
+        dialog.exec()
 
     def refresh_stats(self):
         st = self.db.stats()
