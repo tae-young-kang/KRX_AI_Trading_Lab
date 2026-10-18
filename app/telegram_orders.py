@@ -29,7 +29,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -53,6 +53,7 @@ class TelegramOrderService:
         self.theme_status = theme_status
         self.theme_budget = theme_budget
         self.practice_daily = practice_daily
+        self.recommendation_request = recommendation_request
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
         from app.theme_delivery import destination_scope
         self.theme_destination = destination_scope(bot_id,chat_id)
@@ -102,6 +103,12 @@ class TelegramOrderService:
                 db.execute('UPDATE tg_sessions SET cursor=MAX(COALESCE(cursor,0),?) WHERE scope=? AND session=?',
                            (new, self.scope, self.session))
             return db.execute('SELECT cursor FROM tg_sessions WHERE scope=?', (self.scope,)).fetchone()[0]
+
+    def accepts_search_requests(self):
+        with connect(self.path) as db:
+            row = db.execute('SELECT active FROM tg_sessions WHERE scope=? AND session=?',
+                             (self.scope, self.session)).fetchone()
+            return bool(row and row['active'])
 
     def _authorized(self, update, now):
         if not isinstance(update, dict) or type(update.get('update_id')) is not int or update['update_id'] < 0:
@@ -209,6 +216,15 @@ class TelegramOrderService:
                 else:
                     reply=(self.practice_sales(None,int(listing[1] or 1)) if listing else
                            self.practice_sales(int(match[1]) if match[1] else None,int(match[2] or 1)))
+            elif text in ('/추천검색', '/검색상태'):
+                if not self.recommendation_request:
+                    reply = '추천 검색 연결이 없어요. 집 PC에서 수신을 다시 시작해 주세요.'
+                elif text == '/검색상태':
+                    reply = self.recommendation_request.summary()
+                elif not owner['active']:
+                    reply = '새 검색 요청을 중지했어요. 집 PC에서 수신을 다시 시작해 주세요.'
+                else:
+                    reply = self.recommendation_request.request()
             elif text == '/추천요약':
                 reply = (self.recommendation_overview() if self.recommendation_overview
                          else '추천 요약 연결이 없어요. 집 PC에서 확인해 주세요.')
@@ -260,6 +276,7 @@ class TelegramOrderService:
                     reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
             elif text in ('/도움말', '/start', '/help'):
                 reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
+                reply += '\n/추천검색: 새 검색 요청 · /검색상태: 진행 확인'
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
                 reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
             elif text == '/상태':

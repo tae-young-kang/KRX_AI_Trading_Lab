@@ -20,6 +20,7 @@ from app.storage import Database
 from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
 from app.strategy import evaluate, auto_paper_exit, create_proposals
 from app.practice_quotes import fresh_practice_price
+from app.recommendation_request import RecommendationRequest
 from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
 from app.theme_input import prepare_selection as prepare_theme_selection
@@ -144,6 +145,8 @@ class MainWindow(QMainWindow):
         self.mock_watch_worker = None
         self.mock_watch_status = MockWatchStatus(history_path=data_dir()/'kiwoom_mock_watch'/'observations.db')
         self.scanning = False
+        self.remote_scan = None
+        self.remote_scan_active = False
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
         self.resize(1390, 860)
         self.setMinimumSize(1100, 690)
@@ -156,6 +159,10 @@ class MainWindow(QMainWindow):
         self.condition_timer.setInterval(1000)
         self.condition_timer.timeout.connect(self.sync_telegram_conditions)
         self.condition_timer.start()
+        self.remote_scan_timer = QTimer(self)
+        self.remote_scan_timer.setInterval(1000)
+        self.remote_scan_timer.timeout.connect(self.poll_remote_scan)
+        self.remote_scan_timer.start()
         self.refresh_stats()
         self.refresh_trades()
         self.refresh_proposals()
@@ -1379,8 +1386,12 @@ class MainWindow(QMainWindow):
             return
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
         self.condition_commands.sync(self.cfg, self.settings.save, now=datetime.now().timestamp(), busy=True)
+        if self.remote_scan_active:
+            return
+        self.remote_scan = RecommendationRequest(current_mode(self.cfg).key)
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
+                                     recommendation_request=self.remote_scan,
                                      watch_status=self.mock_watch_status.summary,
                                      watch_refresh=self.mock_watch_status.request_refresh,
                                      watch_result=self.mock_watch_status.refresh_result,
@@ -1481,6 +1492,13 @@ class MainWindow(QMainWindow):
             self.task_failed(str(ex))
 
     def task_failed(self, message):
+        if self.remote_scan_active:
+            self.remote_scan.finish(success=False)
+            self.remote_scan_active = False
+            self.scanning = False
+            self.count_info.setText('원격 추천 검색 미완료 · 연결 상태를 확인하세요.')
+            self.db.log('ERROR', '원격 추천 검색 미완료')
+            return
         if self.scanning:
             self.count_info.setText('전체 조회 미완료 · 추천 없음 · ' + message)
         self.scanning = False
@@ -1488,10 +1506,23 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage('오류: ' + message)
         QMessageBox.warning(self, '작업 실패', message)
 
-    def scan(self):
+    def poll_remote_scan(self):
+        worker = self.telegram_order_worker
+        if not self.remote_scan:
+            return
+        active = bool(worker and worker.isRunning() and worker.service is not None
+                      and not worker.isInterruptionRequested())
+        if active:
+            active = worker.service.accepts_search_requests()
+        if self.remote_scan.take(current_mode(self.cfg).key,
+                                 busy=bool(self.work and self.work.isRunning()), active=active):
+            self.scan(remote=True)
+
+    def scan(self, remote=False):
         if self.work and self.work.isRunning():
             return
         cfg = dict(self.cfg)
+        self.remote_scan_active = remote is True
         mode = cfg['data_mode']
         self.scanning = True
         self.stocks = []
@@ -1534,7 +1565,14 @@ class MainWindow(QMainWindow):
             record_nxt_evidence(self.history,current_mode(cfg).key,stocks)
         except Exception:
             self.db.log('NXT_EVIDENCE_WARNING','NXT 날짜별 관측 저장 실패 · 테마 판정의 해당 정보는 확인 필요')
-            QMessageBox.information(self,'NXT 관측 확인','NXT 관측을 저장하지 못했어요. 테마1의 NXT 정보는 확인이 필요해요.')
+            if not self.remote_scan_active:
+                QMessageBox.information(self,'NXT 관측 확인','NXT 관측을 저장하지 못했어요. 테마1의 NXT 정보는 확인이 필요해요.')
+        if self.remote_scan_active:
+            self.fill_stock_tables()
+            self.count_info.setText(f'원격 추천 검색 저장 완료 · 조회 {len(stocks):,}개')
+            self.remote_scan.finish(success=True)
+            self.remote_scan_active = False
+            return
         self.shadow.initialize_defaults(cfg,mode)
         self.shadow.ensure_active_reference(cfg,mode)
         shadow_events=self.shadow.process_scan(scan_id,stocks)
