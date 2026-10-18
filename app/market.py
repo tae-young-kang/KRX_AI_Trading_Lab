@@ -89,6 +89,8 @@ class KiwoomMarket:
     """Read-only REST screener. KRX quotes only for consistent early-stage data tests."""
     QUOTE_BATCH_SIZE = 100
     def __init__(self, appkey, secretkey, env='MOCK', *, batch_profile=None):
+        if env not in ('MOCK','REAL'):
+            raise ValueError('시세 서버는 모의 또는 실제 시세로 명확히 선택해 주세요.')
         if not appkey or not secretkey:
             raise ValueError('키움 App Key / Secret을 설정해주세요.')
         self.url = 'https://mockapi.kiwoom.com' if env == 'MOCK' else 'https://api.kiwoom.com'
@@ -104,21 +106,29 @@ class KiwoomMarket:
         self.last_scan_metrics = None
 
     def login(self):
-        resp = self.session.post(self.url + '/oauth2/token', json={
-            'grant_type': 'client_credentials', 'appkey': self.key, 'secretkey': self.secret
-        }, timeout=12)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get('return_code', data.get('returnCode', 0)) not in (0, '0', None) or not data.get('token'):
-            raise RuntimeError('키움 인증 실패: ' + str(data.get('return_msg', '토큰 없음')))
-        self.token = data['token']
+        self.token,self.token_ts=None,0
+        try:
+            resp = self.session.post(self.url + '/oauth2/token', json={
+                'grant_type': 'client_credentials', 'appkey': self.key, 'secretkey': self.secret
+            }, timeout=12)
+            resp.raise_for_status()
+            data = resp.json()
+            token=data.get('token') if isinstance(data,dict) else None
+            if (not isinstance(data,dict) or data.get('return_code',data.get('returnCode',0)) not in (0,'0',None)
+                    or not isinstance(token,str) or not 1<=len(token)<=8192
+                    or any(not char.isprintable() or char.isspace() for char in token)):
+                raise ValueError()
+        except (requests.RequestException,ValueError,TypeError):
+            raise RuntimeError('키움 인증 실패: 연결 정보·시세 서버·사용 승인을 확인해 주세요.') from None
+        self.token = token
         self.token_ts = time.time()
         return True
 
     def query(self, api_id, path, body, cont_yn='N', next_key='',
               include_headers=False, cancelled=None):
         """Retry read-only requests; never expose credentials in request errors."""
-        if not self.token or time.time() - self.token_ts > 20 * 3600:
+        self._check_cancelled(cancelled)
+        if not self.token or not 0<=time.time()-self.token_ts<=20*3600:
             self.login()
         for attempt in range(3):
             self._check_cancelled(cancelled)
@@ -126,6 +136,7 @@ class KiwoomMarket:
             interval = time.monotonic() - self.last_api_call
             if interval < delay:
                 time.sleep(delay - interval)
+            self._check_cancelled(cancelled)
             self.last_api_call = time.monotonic()
             if self._measuring_scan:
                 self._scan_http_calls += 1

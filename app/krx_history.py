@@ -111,11 +111,10 @@ class KRXDailyClient:
             with urlopen(req, timeout=self.timeout) as res:
                 raw = json.loads(res.read().decode('utf-8-sig'))
         except Exception as exc:
-            raise RuntimeError(f'KRX {market} {day} 조회 실패 (사용승인 및 네트워크 확인): {type(exc).__name__}') from exc
+            raise RuntimeError(f'KRX {market} {day} 조회 실패 (사용승인 및 네트워크 확인): {type(exc).__name__}') from None
         block = raw.get('OutBlock_1') if isinstance(raw,dict) else None
         if not isinstance(block,list):
-            msg = raw.get('message') or raw.get('msg') or raw.get('RESULT') if isinstance(raw,dict) else 'Unexpected response'
-            raise RuntimeError(f'KRX 응답 형식 오류: {str(msg)[:150]}')
+            raise RuntimeError('KRX 응답 형식 오류: 서비스 승인과 요청 날짜를 확인해 주세요.')
         return normalize_day(block,market,day)
 
 

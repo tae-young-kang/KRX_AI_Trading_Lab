@@ -183,6 +183,44 @@ def test_nonzero_api_result_is_not_success(broker):
     assert 'sensitive' not in str(ex.value)
 
 
+@pytest.mark.parametrize('payload',[None,[],dict(return_code=20,return_msg='synthetic-private-echo'),
+                                  dict(token=True),dict(token='bad\nheader')])
+def test_login_errors_hide_response_and_clear_prior_auth(broker,payload):
+    broker.session.post.side_effect=None
+    reply=Mock()
+    reply.json.return_value=payload
+    broker.session.post.return_value=reply
+    with pytest.raises(RuntimeError,match='인증 실패') as error: broker.login()
+    assert 'synthetic-private-echo' not in str(error.value) and 'bad' not in str(error.value)
+    assert broker.token is None and broker.token_ts==0
+
+
+def test_login_transport_error_and_pre_auth_cancellation(broker):
+    broker.session.post.side_effect=requests.ConnectionError('synthetic-private-echo')
+    with pytest.raises(RuntimeError) as error: broker.login()
+    assert 'synthetic-private-echo' not in str(error.value)
+    broker.session.post.reset_mock()
+    with pytest.raises(RuntimeError,match='취소'):
+        broker.query('ka10099','/api/dostk/stkinfo',{},cancelled=lambda:True)
+    broker.session.post.assert_not_called()
+
+
+def test_unknown_environment_is_rejected_before_session_creation():
+    with pytest.raises(ValueError,match='시세 서버'): KiwoomMarket('dummy','dummy','UNKNOWN')
+
+
+def test_krx_malformed_response_does_not_echo_server_message(monkeypatch):
+    from app.krx_history import KRXDailyClient
+    class Reply:
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def read(self): return b'{"message":"synthetic-private-echo"}'
+    monkeypatch.setattr('app.krx_history.urlopen',lambda *args,**kwargs:Reply())
+    with pytest.raises(RuntimeError,match='응답 형식 오류') as error:
+        KRXDailyClient('dummy').fetch_day('KOSPI','2026-10-16')
+    assert 'synthetic-private-echo' not in str(error.value)
+
+
 def test_legacy_candidate_limit_is_ignored(tmp_path):
     (tmp_path / 'settings.json').write_text('{"candidate_limit": 30, "market": "KOSDAQ"}')
     cfg = Settings(tmp_path).values
