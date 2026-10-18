@@ -74,12 +74,13 @@ def record(db, scan_id, ranked, settings, source, created_at):
     db.executemany('INSERT INTO recommendations VALUES (?,?,?,?,?,?,?,?,?,?)', rows)
 
 
-def recent(db, mode, limit=50):
-    if mode not in ('DEMO','MOCK','REAL_QUOTES') or type(limit) is not int or not 1 <= limit <= 200:
+def recent(db, mode, limit=50, *, offset=0):
+    if (mode not in ('DEMO','MOCK','REAL_QUOTES') or type(limit) is not int or not 1 <= limit <= 200
+            or type(offset) is not int or not 0<=offset<=5_000_000):
         raise ValueError('추천 기록 조회 범위를 확인해 주세요.')
     return [dict(row) for row in db.execute('''SELECT b.created_at,b.mode,b.source,b.conditions_json,
         r.* FROM recommendations r JOIN recommendation_batches b ON b.scan_id=r.scan_id
-        WHERE b.mode=? ORDER BY b.scan_id DESC,r.rank LIMIT ?''', (mode,limit))]
+        WHERE b.mode=? ORDER BY b.scan_id DESC,r.rank LIMIT ? OFFSET ?''', (mode,limit,offset))]
 
 
 def review(db, *, scan_id, code, mode, bars, sessions, available_through, price_source):
@@ -102,11 +103,25 @@ def review(db, *, scan_id, code, mode, bars, sessions, available_through, price_
     return results
 
 
-def summary(db, mode, *, performance=False):
-    rows = recent(db,mode,5)
+def page_count(db,mode):
+    if mode not in ('DEMO','MOCK','REAL_QUOTES'):
+        raise ValueError('추천 모드를 확인해 주세요.')
+    count = db.execute('''SELECT COUNT(*) FROM recommendations r
+        JOIN recommendation_batches b ON b.scan_id=r.scan_id WHERE b.mode=?''',(mode,)).fetchone()[0]
+    return max(1,(count+4)//5)
+
+
+def summary(db, mode, *, performance=False,page=1):
+    if type(page) is not int or not 1<=page<=999999:
+        raise ValueError('추천 기록 페이지 번호를 확인해 주세요.')
+    pages = page_count(db,mode)
+    command = '/추천성적' if performance else '/추천기록'
+    if page>pages:
+        return f'추천 기록은 {pages}페이지까지 있어요. {command} {pages}'
+    rows = recent(db,mode,5,offset=(page-1)*5)
     label = {'DEMO':'가상 연습','MOCK':'키움 모의 시세','REAL_QUOTES':'실제 시세'}[mode]
-    lines = [f'[{label} · '+('추천 이후 가격 관측' if performance else '추천 기록')+']',
-             '최근 추천 5개 · 목록 생성 기록이며 텔레그램 발송·체결 증명이 아니에요.']
+    lines = [f'[{label} · '+('추천 이후 가격 관측' if performance else '추천 기록')+f' · {page}/{pages}]',
+             '최근 순 5개씩 · 목록 생성 기록이며 텔레그램 발송·체결 증명이 아니에요.']
     if not rows:
         return '\n'.join(lines+['저장된 추천이 없어요. 이 기능 추가 뒤 완료한 검색부터 기록해요.'])
     labels = {'OBSERVED':'관측됨','NOT_DUE':'아직 날짜 전','PRICE_MISSING':'가격 자료 없음',
@@ -130,4 +145,8 @@ def summary(db, mode, *, performance=False):
         lines.append('추천 당시 마지막 시세 대비 제공된 종가 변화예요. 비용·배당·분할 미반영으로 실제 수익률·예측이 아니에요.')
     else:
         lines.append('/추천성적: 확인된 1·3·5거래일 가격 관측')
+    if page<pages and page<999999:
+        lines.append(f'다음 기록: {command} {page+1}')
+    if page>1:
+        lines.append(f'이전 기록: {command} {page-1}')
     return '\n'.join(lines)

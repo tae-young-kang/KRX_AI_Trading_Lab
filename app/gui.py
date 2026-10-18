@@ -307,6 +307,7 @@ class MainWindow(QMainWindow):
             reports = [('추천 기록',self.db.recommendation_summary(mode.key)),
                        ('이후 가격',self.db.recommendation_summary(mode.key,performance=True)),
                        ('조건별 요약',self.db.recommendation_overview(mode.key))]
+            page_count = self.db.recommendation_page_count(mode.key)
         except Exception:
             QMessageBox.information(self,'추천 기록 확인','기록을 읽지 못했어요. 집 PC의 저장 공간과 기록 파일 상태를 확인해 주세요.')
             return
@@ -318,12 +319,31 @@ class MainWindow(QMainWindow):
         guide.setWordWrap(True)
         layout.addWidget(guide)
         tabs = QTabWidget()
+        views = []
         for title,text in reports:
             view = QTextEdit()
             view.setReadOnly(True)
             view.setPlainText(text)
             tabs.addTab(view,title)
+            views.append(view)
         layout.addWidget(tabs)
+        navigation = QHBoxLayout()
+        navigation.addWidget(lbl('추천 기록·이후 가격 페이지'))
+        page_number = QSpinBox()
+        page_number.setRange(1,min(page_count,999999))
+        navigation.addWidget(page_number)
+        navigation.addWidget(lbl(f'전체 {page_count:,}페이지 · 5개씩 표시','Muted'))
+        navigation.addStretch()
+        layout.addLayout(navigation)
+        def load_page(number):
+            try:
+                texts = [self.db.recommendation_summary(mode.key,page=number),
+                         self.db.recommendation_summary(mode.key,performance=True,page=number)]
+            except Exception:
+                texts = ['기록을 읽지 못했어요. 창을 닫고 기록 파일 상태를 확인해 주세요.']*2
+            for view,text in zip(views,texts):
+                view.setPlainText(text)
+        page_number.valueChanged.connect(load_page)
         note = lbl('새 검색부터 추천을 보관해요. 확인한 가격 자료는 고급 연구 화면에서 넣을 수 있어요.\n'
                    '텔레그램에서는 /추천기록 · /추천성적 · /추천요약을 보내세요.','Muted')
         note.setWordWrap(True)
@@ -1240,8 +1260,8 @@ class MainWindow(QMainWindow):
                                      watch_validation=self.mock_watch_status.validation_summary,
                                      watch_history=self.mock_watch_status.history_summary,
                                      watch_funds=self.mock_watch_status.funds_summary,
-                                     recommendation_report=lambda performance, db=self.db, mode=current_mode(self.cfg).key:
-                                         db.recommendation_summary(mode,performance=performance),
+                                     recommendation_report=lambda performance, page=1, db=self.db, mode=current_mode(self.cfg).key:
+                                         db.recommendation_summary(mode,performance=performance,page=page),
                                      recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_overview(mode),
                                      watch_orders=self.mock_watch_status.handle_orders,

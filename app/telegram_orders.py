@@ -162,9 +162,16 @@ class TelegramOrderService:
             elif text == '/추천요약':
                 reply = (self.recommendation_overview() if self.recommendation_overview
                          else '추천 요약 연결이 없어요. 집 PC에서 확인해 주세요.')
-            elif text in ('/추천기록','/추천성적'):
-                reply = (self.recommendation_report(text=='/추천성적') if self.recommendation_report
-                         else '추천 기록 연결이 없어요. 집 PC에서 확인해 주세요.')
+            elif text.split(' ',1)[0] in ('/추천기록','/추천성적'):
+                match = re.fullmatch(r'/(추천기록|추천성적)(?: ([1-9][0-9]{0,5}))?',text)
+                if not match:
+                    reply = '사용법: /추천기록 또는 /추천성적\n다음 페이지 예: /추천기록 2'
+                elif not self.recommendation_report:
+                    reply = '추천 기록 연결이 없어요. 집 PC에서 확인해 주세요.'
+                else:
+                    page = int(match[2] or 1)
+                    reply = (self.recommendation_report(match[1]=='추천성적') if page==1 else
+                             self.recommendation_report(match[1]=='추천성적',page=page))
             elif text == '/모의자금':
                 reply = (self.watch_funds() if not self.orders_enabled and self.watch_funds
                          else '모의 자금 조회가 없어요. 집 PC에서 키움 모의투자 모드를 확인해 주세요.')

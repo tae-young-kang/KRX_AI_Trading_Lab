@@ -103,15 +103,19 @@ class Database:
             db.execute('BEGIN IMMEDIATE')
             return recommendations.review(db,**evidence)
 
-    def recommendation_summary(self, mode, *, performance=False):
+    def recommendation_summary(self, mode, *, performance=False,page=1):
         with self.connect() as db:
             db.execute('BEGIN')
-            return recommendations.summary(db,mode,performance=performance)
+            return recommendations.summary(db,mode,performance=performance,page=page)
 
     def recommendation_overview(self, mode):
         with self.connect() as db:
             db.execute('BEGIN')
             return recommendation_overview.summary(db,mode)
+
+    def recommendation_page_count(self, mode):
+        with self.connect() as db:
+            return recommendations.page_count(db,mode)
 
     def paper_open(self, stock, qty, stop, take, max_days, fee_pct, slippage_pct, settings, max_positions):
         if stock.price <= 0 or qty < 1:
