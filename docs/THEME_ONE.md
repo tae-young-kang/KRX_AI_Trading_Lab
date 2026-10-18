@@ -57,3 +57,13 @@
 - https://www.nextrade.co.kr/transactionSys/content.do
 - https://openapi1.kiwoom.com/guide/apiguide?dummyVal=0
 실제 기능 연결 전 최신 세션/대상/주문 명세를 다시 확인해야 합니다.
+
+## 테마1 저장 자료 연결 첫 단계
+
+app/theme_store.py는 명시적 거래일과 HistoryStore의 지정 출처 일별 캐시를 한 번 읽어 판정합니다.
+이는 전체 시장 수집 완료 증명이 아닙니다. coverage=CACHED_SYMBOLS_ONLY로 제한을 명시하고
+누락된 종목별 날짜를 PRICE_MISSING으로 집계합니다. 캐시에 전혀 없는 종목은 알 수 없습니다.
+감지 근거와 종목별 문안을 theme_alerts에 저장하며 동일 근거는 재시작 후 중복 준비하지 않습니다.
+수정된 근거는 별도 버전으로 보존합니다. 상태 PREPARED는 발송 성공이 아니며 자동 송신하지 않습니다.
+이 단계의 알림은 NXT 공식 대상 목록 미연결로 미확인을 표시합니다.
+실제 송신의 응답 유실·재시작 처리와 중복 발송 방지는 아직 구현/검증 전입니다.
