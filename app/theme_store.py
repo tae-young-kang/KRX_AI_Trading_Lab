@@ -5,6 +5,7 @@ import json
 from datetime import date
 from app.theme_one import detect, alert_text
 from app.recommendation_outcomes import session_day
+from app.nxt_evidence import latest_for_day
 
 
 def prepare(history, *, sessions, through, mode, source):
@@ -19,7 +20,7 @@ def prepare(history, *, sessions, through, mode, source):
     if len(eligible)<7:
         raise ValueError('전일 종가를 포함한 7거래일 근거가 필요해요.')
     bars,observations,nxt_rows=history.load_evidence(source,eligible[-7].isoformat(),through,nxt_mode=mode)
-    nxt={(row['market'],row['code']):row for row in nxt_rows}
+    nxt=latest_for_day(nxt_rows,mode,through)
     expected_days={d.isoformat() for d in eligible[-7:]}
     observed_market_days={(b.market,b.date) for b in bars}
     missing_market_days=[(market,day) for market in ('KOSPI','KOSDAQ') for day in sorted(expected_days)

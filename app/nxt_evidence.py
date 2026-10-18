@@ -4,6 +4,29 @@ import re
 from app.trading_clock import KST
 
 
+def latest_for_day(rows,mode,day):
+    """Validate persisted context before using a positive observation in an alert."""
+    latest={}
+    try:
+        for row in rows:
+            stamp=datetime.fromisoformat(row['observed_at'])
+            if (row['mode']!=mode or row['day']!=day or stamp.tzinfo is None
+                    or stamp.astimezone(KST).date().isoformat()!=day
+                    or row['market'] not in ('KOSPI','KOSDAQ')
+                    or not re.fullmatch(r'[A-Za-z0-9]{6}',row['code'])
+                    or row['eligible'] is not None and (type(row['eligible']) is not int or row['eligible']!=1)):
+                raise ValueError()
+            key=(row['market'],row['code'])
+            old=latest.get(key)
+            if old is None or stamp>datetime.fromisoformat(old['observed_at']):
+                latest[key]=row
+            elif stamp==datetime.fromisoformat(old['observed_at']) and row['eligible']!=old['eligible']:
+                raise ValueError()
+    except (TypeError,ValueError,KeyError,OverflowError):
+        raise ValueError('저장된 NXT 관측의 날짜·시각·종목·가능 여부를 확인해야 해요.') from None
+    return latest
+
+
 def record(history,mode,stocks,*,now=None):
     if mode not in ('DEMO','MOCK','REAL_QUOTES'):
         raise ValueError('NXT 관측 모드를 확인해 주세요.')

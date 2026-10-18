@@ -49,3 +49,22 @@ def test_conflicting_same_instant_is_not_overwritten(tmp_path):
     with history.connect() as db:
         assert db.execute('SELECT COUNT(*) FROM nxt_observations').fetchone()[0]==1
         assert db.execute('SELECT eligible FROM nxt_observations').fetchone()[0]==1
+
+
+@pytest.mark.parametrize('stamp',['broken','2026-10-18T10:00:00+09:00','2026-10-19T10:00:00'])
+def test_invalid_persisted_nxt_context_cannot_create_new_theme_result(tmp_path,stamp):
+    history,args,stock=fixture(tmp_path);now=datetime(2026,10,20,12,tzinfo=KST)
+    record(history,'MOCK',[stock],now=now)
+    with history.connect() as db:
+        db.execute('UPDATE nxt_observations SET observed_at=?',(stamp,))
+    with pytest.raises(ValueError,match='저장된 NXT'):prepare(history,**args)
+    with history.connect() as db:
+        assert not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_runs'").fetchone()
+
+
+def test_nxt_latest_selection_uses_instants_not_text_offsets():
+    from app.nxt_evidence import latest_for_day
+    positive=dict(mode='MOCK',day='2026-10-19',market='KOSPI',code='900001',observed_at='2026-10-19T10:00:00+09:00',eligible=1)
+    unknown={**positive,'observed_at':'2026-10-19T02:00:00+00:00','eligible':None}
+    result=latest_for_day([unknown,positive],'MOCK','2026-10-19')
+    assert result[('KOSPI','900001')]['eligible'] is None
