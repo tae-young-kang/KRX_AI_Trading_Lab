@@ -26,6 +26,7 @@ from app.research import evaluate_research, export_report
 from app.modes import MODES, current_mode, practice_db_name, credential_names
 from app.trading_clock import PRICE_BASIS_NOTICE
 from app.trade_review import outcome, condition_label, settings_snapshot
+from app.telegram_worker import TelegramOrderWorker
 
 STYLE = '''
 QMainWindow,QWidget {background:#0b1220;color:#e6edf7;font:10pt 'Malgun Gothic';}
@@ -125,6 +126,7 @@ class MainWindow(QMainWindow):
         self.results = []
         self.stocks = []
         self.work = None
+        self.telegram_order_worker = None
         self.scanning = False
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
         self.resize(1390, 860)
@@ -866,6 +868,8 @@ class MainWindow(QMainWindow):
         tf.addRow('봇 연결 키 (Bot Token)',token)
         self.chat = QLineEdit(self.cfg['telegram_chat_id'])
         tf.addRow('알림 받을 방 번호 (Chat ID)',self.chat)
+        self.telegram_user = QLineEdit(self.cfg['telegram_user_id'])
+        tf.addRow('주문 연습을 허용할 내 번호 (User ID)', self.telegram_user)
         self.telegram_auto = QCheckBox('프로그램이 실행 중일 때 매일 16시 이후 첫 검색 결과를 자동 발송')
         self.telegram_auto.setChecked(bool(self.cfg['telegram_auto_send']))
         tf.addRow('자동 알림',self.telegram_auto)
@@ -895,6 +899,24 @@ class MainWindow(QMainWindow):
         self.order_demo_button = QPushButton('가짜 서버로 주문 흐름 시험 · 실제 돈 사용 안 함')
         self.order_demo_button.clicked.connect(self.test_order_flow)
         v.addWidget(self.order_demo_button)
+        v.addWidget(lbl('3. 텔레그램 주문 연습 · 가짜 서버만 연결', 'H2'))
+        help_text = lbl('연습 모드에서 저장한 사용자·개인 대화방만 허용합니다. 프로그램을 켜고 직접 시작해야 합니다.\n'
+                        '/매수 900001 1 1000 → 내용 확인 → /확인 코드\n'
+                        '수량·지정가 필수 · 2분 안에 확인 · 접수와 체결은 다릅니다. 키움 모의·실제 주문은 연결하지 않습니다.', 'Muted')
+        help_text.setWordWrap(True)
+        v.addWidget(help_text)
+        self.telegram_order_status = lbl('수신 중지 · 자동으로 시작하지 않습니다.', 'Muted')
+        self.telegram_order_status.setWordWrap(True)
+        v.addWidget(self.telegram_order_status)
+        tg_controls = QHBoxLayout()
+        self.telegram_order_start = QPushButton('텔레그램 주문 연습 시작')
+        self.telegram_order_start.clicked.connect(self.start_telegram_orders)
+        self.telegram_order_stop = QPushButton('주문 연습 수신 중지')
+        self.telegram_order_stop.setEnabled(False)
+        self.telegram_order_stop.clicked.connect(self.stop_telegram_orders)
+        tg_controls.addWidget(self.telegram_order_start)
+        tg_controls.addWidget(self.telegram_order_stop)
+        v.addLayout(tg_controls)
         v.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -970,6 +992,47 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, '가짜 서버 시험 완료',
                                     '\n\n'.join(report['steps']) + '\n\n' + report['notice'])
         self.run_task(run_order_demo, done, '오프라인 가짜 주문 흐름 확인 완료')
+
+    def start_telegram_orders(self):
+        if self.telegram_order_worker and self.telegram_order_worker.isRunning():
+            return
+        if self.cfg['data_mode'] != 'DEMO' or self.mode_select.currentData() != 'DEMO':
+            QMessageBox.information(self, '연습 모드 필요', '먼저 연습 모드로 바꾸고 연결 정보를 저장하세요. 실제·키움 모의 주문 연결은 아직 없습니다.')
+            return
+        try:
+            user_id, chat_id = int(self.cfg['telegram_user_id']), int(self.cfg['telegram_chat_id'])
+            if min(user_id, chat_id) <= 0:
+                raise ValueError()
+            token = self.creds.get('telegram_token')
+            if not token:
+                raise ValueError()
+        except (ValueError, TypeError):
+            QMessageBox.information(self, '연결 정보 필요', '봇 연결 키·허용 User ID·개인 대화 Chat ID를 입력하고 저장하세요.')
+            return
+        if QMessageBox.question(self, '텔레그램 주문 연습 시작',
+                '등록한 개인 대화에 주문 확인과 결과를 답장합니다.\n가짜 서버와 가짜 잔액만 사용하며 자동 체결하지 않습니다.\n시작할까요?') != QMessageBox.StandardButton.Yes:
+            return
+        catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
+        worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog)
+        self.telegram_order_worker = worker
+        worker.status.connect(self.telegram_order_status.setText)
+        worker.finished.connect(self.telegram_orders_finished)
+        self.telegram_order_status.setText('연결 확인 중 · 가짜 서버 연습')
+        self.telegram_order_start.setEnabled(False)
+        self.telegram_order_stop.setEnabled(True)
+        worker.start()
+
+    def stop_telegram_orders(self):
+        if self.telegram_order_worker:
+            self.telegram_order_worker.stop()
+        self.telegram_order_stop.setEnabled(False)
+        self.telegram_order_status.setText('수신 중지 요청 · 확인 대기 철회 · 이미 접수한 주문 취소는 별도입니다.')
+
+    def telegram_orders_finished(self):
+        self.telegram_order_start.setEnabled(True)
+        self.telegram_order_stop.setEnabled(False)
+        if '확인하세요' not in self.telegram_order_status.text():
+            self.telegram_order_status.setText('수신 중지 · 자동으로 다시 시작하지 않습니다.')
 
     def run_task(self, fn, ok, success_text='완료', with_progress=False):
         if self.work is not None and self.work.isRunning():
@@ -1278,6 +1341,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self,'변경 실패',str(ex))
 
     def save_integrations(self):
+        if self.telegram_order_worker and self.telegram_order_worker.isRunning():
+            QMessageBox.information(self, '주문 연습 수신 중', '주문 연습 수신을 먼저 중지한 뒤 연결 정보·모드를 저장하세요.')
+            return
         if self.scanning or (self.work and self.work.isRunning()):
             QMessageBox.information(self, '작업 진행 중', '현재 작업이 끝나거나 조회를 취소한 뒤 모드를 바꾸세요.')
             return
@@ -1292,6 +1358,7 @@ class MainWindow(QMainWindow):
             self.cfg['data_mode'] = self.data_mode.currentText()
             self.cfg['kiwoom_env'] = self.kiwoom_env.currentText()
             self.cfg['telegram_chat_id'] = self.chat.text().strip()
+            self.cfg['telegram_user_id'] = self.telegram_user.text().strip()
             self.cfg['telegram_auto_send'] = self.telegram_auto.isChecked()
             self.settings.save()
             self.timer.stop()
@@ -1394,6 +1461,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self,event):
         self.timer.stop()
+        if self.telegram_order_worker and self.telegram_order_worker.isRunning():
+            self.stop_telegram_orders()
+            QMessageBox.information(self, '수신 종료 중', '텔레그램 수신이 종료된 뒤 다시 닫아주세요. 확인 대기는 철회했습니다.')
+            event.ignore()
+            return
         if self.work and self.work.isRunning():
             QMessageBox.information(self,'조회 진행 중','진행 중인 요청이 종료된 뒤 닫아주세요.')
             event.ignore()
