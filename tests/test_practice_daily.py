@@ -62,3 +62,23 @@ def test_recorded_take_reason_is_separate_from_net_win_and_counts_final_only(tmp
     with db.connect() as record: final=summarize(record,'2026-10-19')
     assert final['reasons']['take']==1 and final['losses']==1 and final['wins']==0
     assert '익절 1 / 손절 0' in db.practice_daily_report('2026-10-19')
+
+
+import pytest
+
+@pytest.mark.parametrize('table,column,value',[
+    ('paper_exits','allocated_cost',1),('paper_exits','sell_fee',10),
+    ('paper_exits','pnl',999),('paper_exits','qty',3),
+    ('paper_trades','remaining_qty',1),('paper_trades','pnl',999),
+    ('paper_trades','close_tax',10),('paper_trades','closed_at','2000-01-01T00:00:00+09:00')])
+def test_daily_report_refuses_inconsistent_ledger_without_repair(tmp_path,monkeypatch,table,column,value):
+    db=Database(tmp_path/'practice.db')
+    monkeypatch.setattr('app.storage.now',lambda:'2026-10-19T10:00:00+09:00')
+    db.paper_open(Stock('900001','연습','KOSPI',1000,3,200,150,4000),2,2,4,2,0,0,dict(DEFAULTS),3)
+    db.paper_close(db.open_trades()[0]['id'],1100,'완료',0,0,0)
+    with db.connect() as record:
+        record.execute(f'UPDATE {table} SET {column}=?',(value,))
+    before=db.trades()
+    with pytest.raises(ValueError,match='장부'):
+        db.practice_daily_report('2026-10-19')
+    assert db.trades()==before

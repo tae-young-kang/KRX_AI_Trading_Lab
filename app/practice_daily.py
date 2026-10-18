@@ -4,6 +4,8 @@ from math import fsum,isfinite
 from app.recommendation_outcomes import session_day
 from app.trading_clock import KST
 from app.trade_review import outcome
+from app.practice_audit import verify
+from collections import defaultdict
 
 
 def summarize(db, day):
@@ -24,7 +26,15 @@ def summarize(db, day):
             raise ValueError('연습 결산 금액 기록을 확인해 주세요.') from None
     db.execute('BEGIN')
     trades=[dict(row) for row in db.execute('SELECT * FROM paper_trades')]
-    sales=[dict(row) for row in db.execute('SELECT * FROM paper_exits')]
+    sales=[dict(row) for row in db.execute('SELECT * FROM paper_exits ORDER BY id')]
+    sale_groups=defaultdict(list)
+    by_trade={row['id']:row for row in trades}
+    for sale in sales:
+        if sale['trade_id'] not in by_trade:
+            raise ValueError('매도의 원래 연습 기록을 확인해야 해요.')
+        sale_groups[sale['trade_id']].append(sale)
+    for trade_id,records in sale_groups.items():
+        verify(by_trade[trade_id],records)
     buys=[row for row in trades if on_day(row['opened_at'])]
     daily_sales=[row for row in sales if on_day(row['sold_at'])]
     recorded_ids={row['trade_id'] for row in sales}
