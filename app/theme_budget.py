@@ -29,14 +29,22 @@ def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps):
         return dict(preview,run_id=run['id'],price_asof=run['day'],source=run['source'],mode=mode)
 
 
-def preview_text(preview):
+def preview_text(preview, *, page=None):
+    if page is not None and (type(page) is not int or not 1<=page<=999999):
+        raise ValueError('페이지 번호를 확인해 주세요.')
+    pages=max(1,(len(preview['targets'])+4)//5)
+    if page is not None and page>pages:
+        return f'마지막 페이지는 {pages}예요.'
     lines=['[테마1 총예산 미리보기 · 주문 안 함]',
            f'판정 번호 {preview["run_id"]} · {preview["mode"]} · 자료 {preview["source"]}',
            f'가격 기준: {preview["price_asof"]} 저장 종가. 현재가·시초가가 아닙니다.',
            f'총예산 {preview["total_won"]:,}원 · 종목당 {preview["allocated_each_won"]:,}원',
            f'수수료 가정 {preview["fee_bps"]/100:.2f}% · 가격 여유 {preview["buffer_bps"]/100:.2f}%',
            '증권사 주문 가능 금액은 조회하지 않았어요. 실제 매수 가능 여부는 미확인입니다.']
-    for target in preview['targets']:
+    rows=preview['targets'] if page is None else preview['targets'][(page-1)*5:page*5]
+    if page is not None:
+        lines.append(f'{page}/{pages}페이지 · 종목 5개씩')
+    for target in rows:
         if target['quantity'] is None:
             detail='기준 가격 미확인'
         elif target['quantity']==0:
@@ -47,4 +55,6 @@ def preview_text(preview):
     lines.extend([f'예상 확보액 합계 {preview["reserved_won"]:,}원 · 미배분/미사용 {preview["unreserved_won"]:,}원',
                   '주수는 소수점 아래를 버렸어요. 남은 돈은 다른 종목에 재배분하지 않습니다.',
                   '가격이 없는 종목의 예산도 남은 돈에 포함됩니다. 실제 주문·예수금 예약은 하지 않았어요.'])
+    if page is not None and page<pages:
+        lines.append(f'다음: /테마1예산 {preview["total_won"]} {preview["fee_bps"]/100:.2f} {preview["buffer_bps"]/100:.2f} {page+1}')
     return '\n'.join(lines)

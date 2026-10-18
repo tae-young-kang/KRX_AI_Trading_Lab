@@ -23,3 +23,14 @@ def test_budget_uses_frozen_run_close_not_mutated_cache(tmp_path):
         db.execute('UPDATE theme_alerts SET result_json=? WHERE id=?',(json.dumps(payload),row['id']))
     legacy=preview_latest(history,mode='DEMO',total_won=1000,fee_bps=0,buffer_bps=0)
     assert legacy['targets'][0]['quantity'] is None and legacy['unreserved_won']==1000
+
+
+def test_preview_paging_keeps_full_budget_totals():
+    from app.budget_preview import equal_budget_preview
+    rows=[dict(code=f'{900000+i:06}',name='연습',market='KOSPI',reference_won=100) for i in range(6)]
+    result=equal_budget_preview(total_won=6000,targets=rows,available_won=None,fee_bps=2,buffer_bps=200)
+    result.update(run_id=1,mode='DEMO',source='DEMO',price_asof='2026-10-16')
+    first=preview_text(result,page=1);second=preview_text(result,page=2)
+    assert '1/2페이지' in first and '/테마1예산 6000 0.02 2.00 2' in first
+    assert '900005' not in first and '900005' in second
+    assert '예상 확보액 합계' in first and '예상 확보액 합계' in second

@@ -232,3 +232,18 @@ def test_theme_delivery_status_is_scoped_read_only_after_stop(sandbox):
     bad=update(sandbox,2,'/테마1알림상태');bad['message']['chat']['id']=99
     assert service.handle(bad) is None
     assert seen==[destination_scope(33,22)] and broker.calls==[]
+
+
+def test_theme_budget_is_only_preview_and_parses_explicit_percentages(sandbox):
+    service,broker,_,_=sandbox
+    seen=[]
+    service.theme_budget=lambda total,fee,buffer,page: seen.append((total,fee,buffer,page)) or '예산 미리보기'
+    event=update(sandbox,1,'/테마1예산 1000000 0.02 2 2')
+    assert service.handle(event)=='예산 미리보기'
+    assert service.handle(event)=='예산 미리보기'
+    assert seen==[(1000000,2,200,2)]
+    assert '사용법' in service.handle(update(sandbox,2,'/테마1예산'))
+    assert '사용법' in service.handle(update(sandbox,3,'/테마1예산 1000 0.001 2'))
+    service.stop()
+    service.handle(update(sandbox,4,'/테마1예산 1000 0 0'))
+    assert seen[-1]==(1000,0,0,1) and broker.calls==[]

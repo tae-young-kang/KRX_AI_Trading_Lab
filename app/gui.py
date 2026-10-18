@@ -1385,6 +1385,7 @@ class MainWindow(QMainWindow):
                                      watch_funds=self.mock_watch_status.funds_summary,
                                      recommendation_report=lambda performance, page=1, db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_summary(mode,performance=performance,page=page),
+                                     theme_budget=lambda total, fee, buffer, page, history=self.history, mode=current_mode(self.cfg).key: theme_budget_text(theme_budget_preview(history,mode=mode,total_won=total,fee_bps=fee,buffer_bps=buffer),page=page),
                                      theme_status=lambda destination, history=self.history, mode=current_mode(self.cfg).key: theme_delivery_summary(history,mode=mode,destination=destination),
                                      theme_report=lambda page=1, history=self.history, mode=current_mode(self.cfg).key: theme_latest_report(history,mode=mode,page=page),
                                      practice_sales=lambda trade_id=None, page=1, db=self.db: db.practice_sale_report(trade_id,page),
