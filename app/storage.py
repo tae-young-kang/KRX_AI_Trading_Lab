@@ -194,6 +194,11 @@ class Database:
             return (f'[연습 매도 내역 · {page}/{pages}페이지]\n'+sale_details(trade,sales,start=page)+
                     (f'\n다음: /연습내역 {trade_id} {page+1}' if page<pages else ''))
 
+    def practice_daily_report(self, day):
+        from app.practice_daily import summarize,render
+        with self.connect() as db:
+            return render(summarize(db,day))
+
     def open_trades(self):
         with self.connect() as db:
             return [dict(x) for x in db.execute('SELECT * FROM paper_trades WHERE closed_at IS NULL ORDER BY id DESC')]

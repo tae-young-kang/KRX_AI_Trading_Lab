@@ -20,7 +20,7 @@ class TelegramOrderWorker(QThread):
     def __init__(self, root, token, user_id, chat_id, catalog, conditions=None, orders_enabled=True, watch_status=None,
                  watch_refresh=None, watch_result=None, watch_reconnect=None, watch_validation=None,
                  watch_orders=None, watch_cancel_orders=None, watch_history=None, watch_funds=None,
-                 recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None):
+                 recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None):
         super().__init__()
         self.root, self.token = Path(root), token
         self.user_id, self.chat_id, self.catalog = user_id, chat_id, dict(catalog)
@@ -38,6 +38,7 @@ class TelegramOrderWorker(QThread):
         self.theme_report = theme_report
         self.theme_status = theme_status
         self.theme_budget = theme_budget
+        self.practice_daily = practice_daily
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
 
     def stop(self):
@@ -78,7 +79,7 @@ class TelegramOrderWorker(QThread):
                                                 watch_cancel_orders=self.watch_cancel_orders,
                                                 watch_history=self.watch_history, watch_funds=self.watch_funds,
                                                 recommendation_report=self.recommendation_report,
-                                                recommendation_overview=self.recommendation_overview, practice_sales=self.practice_sales, theme_report=self.theme_report, theme_status=self.theme_status, theme_budget=self.theme_budget)
+                                                recommendation_overview=self.recommendation_overview, practice_sales=self.practice_sales, theme_report=self.theme_report, theme_status=self.theme_status, theme_budget=self.theme_budget, practice_daily=self.practice_daily)
             report = self.service.recovery_status(startup=True) if self.orders_enabled else None
             self.status.emit('수신 중 · '+(self.service.safety_text(report) if self.orders_enabled else '조건·조회 관리 · 키움 모의 주문은 PC의 별도 당일 허용 필요'))
             last_banner = self.service.safety_banner() if self.orders_enabled else ''

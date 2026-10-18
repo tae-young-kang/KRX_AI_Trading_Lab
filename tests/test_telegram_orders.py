@@ -255,3 +255,13 @@ def test_practice_list_page_command_does_not_become_trade_number(sandbox):
     assert service.handle(update(sandbox,1,'/연습내역 목록 2'))=='목록'
     assert seen==[(None,2)] and broker.calls==[]
     assert '사용법' in service.handle(update(sandbox,2,'/연습내역 목록 0'))
+
+
+def test_daily_report_uses_korean_date_and_never_sends_orders(sandbox):
+    service,broker,_,_=sandbox;seen=[]
+    service.practice_daily=lambda day:seen.append(day) or '연습 결산'
+    event=update(sandbox,1,'/연습결산')
+    assert service.handle(event)=='연습 결산' and service.handle(event)=='연습 결산'
+    service.stop()
+    assert service.handle(update(sandbox,2,'/연습결산 2026-10-16'))=='연습 결산'
+    assert seen==['2026-10-19','2026-10-16'] and broker.calls==[]
