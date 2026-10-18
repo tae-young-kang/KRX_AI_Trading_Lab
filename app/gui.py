@@ -489,6 +489,9 @@ class MainWindow(QMainWindow):
         sales_btn = QPushButton('선택 종목의 매도 내역')
         sales_btn.clicked.connect(self.show_practice_sales)
         row.addWidget(sales_btn)
+        daily_btn=QPushButton('연습 하루 결산 보기')
+        daily_btn.clicked.connect(self.show_practice_daily)
+        row.addWidget(daily_btn)
         v.addLayout(row)
         row = QHBoxLayout()
         row.addStretch()
@@ -1634,6 +1637,29 @@ class MainWindow(QMainWindow):
         if path:
             self.db.export_paper_exits(path)
             QMessageBox.information(self,'연습 내역 저장','가정 비용을 포함한 연습 매도 내역을 저장했어요. 실제 증권사 체결 내역이 아니에요.')
+
+    def show_practice_daily(self):
+        from app.trading_clock import KST
+        mode=current_mode(self.cfg)
+        database=self.db
+        day,ok=QInputDialog.getText(self,'연습 하루 결산','확인할 한국 날짜 (YYYY-MM-DD)',
+                                   text=datetime.now(KST).date().isoformat())
+        if not ok:return
+        dialog=QDialog(self)
+        dialog.setWindowTitle(mode.title+' · 연습 하루 결산')
+        dialog.resize(850,650)
+        layout=QVBoxLayout(dialog)
+        note=lbl('저장된 연습 기록만 읽습니다. 실제 계좌 조회·발송·주문은 하지 않아요.','Muted')
+        note.setWordWrap(True);layout.addWidget(note)
+        view=QTextEdit();view.setReadOnly(True);layout.addWidget(view)
+        page=QSpinBox();page.setRange(1,999999);page.setPrefix('페이지 ');layout.addWidget(page)
+        def load(number):
+            try: text=database.practice_daily_report(day,page=number)
+            except Exception: text='날짜와 연습 결산 기록을 확인해야 해요. 저장 파일을 바꾸지 않았어요.'
+            view.setPlainText(text)
+        page.valueChanged.connect(load);load(1)
+        close=QPushButton('닫기');close.clicked.connect(dialog.accept);layout.addWidget(close)
+        dialog.exec()
 
     def show_practice_sales(self):
         selected=self.trade_table.currentRow()

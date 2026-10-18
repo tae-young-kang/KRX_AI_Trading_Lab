@@ -47,3 +47,18 @@ def test_daily_symbol_totals_and_paging_match_whole_day(tmp_path,monkeypatch):
     assert '900005' not in first and '900005' in second
     assert '실현손익 +600.00원' in first and '실현손익 +600.00원' in second
     assert '2페이지까지' in db.practice_daily_report('2026-10-19',3)
+
+
+def test_recorded_take_reason_is_separate_from_net_win_and_counts_final_only(tmp_path,monkeypatch):
+    db=Database(tmp_path/'practice.db')
+    monkeypatch.setattr('app.storage.now',lambda:'2026-10-19T10:00:00+09:00')
+    stock=Stock('900001','연습','KOSPI',1000,3,200,150,4000)
+    db.paper_open(stock,2,2,4,2,1,0,dict(DEFAULTS),3)
+    tid=db.open_trades()[0]['id']
+    db.paper_sell(tid,1,1001,'가상 익절',1,1,0)
+    with db.connect() as record: partial=summarize(record,'2026-10-19')
+    assert partial['reasons']['take']==0 and partial['losses']==0
+    db.paper_close(tid,1001,'가상 익절',1,1,0)
+    with db.connect() as record: final=summarize(record,'2026-10-19')
+    assert final['reasons']['take']==1 and final['losses']==1 and final['wins']==0
+    assert '익절 1 / 손절 0' in db.practice_daily_report('2026-10-19')

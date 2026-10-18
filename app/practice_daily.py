@@ -33,6 +33,10 @@ def summarize(db, day):
     completed=[row for row in completed if row['id'] in recorded_ids]
     outcomes=[outcome(row) for row in completed]
     wins,losses,draws=(outcomes.count(label) for label in ('승','패','본전'))
+    reasons={'take':0,'stop':0,'period':0,'other':0}
+    labels={'가상 익절':'take','가상 손절':'stop','가상 보유기간 청산':'period'}
+    for row in completed:
+        reasons[labels.get(row['close_reason'],'other')]+=1
     by_id={row['id']:row for row in trades}
     groups={}
     def group(row):
@@ -57,7 +61,7 @@ def summarize(db, day):
                 sell_gross=total(row['fill']*row['qty'] for row in daily_sales),
                 sell_fees=total(row['sell_fee'] for row in daily_sales),sell_tax=total(row['sell_tax'] for row in daily_sales),
                 realized=total(row['pnl'] for row in daily_sales),wins=wins,losses=losses,draws=draws,
-                unknown=outcomes.count('확인 필요'),legacy=len(legacy),symbols=symbols,
+                unknown=outcomes.count('확인 필요'),legacy=len(legacy),symbols=symbols,reasons=reasons,
                 winrate=wins/(wins+losses+draws)*100 if wins+losses+draws else None)
 
 
@@ -75,6 +79,9 @@ def render(result, *, page=1):
             f'매도 수수료 {result["sell_fees"]:,.2f}원 · 세금 {result["sell_tax"]:,.2f}원\n'
             f'당일 매도분 실현손익 {result["realized"]:+,.2f}원 (배분한 매수 비용 포함)\n'
             f'오늘 전량 매도 완료: 승 {result["wins"]} / 패 {result["losses"]} / 본전 {result["draws"]} · 승률 {winrate}\n'
+            f'완료 거래 마지막 사유: 익절 {result["reasons"]["take"]} / 손절 {result["reasons"]["stop"]} / '
+            f'기간 {result["reasons"]["period"]} / 기타 {result["reasons"]["other"]}건\n'
+            '매도 사유와 비용 차감 후 승패는 달라요. 건수는 진입 거래 기준이며 중복 없는 종목 수가 아닙니다.\n'
             f'완료 손익 미확인 {result["unknown"]}건 · 매도별 근거 없는 이전 완료 기록 {result["legacy"]}건 제외\n'
             '분할매도 손익은 판 날에, 승패는 전량 매도 완료일에 한 번 셉니다. 둘은 다른 집계입니다.\n'
             '시각 offset이 없는 이전 기록은 PC 지역 시각으로 해석합니다. 비용은 가정값입니다.')
