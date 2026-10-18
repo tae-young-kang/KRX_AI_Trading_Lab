@@ -79,3 +79,33 @@ def test_duplicate_write_batch_is_not_silently_last_row_wins(tmp_path):
     history=HistoryStore(tmp_path/'history.db');day='2026-10-19'
     with pytest.raises(ValueError): history.insert_bars([bar(day),bar(day,price=110)],'CSV_USER')
     assert history.load_bars('CSV_USER')==[]
+
+
+@pytest.mark.parametrize('code',['00088K','0115E0','005930'])
+def test_alphanumeric_short_codes_survive_normalization_and_cache(tmp_path,code):
+    from app.krx_history import normalize_krx
+    raw=dict(ISU_CD=code,ISU_NM='합성 시험 종목',TDD_OPNPRC='100',TDD_HGPRC='110',
+             TDD_LWPRC='99',TDD_CLSPRC='100',ACC_TRDVOL='1000',ACC_TRDVAL='10000000000',MKTCAP='400000000000')
+    normalized=normalize_krx(raw,'KOSPI','2026-10-19')
+    assert normalized.code==code
+    history=HistoryStore(tmp_path/'hist.db');history.insert_bars([normalized],'CSV_USER')
+    assert history.load_bars('CSV_USER')[0].code==code
+
+
+@pytest.mark.parametrize('code',['KR7005930003','００５９３０','00593','005930X'])
+def test_invalid_code_shapes_are_not_coerced_into_other_symbols(code):
+    from app.krx_history import normalize_krx
+    assert normalize_krx({'ISU_CD':code},'KOSPI','2026-10-19') is None
+
+
+def test_old_normalizer_cache_is_refetched_once(tmp_path):
+    history=HistoryStore(tmp_path/'history.db');day='2026-10-19';now=datetime(2026,10,20,10,tzinfo=KST)
+    client=Client([bar(day)])
+    history.fetch_range(client,day,day,markets=('KOSPI',),now=now)
+    with history.connect() as db:
+        db.execute('UPDATE fetched_days SET normalizer_version=0')
+    client.rows=[bar(day),bar(day,'00088K')]
+    history=HistoryStore(history.path)
+    history.fetch_range(client,day,day,markets=('KOSPI',),now=now)
+    history.fetch_range(client,day,day,markets=('KOSPI',),now=now)
+    assert len(client.calls)==2 and len(history.load_bars('KRX'))==2

@@ -62,8 +62,8 @@ def normalize_krx(raw, market, expected_day):
     code = str(raw.get('ISU_CD', '')).strip()
     if not code:
         return None
-    if len(code) != 6 or not code.isdigit():
-        # This API usually returns six-digit ticker, never invent one from an ISIN.
+    if not re.fullmatch(r'[A-Za-z0-9]{6}',code):
+        # Preserve short codes including letters; never derive one from an ISIN.
         return None
     o, h, l, c = [num(raw.get(k)) for k in ('TDD_OPNPRC','TDD_HGPRC','TDD_LWPRC','TDD_CLSPRC')]
     v = num(raw.get('ACC_TRDVOL'))
@@ -148,6 +148,8 @@ class HistoryStore:
               score REAL NOT NULL, r1 REAL, r3 REAL, r5 REAL,
               PRIMARY KEY(run_id,strategy,day,code));
             ''')
+            if 'normalizer_version' not in {row['name'] for row in db.execute('PRAGMA table_info(fetched_days)')}:
+                db.execute('ALTER TABLE fetched_days ADD COLUMN normalizer_version INTEGER NOT NULL DEFAULT 0')
 
     def insert_bars(self,bars,source):
         bars=validate_bars(bars)
@@ -195,7 +197,7 @@ class HistoryStore:
             # Same-day snapshots are provisional, even after app restart. Empty
             # responses do not prove a holiday or a complete market download.
             done={(r['market'],r['day']) for r in db.execute('''SELECT f.market,f.day
-                FROM fetched_days f WHERE f.source=? AND f.count>0 AND date(f.checked_at,'+9 hours')>f.day
+                FROM fetched_days f WHERE f.source=? AND f.normalizer_version=1 AND f.count>0 AND date(f.checked_at,'+9 hours')>f.day
                 AND substr(f.checked_at,-6,1) IN ('+','-') AND substr(f.checked_at,-3,1)=':'
                 AND julianday(f.checked_at)<=julianday(?)
                 AND f.day<? AND f.count=(SELECT COUNT(*) FROM daily_bars b
@@ -223,7 +225,9 @@ class HistoryStore:
                                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',[
                                 ('KRX',b.date,b.market,b.code,b.name,b.open,b.high,b.low,b.close,b.volume,
                                  b.trade_value_eok,b.cap_eok,ts) for b in rows])
-                            db.execute('INSERT OR REPLACE INTO fetched_days VALUES(?,?,?,?,?)',('KRX',market,key,len(rows),ts))
+                            db.execute('''INSERT OR REPLACE INTO fetched_days
+                                (source,market,day,count,checked_at,normalizer_version) VALUES(?,?,?,?,?,?)''',
+                                ('KRX',market,key,len(rows),ts,1))
                     total+=len(rows);days+=1
             d+=timedelta(days=1)
         return {'rows':total,'requests':days}
