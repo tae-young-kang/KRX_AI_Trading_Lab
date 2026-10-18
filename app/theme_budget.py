@@ -1,11 +1,11 @@
 """Frozen theme-run budget preview using captured daily closes, never live quotes."""
 import json
 from app.budget_preview import equal_budget_preview
+from app.protection_plan import validate_policy
 
 
 def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps, take_bps=200, stop_bps=300):
-    if any(type(value) is not int or not 1<=value<10000 for value in (take_bps,stop_bps)):
-        raise ValueError('익절·손절은 0.01% 이상 100% 미만으로 입력해 주세요.')
+    validate_policy(take_bps,stop_bps)
     with history.connect() as db:
         db.execute('BEGIN')
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_runs'").fetchone():
