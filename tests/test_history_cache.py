@@ -109,3 +109,20 @@ def test_old_normalizer_cache_is_refetched_once(tmp_path):
     history.fetch_range(client,day,day,markets=('KOSPI',),now=now)
     history.fetch_range(client,day,day,markets=('KOSPI',),now=now)
     assert len(client.calls)==2 and len(history.load_bars('KRX'))==2
+
+
+def test_ingest_counts_distinguish_omitted_and_unknown_and_survive_reopen(tmp_path):
+    from app.krx_history import normalize_day
+    day='2026-10-19'
+    raw=dict(ISU_CD='900001',ISU_NM='합성 종목',TDD_OPNPRC='100',TDD_HGPRC='110',TDD_LWPRC='99',
+             TDD_CLSPRC='100',ACC_TRDVOL='1000',ACC_TRDVAL='10000000000',MKTCAP='400000000000')
+    batch=normalize_day([raw,{**raw,'ISU_CD':'900002','ACC_TRDVOL':'0'},None],'KOSPI',day)
+    assert len(batch)==1 and batch.received_count==3
+    history=HistoryStore(tmp_path/'hist.db')
+    history.fetch_range(Client(batch),day,day,markets=('KOSPI',),now=datetime(2026,10,19,18,tzinfo=KST))
+    text=HistoryStore(history.path).ingest_summary('KRX')
+    assert '수신 3 / 정규화 1 / 제외 2행' in text
+    assert '완료 증명 아님' in text
+    history.fetch_range(Client([bar(day)]),day,day,markets=('KOSPI',),now=datetime(2026,10,19,19,tzinfo=KST))
+    assert '수신 미확인' in history.ingest_summary('KRX')
+    assert '관측이 없어요' in history.ingest_summary('CSV_USER')

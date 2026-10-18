@@ -775,6 +775,7 @@ class MainWindow(QMainWindow):
         source=self.research_source.currentText()
         n=self.history.count(source)
         self.research_status.setText(f'[{source}] 저장 {n[0]:,}행 / {n[1]}거래일 / {n[2]}종목 / {n[3] or "—"} ~ {n[4] or "—"}  ·  연구 데이터 DB: research.db')
+        self.research_status.setText(self.research_status.text()+'\n'+self.history.ingest_summary(source))
         latest=self.history.last_run(source)
         if latest and self.research_report is None:
             self.research_run_id=latest[0]

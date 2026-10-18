@@ -21,6 +21,23 @@ API_ROOT = 'https://data-dbg.krx.co.kr/svc/apis/sto/'
 ENDPOINTS = {'KOSPI': 'stk_bydd_trd', 'KOSDAQ': 'ksq_bydd_trd'}
 
 
+class DailyBatch(list):
+    """Normalized rows plus original response count; contains no raw response."""
+    def __init__(self,rows,received_count):
+        super().__init__(rows)
+        if type(received_count) is not int or received_count<len(self):
+            raise ValueError('일별 수신 행 수를 확인해야 합니다.')
+        self.received_count=received_count
+
+
+def normalize_day(block,market,day):
+    if not isinstance(block,list):
+        raise ValueError('일별 응답 목록을 확인해야 합니다.')
+    rows=[bar for raw in block if isinstance(raw,dict)
+          if (bar:=normalize_krx(raw,market,day)) is not None]
+    return DailyBatch(rows,len(block))
+
+
 def validate_bars(bars):
     """Reject a malformed write batch before touching an existing cache snapshot."""
     rows=list(bars)
@@ -99,7 +116,7 @@ class KRXDailyClient:
         if not isinstance(block,list):
             msg = raw.get('message') or raw.get('msg') or raw.get('RESULT') if isinstance(raw,dict) else 'Unexpected response'
             raise RuntimeError(f'KRX 응답 형식 오류: {str(msg)[:150]}')
-        return [b for r in block if (b:=normalize_krx(r,market,day)) is not None]
+        return normalize_day(block,market,day)
 
 
 class HistoryStore:
@@ -126,6 +143,10 @@ class HistoryStore:
               trade_value_eok REAL, cap_eok REAL, fetched_at TEXT NOT NULL,
               PRIMARY KEY(source,day,market,code));
             CREATE INDEX IF NOT EXISTS ix_hist_symbol ON daily_bars(source,market,code,day);
+            CREATE TABLE IF NOT EXISTS daily_ingest_status(
+              source TEXT NOT NULL,market TEXT NOT NULL,day TEXT NOT NULL,
+              received_count INTEGER,kept_count INTEGER NOT NULL,omitted_count INTEGER,observed_at TEXT NOT NULL,
+              PRIMARY KEY(source,market,day));
             CREATE TABLE IF NOT EXISTS fetched_days(
               source TEXT NOT NULL, market TEXT NOT NULL, day TEXT NOT NULL,
               count INTEGER NOT NULL, checked_at TEXT NOT NULL,
@@ -177,6 +198,18 @@ class HistoryStore:
         with self.connect() as db:
             return db.execute('SELECT COUNT(*),COUNT(DISTINCT day),COUNT(DISTINCT code),MIN(day),MAX(day) FROM daily_bars WHERE source=?',(source,)).fetchone()
 
+    def ingest_summary(self,source):
+        with self.connect() as db:
+            rows=db.execute('SELECT * FROM daily_ingest_status WHERE source=? ORDER BY day DESC,market LIMIT 10',(source,)).fetchall()
+        lines=['최근 일별 정규화 관측 · 전체 시장 수집 완료 증명 아님']
+        for row in rows:
+            received='미확인' if row['received_count'] is None else str(row['received_count'])
+            omitted='미확인' if row['omitted_count'] is None else str(row['omitted_count'])
+            lines.append(f'{row["day"]} {row["market"]} · 수신 {received} / 정규화 {row["kept_count"]} / 제외 {omitted}행')
+        if not rows:lines.append('수신/제외 행 수 관측이 없어요. 저장 행 수만으로 누락 여부를 알 수 없어요.')
+        lines.append('제외에는 무거래·가격 미확인·형식 차이가 포함될 수 있어요. 빈 응답은 휴장 증명이 아니에요.')
+        return '\n'.join(lines)
+
     def import_csv(self,path,source='CSV_USER'):
         rows=load_ohlcv_csv(path)
         self.insert_bars(rows,source)
@@ -212,13 +245,16 @@ class HistoryStore:
                     rows=client.fetch_day(market,key)
                     if not isinstance(rows,(list,tuple)):
                         raise ValueError('KRX 응답의 날짜·시장·중복 종목을 확인해야 합니다.')
+                    received=rows.received_count if isinstance(rows,DailyBatch) else None
                     rows=validate_bars(rows)
+                    if received is not None and received<len(rows):
+                        raise ValueError('일별 수신 행 수와 저장 행 수가 맞지 않습니다.')
                     if any(b.date!=key or b.market!=market for b in rows):
                         raise ValueError('KRX 응답의 날짜·시장을 확인해야 합니다.')
-                    if rows:
-                        ts=moment.astimezone(KST).isoformat(timespec='seconds')
-                        with self.connect() as db:
-                            db.execute('BEGIN IMMEDIATE')
+                    ts=moment.astimezone(KST).isoformat(timespec='seconds')
+                    with self.connect() as db:
+                        db.execute('BEGIN IMMEDIATE')
+                        if rows:
                             db.execute('DELETE FROM daily_bars WHERE source=? AND market=? AND day=?',('KRX',market,key))
                             db.executemany('''INSERT INTO daily_bars
                                 (source,day,market,code,name,open,high,low,close,volume,trade_value_eok,cap_eok,fetched_at)
@@ -228,6 +264,8 @@ class HistoryStore:
                             db.execute('''INSERT OR REPLACE INTO fetched_days
                                 (source,market,day,count,checked_at,normalizer_version) VALUES(?,?,?,?,?,?)''',
                                 ('KRX',market,key,len(rows),ts,1))
+                        db.execute('INSERT OR REPLACE INTO daily_ingest_status VALUES(?,?,?,?,?,?,?)',
+                                   ('KRX',market,key,received,len(rows),received-len(rows) if received is not None else None,ts))
                     total+=len(rows);days+=1
             d+=timedelta(days=1)
         return {'rows':total,'requests':days}
