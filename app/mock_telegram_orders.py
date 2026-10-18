@@ -253,6 +253,10 @@ class MockTelegramOrders:
         return amend_plan(payload['code'],receipt['order_no'],remaining_quantity=quantity,limit_price=payload['limit_price'])
 
     def handle(self,text,*,scope,session,uid,now):
+        if text.split(' ',1)[0] in ('/주문목록','/미체결'):
+            from app.mock_order_views import render
+            with self.lock:
+                return render(self,text,scope,now)
         if text=='/긴급중지':
             self.armed=False
             return self.emergency.stop()
