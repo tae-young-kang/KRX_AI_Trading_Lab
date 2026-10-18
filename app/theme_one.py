@@ -83,6 +83,9 @@ def alert_text(result, *, nxt_eligible=None, nxt_asof=None, nxt_source=None):
     venue='NXT 거래 가능 여부 미확인'
     if type(nxt_eligible) is bool and nxt_asof==result['detected_on'] and isinstance(nxt_source,str) and nxt_source.strip():
         venue=('NXT 거래 가능' if nxt_eligible else 'KRX 전용 (NXT 대상 아님)')+f' · 근거: {nxt_source}'
+    evidence=result.get('nxt_evidence')
+    if evidence:
+        venue+=f'\nNXT 관측 시각: {evidence["observed_at"]} · 현재 주문 가능 상태를 보장하지 않아요.'
     cap=result['cap_eok']
     lines=['[테마1 · 종목 감지]',f'{result["name"]} ({result["code"]}) · '+{'KOSPI':'코스피','KOSDAQ':'코스닥'}[result['market']],
            '감지 기준일: '+day_label(result['detected_on']),

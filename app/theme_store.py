@@ -18,7 +18,8 @@ def prepare(history, *, sessions, through, mode, source):
     eligible=[d for d in days if d.isoformat()<=through]
     if len(eligible)<7:
         raise ValueError('전일 종가를 포함한 7거래일 근거가 필요해요.')
-    bars,observations=history.load_evidence(source,eligible[-7].isoformat(),through)
+    bars,observations,nxt_rows=history.load_evidence(source,eligible[-7].isoformat(),through,nxt_mode=mode)
+    nxt={(row['market'],row['code']):row for row in nxt_rows}
     expected_days={d.isoformat() for d in eligible[-7:]}
     observed_market_days={(b.market,b.date) for b in bars}
     missing_market_days=[(market,day) for market in ('KOSPI','KOSDAQ') for day in sorted(expected_days)
@@ -55,6 +56,10 @@ def prepare(history, *, sessions, through, mode, source):
         states[result['status']]+=1
         if result['matched']:
             result['ingest_quality']=quality[market]
+            evidence=nxt.get((market,code))
+            result['nxt_evidence']=(dict(eligible=True if evidence['eligible']==1 else None,
+                                         day=evidence['day'],observed_at=evidence['observed_at'],
+                                         source='키움 종목정보 목록(ka10099) 관측') if evidence else None)
             results.append(result)
     results.sort(key=lambda r:(-r['hits'][-1]['trade_value_eok'],r['market'],r['code']))
     with history.connect() as db:
@@ -69,11 +74,14 @@ def prepare(history, *, sessions, through, mode, source):
         inserted=0
         alert_ids=[]
         for result in results:
+            evidence=result['nxt_evidence']
+            message=alert_text(result,nxt_eligible=evidence['eligible'] if evidence else None,
+                               nxt_asof=evidence['day'] if evidence else None,nxt_source=evidence['source'] if evidence else None)
             payload=json.dumps(dict(theme=1,version=1,mode=mode,result=result),sort_keys=True,ensure_ascii=False,allow_nan=False)
             key=sha256(payload.encode()).hexdigest()
             cur=db.execute('''INSERT OR IGNORE INTO theme_alerts
                 (fingerprint,mode,source,day,market,code,result_json,message) VALUES(?,?,?,?,?,?,?,?)''',
-                (key,mode,source,through,result['market'],result['code'],payload,alert_text(result)))
+                (key,mode,source,through,result['market'],result['code'],payload,message))
             inserted+=cur.rowcount
             alert_ids.append(db.execute('SELECT id FROM theme_alerts WHERE fingerprint=?',(key,)).fetchone()[0])
         report=dict(symbols=len(grouped),states=dict(states),matched=len(results),prepared=inserted,

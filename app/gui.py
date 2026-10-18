@@ -26,6 +26,7 @@ from app.theme_input import prepare_selection as prepare_theme_selection
 from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
 from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text
+from app.nxt_evidence import record as record_nxt_evidence
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
@@ -1529,6 +1530,11 @@ class MainWindow(QMainWindow):
         self.stocks = stocks
         self.results = evaluate(stocks, cfg)
         scan_id=self.db.save_scan(stocks, self.results, cfg, cfg['market'], mode)
+        try:
+            record_nxt_evidence(self.history,current_mode(cfg).key,stocks)
+        except Exception:
+            self.db.log('NXT_EVIDENCE_WARNING','NXT 날짜별 관측 저장 실패 · 테마 판정의 해당 정보는 확인 필요')
+            QMessageBox.information(self,'NXT 관측 확인','NXT 관측을 저장하지 못했어요. 테마1의 NXT 정보는 확인이 필요해요.')
         self.shadow.initialize_defaults(cfg,mode)
         self.shadow.ensure_active_reference(cfg,mode)
         shadow_events=self.shadow.process_scan(scan_id,stocks)

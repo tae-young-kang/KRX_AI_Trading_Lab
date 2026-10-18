@@ -143,6 +143,11 @@ class HistoryStore:
               trade_value_eok REAL, cap_eok REAL, fetched_at TEXT NOT NULL,
               PRIMARY KEY(source,day,market,code));
             CREATE INDEX IF NOT EXISTS ix_hist_symbol ON daily_bars(source,market,code,day);
+            CREATE TABLE IF NOT EXISTS nxt_observations(
+              id INTEGER PRIMARY KEY,mode TEXT NOT NULL,market TEXT NOT NULL,code TEXT NOT NULL,
+              day TEXT NOT NULL,observed_at TEXT NOT NULL,eligible INTEGER CHECK(eligible=1 OR eligible IS NULL),
+              UNIQUE(mode,market,code,observed_at));
+            CREATE INDEX IF NOT EXISTS ix_nxt_day ON nxt_observations(mode,day,market,code);
             CREATE TABLE IF NOT EXISTS daily_ingest_status(
               source TEXT NOT NULL,market TEXT NOT NULL,day TEXT NOT NULL,
               received_count INTEGER,kept_count INTEGER NOT NULL,omitted_count INTEGER,observed_at TEXT NOT NULL,
@@ -198,7 +203,7 @@ class HistoryStore:
         with self.connect() as db:
             return db.execute('SELECT COUNT(*),COUNT(DISTINCT day),COUNT(DISTINCT code),MIN(day),MAX(day) FROM daily_bars WHERE source=?',(source,)).fetchone()
 
-    def load_evidence(self,source,begin,end):
+    def load_evidence(self,source,begin,end,*,nxt_mode=None):
         """Prices and ingest observations from the same SQLite read snapshot."""
         with self.connect() as db:
             db.execute('BEGIN')
@@ -206,7 +211,13 @@ class HistoryStore:
                 FROM daily_bars WHERE source=? AND day BETWEEN ? AND ? ORDER BY day,code''',(source,begin,end)).fetchall()
             observations=db.execute('SELECT * FROM daily_ingest_status WHERE source=? AND day BETWEEN ? AND ?',
                                     (source,begin,end)).fetchall()
-            return [Bar(*tuple(row)) for row in rows],[dict(row) for row in observations]
+            prices=[Bar(*tuple(row)) for row in rows]
+            ingest=[dict(row) for row in observations]
+            if nxt_mode is None:
+                return prices,ingest
+            nxt=db.execute('''SELECT * FROM nxt_observations WHERE mode=? AND day=?
+                ORDER BY observed_at,id''',(nxt_mode,end)).fetchall()
+            return prices,ingest,[dict(row) for row in nxt]
 
     def ingest_summary(self,source):
         with self.connect() as db:
