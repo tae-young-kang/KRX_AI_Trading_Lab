@@ -29,6 +29,7 @@ def latch(db,reason,now):
 
 def summary(db,*,armed,open_now,day,now):
     saved=load(db)
+    halted=db.execute('SELECT stopped_at FROM manual_halt WHERE id=1').fetchone()
     unknown=db.execute("SELECT COUNT(*) FROM intents WHERE state='UNKNOWN'").fetchone()[0]
     processing=db.execute("SELECT COUNT(*) FROM intents WHERE state='CLAIMED'").fetchone()[0]
     pending=db.execute("SELECT COUNT(*) FROM intents WHERE state IN ('WAITING','QUEUED')").fetchone()[0]
@@ -51,6 +52,8 @@ def summary(db,*,armed,open_now,day,now):
     else:
         lines.append('기록 충돌 차단: 현재 저장된 차단 없음 · 실제 거래 검증 완료를 뜻하지 않아요.')
     lines.append(f'결과 미확인 {unknown}건 · 처리 중 {processing}건 · 내용 확인/전송 대기 {pending}건')
+    if halted:
+        lines.append('사용자가 요청한 모의 긴급중지: 유지 중 · 새 조회 뒤 /모의재개로 별도 확인')
     lines.append(f'새 조회 대조 대기 {waiting}건 · 당일 최종 취소 대조 대기 {cancellations}건')
     if waiting: lines.append('접수 기록과 새 조회를 아직 맞추지 못해 새 주문·정정을 차단해요.')
     if cancellations: lines.append('취소 접수는 완료가 아니에요. 당일 새 주문·정정을 계속 차단해요.')

@@ -33,7 +33,14 @@ class MockWatchStatus:
     def handle_orders(self, text, **context):
         with self._lock:
             orders = self._orders
-        return orders.handle(text,**context) if orders else '키움 모의 주문은 잠겨 있어요. 집 PC에서 당일 모의 주문 허용을 확인해 주세요.'
+        if not orders:
+            return '키움 모의 주문은 잠겨 있어요. 집 PC에서 당일 모의 주문 허용을 확인해 주세요.'
+        reply=orders.handle(text,**context)
+        if text=='/긴급중지':
+            with self._lock:
+                self._stale=True
+                self._notice='키움 모의 긴급중지 요청을 기록했어요. /주문점검과 모의 HTS/MTS에서 확인해 주세요.'
+        return reply
 
     def cancel_orders(self, scope, session):
         with self._lock:

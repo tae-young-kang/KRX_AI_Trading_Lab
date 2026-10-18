@@ -1,5 +1,6 @@
 """Explicitly armed MOCK-only queue. Broker IO belongs to the watch owner."""
 from datetime import datetime
+from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.kiwoom_mock_status import money_view
 from app.runtime_lock import ReceiverLock
 from app.trading_clock import KST, TradingCalendar
 from app import mock_order_safety
+from app.mock_emergency import MockEmergencyStop
 
 
 class MockTelegramOrders:
@@ -54,6 +56,7 @@ class MockTelegramOrders:
                 db.execute('CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY,state TEXT,filled INTEGER,quantity INTEGER,checked_at TEXT)')
                 mock_order_safety.initialize(db)
                 self._latched=mock_order_safety.load(db) is not None
+        self.emergency=MockEmergencyStop(self.path,self.clock)
 
     @property
     def needs_review(self):
@@ -86,17 +89,18 @@ class MockTelegramOrders:
             self.account_tag = session._account_tag
             self.ledger = MockFillLedger(self.root/'fills.db',account_tag=self.account_tag)
             self._capture = None
-            self.armed = not self._latched
+            self.armed = not self._latched and not self.emergency.event.is_set()
             session.transport.mutation_allowed = self.can_dispatch
 
     def can_dispatch(self):
-        if self._latched or not self.armed or not self._sending or not self._open(): return False
+        if self.emergency.event.is_set() or self._latched or not self.armed or not self._sending or not self._open(): return False
         scope,session,expires,captured=self._sending
         now=self.clock().timestamp()
         return captured<=now<=expires and now-captured<=5 and not self._canceled(scope,session)
 
     def disarm(self):
         with self.lock:
+            self.emergency.cancel()
             self.armed = False
             self.journal = None
             self.generation = None
@@ -107,6 +111,7 @@ class MockTelegramOrders:
                 db.execute("UPDATE intents SET state='CANCELED' WHERE state IN ('WAITING','QUEUED')")
 
     def cancel_session(self,scope,session):
+        self.emergency.cancel(scope,session)
         sessions=[session]
         if session is None:
             with connect(self.path) as db:
@@ -248,11 +253,17 @@ class MockTelegramOrders:
         return amend_plan(payload['code'],receipt['order_no'],remaining_quantity=quantity,limit_price=payload['limit_price'])
 
     def handle(self,text,*,scope,session,uid,now):
+        if text=='/긴급중지':
+            self.armed=False
+            return self.emergency.stop()
         if text=='/주문점검':
             # No owner lock or broker IO: remains responsive during a long query.
             with connect(self.path) as db:
                 db.execute('BEGIN')
                 return mock_order_safety.summary(db,armed=self.armed,open_now=self._open(),day=self.day,now=self.clock())
+        if text=='/모의재개' or text.startswith('/모의재개확인'):
+            with self.lock:
+                return self._resume(text,scope,session)
         with self.lock, connect(self.path) as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute("UPDATE intents SET state='EXPIRED' WHERE state IN ('WAITING','QUEUED') AND expires<?",(now,))
@@ -278,6 +289,8 @@ class MockTelegramOrders:
                 return '[키움 모의투자 · 실제 돈 사용 안 함]\n'+gate+'\n'+(labels[row['state']] if row else '주문 기록 없음')+detail+'\n/잔고: 잔고·주문 상태 재조회 · 접수는 체결 완료가 아니에요.'
             if self._latched:
                 return '모의 기록 충돌로 주문을 차단했어요. /주문점검으로 이유를 확인해 주세요.'
+            if self.emergency.event.is_set():
+                return '키움 모의 긴급중지 상태예요. /잔고 새 조회 뒤 /모의재개로 확인해 주세요.'
             if not self.armed or not self._open() or self._canceled(scope,session):
                 return '키움 모의 주문이 잠겨 있거나 거래 가능 시간이 아니에요. 집 PC에서 오늘의 모의 주문 허용을 확인해 주세요.'
             token=re.fullmatch(r'/(모의확인|모의철회) ([A-Za-z0-9_-]{20,32})',text)
@@ -324,6 +337,9 @@ class MockTelegramOrders:
     def process(self,session):
         """Only called on the sole mock watch thread, never Telegram's thread."""
         with self.lock:
+            if self.emergency.event.is_set():
+                self.armed=False
+                return
             if not self.armed: return
             if not self._open():
                 self.disarm()
@@ -365,7 +381,7 @@ class MockTelegramOrders:
                     raise ContractError('매도 가능 수량 확인 필요')
                 if action=='NEW': plan=order_plan(request)
                 session._guard()
-                if (not self._open() or self.clock().timestamp()>row['expires']
+                if (self.emergency.event.is_set() or not self._open() or self.clock().timestamp()>row['expires']
                         or self._canceled(row['scope'],row['session']) or session.poll()
                         or capture.auth_generation!=self.generation or capture.profile_id!=self.profile):
                     raise ContractError('확인 만료')
@@ -384,6 +400,41 @@ class MockTelegramOrders:
                 db.execute('UPDATE intents SET state=? WHERE id=?',(state,row['id']))
             session.balance_stale=True
             return state
+
+    def _resume(self,text,scope,session):
+        if not self.emergency.event.is_set():
+            return '모의 긴급중지 상태가 아니에요. /주문점검으로 확인해 주세요.'
+        if (not self.journal or not self.ledger or not self._open() or self._canceled(scope,session)):
+            return '집 PC에서 오늘의 모의 연결·주문 허용과 텔레그램 수신을 먼저 확인해 주세요.'
+        with connect(self.path) as db:
+            db.execute("UPDATE intents SET state='EXPIRED' WHERE state IN ('WAITING','QUEUED') AND expires<?",(self.clock().timestamp(),))
+            if (self._latched or mock_order_safety.load(db) or self._unresolved_cancel(db) or self._observation_pending(db)
+                    or db.execute("SELECT 1 FROM intents WHERE state IN ('UNKNOWN','CLAIMED','WAITING','QUEUED')").fetchone()):
+                return '기록 충돌·미확인 처리·대조 대기가 남아 있어 재개하지 않아요. /주문점검을 확인해 주세요.'
+        capture=self._capture
+        stopped=self.emergency.stopped_at()
+        if (capture is None or stopped is None or capture.started_at.timestamp()<=stopped
+                or not 0<=self.clock().timestamp()-capture.finished_at.timestamp()<=30):
+            return '긴급중지 뒤 /잔고 새 조회를 끝내고 30초 안에 /모의재개를 요청해 주세요.'
+        transport=self.journal.transport
+        try:
+            transport.ready()
+            if (capture.auth_generation!=transport.auth_generation or capture.profile_id!=transport.profile_id
+                    or capture.observations.account_tag!=self.account_tag or transport.current_day!=self.day):
+                raise ContractError('context')
+        except ContractError:
+            return '현재 모의 인증·계좌 연결을 다시 확인해야 해요. 재개하지 않았어요.'
+        proof=hashlib.sha256(json.dumps(asdict(capture),sort_keys=True,default=str).encode()).hexdigest()
+        if text=='/모의재개':
+            return self.emergency.prepare(scope,session,proof,min(self.clock().timestamp()+30,capture.finished_at.timestamp()+30))
+        match=re.fullmatch(r'/모의재개확인 ([A-Za-z0-9_-]{20,32})',text)
+        if not match or not self.emergency.confirm(scope,session,match[1],proof):
+            return '유효한 재개 확인이 없어요. 만료·새 중지·조회 변경을 확인하고 /모의재개부터 다시 요청해 주세요.'
+        if self.emergency.event.is_set():
+            self.armed=False
+            return '확인 중 새 긴급중지 요청이 와서 중지를 유지했어요. 재개하지 않았어요.'
+        self.armed=True
+        return '키움 모의 긴급중지를 해제했어요. 새 주문은 별도 확인이 필요해요. 실제 돈 주문은 계속 잠겨 있어요.'
 
     def observe(self,capture,*,stream=None,notices=()):
         """Fresh read observations only; never clear UNKNOWN or infer cancellation."""
