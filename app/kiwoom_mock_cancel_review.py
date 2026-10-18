@@ -52,6 +52,47 @@ def validate_pair(chain, notice, capture, *, session, now, code, side):
                                now=now, code=code, side=side)
 
 
+def review_captured_notice(journal, ledger, root_key, notice, capture, *, session,
+                          known_orders, connection_guard):
+    """Reuse a newly completed explicit query; never perform extra HTTP here."""
+    if not callable(connection_guard):
+        raise ContractError('현재 모의 알림 연결 확인이 필요합니다.')
+    connection_guard()
+    transport=journal.transport
+    transport.ready()
+    if (type(capture) is not CapturedObservations or capture.auth_generation!=transport.auth_generation
+            or capture.profile_id!=transport.profile_id):
+        raise UncertainResponse('새 조회와 현재 모의 인증이 다릅니다.')
+    before=project_chain(journal,ledger,root_key)
+    tag,rows=journal.read_chain(root_key)
+    root=next(row for row in rows if row['request_key']==root_key)
+    code=json.loads(root['payload'])['stk_cd']
+    side='BUY' if root['api_id']=='kt10000' else 'SELL'
+    validate_pair(before,notice,capture,session=session,now=transport._clock(),code=code,side=side)
+    ledger.ingest(capture.observations)
+    after=project_chain(journal,ledger,root_key)
+    if after.order_nos!=before.order_nos:
+        raise UncertainResponse('대조 중 주문 계보가 달라졌습니다.')
+    status=validate_pair(after,notice,capture,session=session,now=transport._clock(),code=code,side=side)
+    funds=money_view(capture.observations,known_orders)
+    if notice.status=='취소':
+        title='남은 주문이 있어요' if status.remaining_quantity else '조회된 남은 주문은 없어요'
+    elif notice.status=='거부': title='취소 요청이 거절됐어요'
+    else: title='취소 확인 중'
+    detail=(f'취소 알림 뒤 새 조회를 대조했어요. 체결 {after.filled_qty:,}주 · 남은 {status.remaining_quantity:,}주.\n'
+            '최종 취소·결제 완료 증명은 아니며 새 주문을 허용하지 않아요.')
+    digest=hashlib.sha256(json.dumps(dict(notice=asdict(notice),capture=asdict(capture),orders=after.order_nos),
+                                    sort_keys=True,default=str).encode()).hexdigest()
+    result=CancellationReview(digest,after.day.isoformat(),capture.finished_at.isoformat(),tag,title,detail,
+                              status.remaining_quantity,after.filled_qty,after.filled_value,funds)
+    connection_guard()
+    transport.ready()
+    if capture.auth_generation!=transport.auth_generation or capture.profile_id!=transport.profile_id:
+        raise UncertainResponse('대조 중 모의 인증이 달라졌습니다.')
+    ledger.record_cancellation_review(root_key,result)
+    return result
+
+
 def review_after_notice(journal, ledger, reviewer, root_key, notice, *, expected_account,
                         session, known_orders, expected_deposit=None, connection_guard=None):
     """Read-only coordinator. Caller owns the current verified MOCK session.

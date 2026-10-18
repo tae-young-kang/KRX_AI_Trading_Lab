@@ -1,5 +1,6 @@
 """Read-only UI session. No dispatch journal, order engine, or Telegram calls."""
 from datetime import datetime
+from collections import deque
 import re
 
 from app.kiwoom_mock_contract import ContractError, UncertainResponse
@@ -33,6 +34,11 @@ class MockWatchSession:
         self.state = 'NEW'
         self.notice_count = 0
         self.balance_stale = True
+        self._cancel_notices = deque(maxlen=20)
+
+    def cancellation_notices(self):
+        self._guard()
+        return tuple(n for n in self._cancel_notices if self.stream and self.stream.accepts(n))
 
     def _now(self):
         moment = self.transport._clock()
@@ -130,6 +136,7 @@ class MockWatchSession:
                 if not self.stream.accepts(notice):
                     raise UncertainResponse('현재 연결의 알림이 아닙니다.')
                 self.notice_count += 1
+                if notice.action=='CANCEL': self._cancel_notices.append(notice)
                 self.balance_stale = True
                 messages.append(f"종목 {notice.code} · {kinds[notice.action]} · {statuses[notice.status]}\n잔고를 다시 확인해야 해요.")
             return messages
@@ -142,6 +149,7 @@ class MockWatchSession:
         self._account = None
         self._account_tag = None
         self._last_capture = None
+        self._cancel_notices.clear()
         try:
             if self.stream is not None:
                 self.stream.close()

@@ -190,6 +190,19 @@ class MockOrderStream:
         return review_after_notice(journal,ledger,reviewer,root_key,notice,
             expected_account=self._expected_account,session=self.session,known_orders=known_orders,
             expected_deposit=expected_deposit,connection_guard=guard)
+
+    def review_captured_cancellation(self,journal,ledger,root_key,notice,capture,*,known_orders):
+        """Read-only review of a query explicitly requested after the notice."""
+        from app.kiwoom_mock_cancel_review import review_captured_notice
+        def guard():
+            if not self.accepts(notice):
+                raise UncertainResponse('현재 모의 알림 연결을 다시 확인해 주세요.')
+        guard()
+        if journal.transport is not self.transport:
+            raise ContractError('접수와 알림의 모의 연결이 다릅니다.')
+        return review_captured_notice(journal,ledger,root_key,notice,capture,session=self.session,
+                                     known_orders=known_orders,connection_guard=guard)
+
     def _shutdown(self, state):
         socket, self._socket = self._socket, None
         self.state, self.session = state, None

@@ -344,7 +344,7 @@ class MockTelegramOrders:
             session.balance_stale=True
             return state
 
-    def observe(self,capture):
+    def observe(self,capture,*,stream=None,notices=()):
         """Fresh read observations only; never clear UNKNOWN or infer cancellation."""
         with self.lock:
             if (not self.armed or not self.journal or capture.profile_id!=self.profile
@@ -367,6 +367,14 @@ class MockTelegramOrders:
                             qty=chain.filled_qty
                             if payload['action']=='CANCEL':
                                 state=f'취소 접수 응답 확인 · 조회된 남은 주문 {pending}주 · 최종 취소 미확인'
+                                notice=next((n for n in reversed(notices) if n.order_no==receipt['order_no']),None)
+                                if notice is not None and stream is not None:
+                                    try:
+                                        review=stream.review_captured_cancellation(self.journal,self.ledger,payload['root_key'],
+                                                                                 notice,capture,known_orders={})
+                                        state=f'취소 알림 뒤 새 조회 대조 · {review.title} · 남은 {review.remaining_quantity}주 · 최종 취소 미확인'
+                                    except ContractError:
+                                        state=f'취소 알림 뒤 새 조회 대조 필요 · 조회된 남은 주문 {pending}주 · 최종 취소 미확인'
                             elif qty==payload['target_total'] and not pending:
                                 state='정정 계보 체결 수량 조회 일치 · 비용/결제 별도 확인'
                             else:

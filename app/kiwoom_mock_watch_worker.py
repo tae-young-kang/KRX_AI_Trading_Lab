@@ -125,7 +125,8 @@ class MockWatchWorker(QThread):
                         return
                     self.status_store.finish_refresh(report)
                     if self.orders:
-                        self.orders.observe(session._last_capture)
+                        self.orders.observe(session._last_capture,stream=session.stream,
+                                            notices=session.cancellation_notices())
                     self.verified.emit(report)
                 for text in session.poll():
                     if self.status_store:
