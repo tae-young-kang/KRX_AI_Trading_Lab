@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from app.db import ClosingConnection
 from app.trade_review import settings_snapshot, review_conditions, outcome
+from app import recommendations
 
 
 def now():
@@ -64,6 +65,7 @@ class Database:
             for column in ('entry_json', 'exit_settings_json'):
                 if column not in columns:
                     db.execute(f'ALTER TABLE paper_trades ADD COLUMN {column} TEXT')
+            recommendations.initialize(db)
 
     def log(self, kind, message):
         with self.connect() as db:
@@ -72,9 +74,11 @@ class Database:
 
     def save_scan(self, stocks, ranked, settings, market, source):
         with self.connect() as db:
+            ts = now()
             cur = db.execute('INSERT INTO scans(ts, mode, market, strategy_json,count) VALUES(?,?,?,?,?)',
-                             (now(), source, market, json.dumps(settings, ensure_ascii=False), len(stocks)))
+                             (ts, source, market, json.dumps(settings_snapshot(settings), ensure_ascii=False), len(stocks)))
             scan_id = cur.lastrowid
+            recommendations.record(db,scan_id,ranked,settings,source,ts)
             scores = {r.stock.code: r for r in ranked}
             for st in stocks:
                 result = scores[st.code]
@@ -85,6 +89,10 @@ class Database:
                      st.change_pct, st.trade_value_eok, st.vol_ratio_pct, st.cap_eok,
                      result.score, int(result.passed), result.reason, source))
         return scan_id
+
+    def recommendation_history(self, mode, limit=50):
+        with self.connect() as db:
+            return recommendations.recent(db,mode,limit)
 
     def paper_open(self, stock, qty, stop, take, max_days, fee_pct, slippage_pct, settings, max_positions):
         if stock.price <= 0 or qty < 1:
