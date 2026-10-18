@@ -1051,7 +1051,7 @@ class MainWindow(QMainWindow):
         self.mock_balance.setText(f"{report['checked_at']} 확인 · 주문에 쓸 수 있는 돈(조회값): {money}\n"
                                   f"보유 {report['held']:,}주 · 조회된 남은 주문 {report['pending']:,}주\n"
                                   '이 화면에서는 매수·매도 주문을 할 수 없어요.')
-        self.mock_listen.setEnabled(True)
+        self.mock_listen.setEnabled(not worker._start_requested.is_set())
 
     def start_mock_notices(self):
         worker = self.mock_watch_worker
@@ -1152,7 +1152,9 @@ class MainWindow(QMainWindow):
         self.condition_commands.sync(self.cfg, self.settings.save, now=datetime.now().timestamp(), busy=True)
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
-                                     watch_status=self.mock_watch_status.summary)
+                                     watch_status=self.mock_watch_status.summary,
+                                     watch_refresh=self.mock_watch_status.request_refresh,
+                                     watch_result=self.mock_watch_status.refresh_result)
         self.telegram_order_worker = worker
         worker.status.connect(self.telegram_orders_status)
         worker.finished.connect(self.telegram_orders_finished)

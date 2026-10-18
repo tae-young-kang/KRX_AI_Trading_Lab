@@ -27,7 +27,7 @@ ORDER_LABELS = {'OPEN':'접수·미체결', 'PARTIAL':'일부 체결', 'FILLED':
 
 class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
-                 conditions=None, orders_enabled=True, watch_status=None):
+                 conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -39,6 +39,7 @@ class TelegramOrderService:
         self.engine, self.user_id, self.chat_id = engine, user_id, chat_id
         self.conditions, self.orders_enabled = conditions, orders_enabled
         self.watch_status = watch_status
+        self.watch_refresh, self.watch_result = watch_refresh, watch_result
         self.broker_identity = engine.broker.identity
         self.clock = clock or (lambda: datetime.now(KST))
         if self.clock().tzinfo is None:
@@ -140,7 +141,13 @@ class TelegramOrderService:
             previous = db.execute('SELECT reply FROM tg_updates WHERE scope=? AND uid=?', (self.scope, uid)).fetchone()
             if previous:
                 return previous['reply']
-            if text in ('/프로그램상태','/모의상태') or (text == '/상태' and not self.orders_enabled):
+            if text == '/잔고':
+                reply = (self.watch_refresh() if owner['active'] and not self.orders_enabled and self.watch_refresh
+                         else '모의 잔고 조회 연결이 없거나 중지됐어요. 집 PC에서 키움 모의투자 연결을 확인해 주세요.')
+            elif text == '/잔고결과':
+                reply = (self.watch_result() if not self.orders_enabled and self.watch_result
+                         else '모의 잔고 조회 결과가 없어요.')
+            elif text in ('/프로그램상태','/모의상태') or (text == '/상태' and not self.orders_enabled):
                 reply = self.watch_status() if self.watch_status is not None else '프로그램이 켜져 있어요. 모의 알림 상태 연결은 아직 없어요. 주문은 보내지 않았어요.'
             elif text.startswith('/조건') and self.conditions is not None:
                 reply = (self.conditions.handle(text, scope=self.scope, session=self.session, uid=uid, now=now)
@@ -152,7 +159,7 @@ class TelegramOrderService:
                     db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
                     reply = '조건 변경을 중지하고 대기 중인 변경을 철회했어요.'
                 else:
-                    reply = '추천 조건·연결 상태를 확인하는 연결이에요. 주문은 할 수 없어요.\n/프로그램상태 · /조건 · /조건도움말'
+                    reply = '추천 조건·연결 상태를 확인하는 연결이에요. 주문은 할 수 없어요.\n/프로그램상태 · /잔고 · /잔고결과 · /조건 · /조건도움말'
             elif text in ('/도움말', '/start', '/help'):
                 reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
             elif text == '/상태':

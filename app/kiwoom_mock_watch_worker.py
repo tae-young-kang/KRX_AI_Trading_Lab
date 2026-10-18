@@ -76,10 +76,18 @@ class MockWatchWorker(QThread):
             session.start()
             last = None
             while not self._cancelled():
+                if self.status_store and self.status_store.take_refresh():
+                    report = session.refresh()
+                    if self._cancelled():
+                        return
+                    self.status_store.finish_refresh(report)
+                    self.verified.emit(report)
                 for text in session.poll():
                     if self.status_store:
                         self.status_store.notice(text)
                     self.notice.emit(text)
+                if self.status_store and session.state == 'RECEIVING':
+                    self.status_store.enable_refresh()
                 status = session.stream.status
                 if status != last:
                     self._status(status)

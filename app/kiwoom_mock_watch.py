@@ -65,6 +65,27 @@ class MockWatchSession:
                 or (starting and (moment-self._verified_at).total_seconds() > 120)):
             raise UncertainResponse('계좌 확인이 오래됐거나 연결이 달라졌어요. 다시 확인해 주세요.')
 
+    def refresh(self):
+        if self.state != 'RECEIVING':
+            raise ContractError('모의 알림 연결을 먼저 확인해 주세요.')
+        try:
+            self.balance_stale = True
+            self._guard()
+            capture = MockAccountReviewer(self.transport).capture(
+                expected_account=self._account, trade_date=self.transport.current_day)
+            self._guard()
+            if capture.auth_generation != self._generation or capture.profile_id != self._profile:
+                raise ValueError('context changed')
+            funds = money_view(capture.observations,{})
+            self.balance_stale = False
+            return dict(checked_at=capture.finished_at.astimezone(KST).strftime('%m/%d %H:%M:%S'),
+                order_money=funds.order_money, held=sum(r[1] for r in capture.observations.holdings),
+                pending=sum(r[3] for r in capture.observations.unfilled),
+                positions=tuple((r[0],r[1]) for r in capture.observations.holdings), ready_for_orders=False)
+        except Exception:
+            self.close()
+            raise UncertainResponse('모의 잔고를 다시 확인하지 못했어요. 연결을 다시 확인해 주세요.') from None
+
     def start(self):
         if self.state != 'VERIFIED':
             raise ContractError('먼저 모의 계좌를 확인해 주세요.')
