@@ -26,6 +26,8 @@ class MockWatchSession:
         self._stream_factory = stream_factory
         self.stream = None
         self._account = None
+        self._account_tag = None
+        self._last_capture = None
         self._generation = self._profile = None
         self._verified_at = None
         self.state = 'NEW'
@@ -45,6 +47,8 @@ class MockWatchSession:
             capture = MockAccountReviewer(self.transport).capture(expected_account=expected_account,
                                                                trade_date=self.transport.current_day)
             self._account = expected_account
+            self._account_tag = capture.observations.account_tag
+            self._last_capture = capture
             self._generation, self._profile = capture.auth_generation, capture.profile_id
             self._verified_at = capture.finished_at
             self.state, self.balance_stale = 'VERIFIED', False
@@ -78,6 +82,7 @@ class MockWatchSession:
                 raise ValueError('context changed')
             funds = money_view(capture.observations,{})
             self.balance_stale = False
+            self._last_capture = capture
             return dict(checked_at=capture.finished_at.astimezone(KST).strftime('%m/%d %H:%M:%S'),
                 order_money=funds.order_money, held=sum(r[1] for r in capture.observations.holdings),
                 pending=sum(r[3] for r in capture.observations.unfilled),
@@ -85,6 +90,18 @@ class MockWatchSession:
         except Exception:
             self.close()
             raise UncertainResponse('모의 잔고를 다시 확인하지 못했어요. 연결을 다시 확인해 주세요.') from None
+
+    def capture_for_order(self):
+        if self.state!='RECEIVING':
+            raise ContractError('모의 연결이 필요해요.')
+        self._guard()
+        capture=MockAccountReviewer(self.transport).capture(expected_account=self._account,
+                                                          trade_date=self.transport.current_day)
+        self._guard()
+        if (capture.observations.account_tag!=self._account_tag or capture.auth_generation!=self._generation
+                or capture.profile_id!=self._profile or not 0 <= (self._now()-capture.finished_at).total_seconds() <= 5):
+            raise UncertainResponse('주문 전 모의 계좌를 다시 확인해야 해요.')
+        return capture
 
     def start(self):
         if self.state != 'VERIFIED':
@@ -123,6 +140,8 @@ class MockWatchSession:
     def close(self):
         self.state, self.balance_stale = 'CLOSED', True
         self._account = None
+        self._account_tag = None
+        self._last_capture = None
         try:
             if self.stream is not None:
                 self.stream.close()

@@ -77,6 +77,9 @@
 구현한 수신 형식의 공식 참고: [Telegram Bot API getUpdates](https://core.telegram.org/bots/api#getupdates).
 # 텔레그램에서 추천 조건 확인·변경
 
+가상 연습과 별도로, PC의 당일 허용·거래일 확인을 거친 키움 모의 매수·매도 경로를 추가했습니다.
+`/모의확인`으로 확인하며 실계좌는 잠겨 있습니다. [키움 모의 주문 안내](docs/TELEGRAM_KIWOOM_MOCK_ORDERS.md)를 참고하세요.
+
 `/모의점검`은 이번 실행의 모의 연결·조회 관측과 남은 검증을 보여줍니다.
 체결 검증 완료를 뜻하지 않습니다. [모의 검증 안내](docs/KIWOOM_MOCK_VALIDATION_GUIDE.md)를 참고하세요.
 

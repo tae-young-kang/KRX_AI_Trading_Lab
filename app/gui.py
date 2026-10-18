@@ -24,7 +24,7 @@ from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
 from app.research import evaluate_research, export_report
 from app.modes import MODES, current_mode, practice_db_name, credential_names
-from app.trading_clock import PRICE_BASIS_NOTICE
+from app.trading_clock import PRICE_BASIS_NOTICE, KST
 from app.trade_review import outcome, condition_label, settings_snapshot
 from app.telegram_worker import TelegramOrderWorker
 from app.telegram_conditions import ConditionCommands
@@ -945,8 +945,8 @@ class MainWindow(QMainWindow):
         v.addWidget(limits_note)
         panel = QFrame(objectName='Panel')
         watch = QVBoxLayout(panel)
-        watch.addWidget(lbl('4. 키움 모의 계좌 확인 · 알림만 받기', 'H2'))
-        note = lbl('키움 모의투자 모드에서만 사용해요. 실제 돈·모의 주문을 새로 보내지 않아요.\n'
+        watch.addWidget(lbl('4. 키움 모의투자 연결', 'H2'))
+        note = lbl('키움 모의투자 모드에서만 사용해요. 기본은 조회·알림만 받아요. 실제 돈 주문은 잠겨 있어요.\n'
                    '처음 연결만 이 화면에서 해요. 이후 텔레그램 /프로그램상태로 확인할 수 있어요.\n'
                    '1번으로 계좌를 확인한 뒤 2분 안에 2번을 눌러야 알림을 받기 시작해요.', 'Muted')
         note.setWordWrap(True)
@@ -956,9 +956,18 @@ class MainWindow(QMainWindow):
         self.mock_account.setMaxLength(10)
         self.mock_account.setPlaceholderText('확인할 키움 모의 계좌번호 10자리 · 저장하지 않아요')
         watch.addWidget(self.mock_account)
-        self.mock_recovery = QCheckBox('오늘 텔레그램 재연결 허용 · 주문은 잠금')
+        self.mock_recovery = QCheckBox('오늘 텔레그램 재연결 허용 · 재연결 뒤 주문은 잠금')
         self.mock_recovery.setToolTip('켜면 오늘 이 프로그램에서만 복구용 모의 키·계좌를 메모리에 보관해요. 중지·종료하면 지워요.')
         watch.addWidget(self.mock_recovery)
+        self.mock_orders_allowed = QCheckBox('오늘 텔레그램 키움 모의 주문 허용 · 실제 돈 사용 안 함')
+        self.mock_day_confirmed = QCheckBox('모의 HTS에서 오늘 거래 가능한 날임을 확인했어요')
+        self.mock_orders_allowed.setToolTip('모의 시험 한도: 한 주문 10주·10만원, 하루 매수·매도 합산 3회·20만원. 끊기면 허용이 해제돼요.')
+        watch.addWidget(self.mock_orders_allowed)
+        watch.addWidget(self.mock_day_confirmed)
+        trial_note = lbl('모의 주문 시험 한도: 한 주문 10주·10만원, 하루 매수·매도 합산 3회·20만원.\n'
+                         '모의 주문은 텔레그램에서 내용을 읽고 별도로 확인해야 해요. 끊기면 주문 허용이 해제돼요.', 'Muted')
+        trial_note.setWordWrap(True)
+        watch.addWidget(trial_note)
         controls = QHBoxLayout()
         self.mock_verify = QPushButton('1. 모의 계좌 확인',objectName='Primary')
         self.mock_listen = QPushButton('2. 알림 받기 시작')
@@ -1027,9 +1036,14 @@ class MainWindow(QMainWindow):
         except ValueError as error:
             QMessageBox.information(self,'모의 계좌 확인',str(error))
             return
+        allow_orders = self.mock_orders_allowed.isChecked()
+        if allow_orders and not self.mock_day_confirmed.isChecked():
+            QMessageBox.information(self,'모의 거래일 확인','모의 HTS에서 오늘 거래 가능한 날인지 먼저 확인해 주세요.')
+            return
         self.mock_account.clear()
         worker = MockWatchWorker(data_dir()/'kiwoom_mock_watch',key,secret,account,self.mock_watch_status,
-                                 allow_recovery=self.mock_recovery.isChecked())
+                                 allow_recovery=self.mock_recovery.isChecked(),allow_orders=allow_orders,
+                                 confirmed_day=datetime.now(KST).date() if allow_orders else None)
         self.mock_watch_worker = worker
         worker.verified.connect(self.mock_account_verified)
         worker.status.connect(self.mock_status.setText)
@@ -1038,6 +1052,8 @@ class MainWindow(QMainWindow):
         self.mock_verify.setEnabled(False)
         self.mock_account.setEnabled(False)
         self.mock_recovery.setEnabled(False)
+        self.mock_orders_allowed.setEnabled(False)
+        self.mock_day_confirmed.setEnabled(False)
         self.mock_listen.setEnabled(False)
         self.mock_stop.setEnabled(True)
         self.mode_select.setEnabled(False)
@@ -1084,6 +1100,10 @@ class MainWindow(QMainWindow):
         self.mock_account.setEnabled(True)
         self.mock_recovery.setEnabled(True)
         self.mock_recovery.setChecked(False)
+        self.mock_orders_allowed.setEnabled(True)
+        self.mock_orders_allowed.setChecked(False)
+        self.mock_day_confirmed.setEnabled(True)
+        self.mock_day_confirmed.setChecked(False)
         self.mode_select.setEnabled(True)
         for name in ('kiwoom_appkey','kiwoom_secret'):
             self.secrets[name].setEnabled(self.mode_select.currentData()!='DEMO')
@@ -1163,7 +1183,9 @@ class MainWindow(QMainWindow):
                                      watch_refresh=self.mock_watch_status.request_refresh,
                                      watch_result=self.mock_watch_status.refresh_result,
                                      watch_reconnect=self.mock_watch_status.request_reconnect,
-                                     watch_validation=self.mock_watch_status.validation_summary)
+                                     watch_validation=self.mock_watch_status.validation_summary,
+                                     watch_orders=self.mock_watch_status.handle_orders,
+                                     watch_cancel_orders=self.mock_watch_status.cancel_orders)
         self.telegram_order_worker = worker
         worker.status.connect(self.telegram_orders_status)
         worker.finished.connect(self.telegram_orders_finished)

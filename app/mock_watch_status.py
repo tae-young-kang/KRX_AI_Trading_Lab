@@ -24,6 +24,21 @@ class MockWatchStatus:
         self._reconnect_available = self._reconnect_pending = False
         self._last_reconnect = None
         self._validation = MockValidationProgress(self._clock)
+        self._orders = None
+
+    def bind_orders(self, orders):
+        with self._lock:
+            self._orders = orders
+
+    def handle_orders(self, text, **context):
+        with self._lock:
+            orders = self._orders
+        return orders.handle(text,**context) if orders else '키움 모의 주문은 잠겨 있어요. 집 PC에서 당일 모의 주문 허용을 확인해 주세요.'
+
+    def cancel_orders(self, scope, session):
+        with self._lock:
+            orders = self._orders
+        if orders: orders.cancel_session(scope,session)
 
     def validation_summary(self):
         with self._lock:
@@ -103,6 +118,7 @@ class MockWatchStatus:
 
     def reset(self):
         with self._lock:
+            self._orders = None
             self._validation.record('START')
             self._reconnect_available = self._reconnect_pending = False
             self._refresh_enabled = self._refresh_pending = self._refresh_busy = False
@@ -125,6 +141,11 @@ class MockWatchStatus:
             self._validation.record('NOTICE')
             self._notice, self._stale = text, True
 
+    def order_result(self, state):
+        with self._lock:
+            self._stale = True
+            self._notice = '모의 주문 처리 결과가 있어요. /주문상태와 /잔고로 확인해 주세요.'
+
     def stopped(self):
         with self._lock:
             self._validation.record('STOP')
@@ -138,7 +159,8 @@ class MockWatchStatus:
     def summary(self):
         with self._lock:
             lines = [f'프로그램이 켜져 있어요 · {self._clock().astimezone(KST):%H:%M:%S}',
-                     '모의 연결: '+self._status, '실제 돈·키움 모의 주문: 잠금']
+                     '모의 연결: '+self._status, '실제 돈·키움 모의 주문: 잠금' if not self._orders else
+                     '실제 돈 주문: 잠금 · 키움 모의 주문 허용 여부는 /주문상태와 PC에서 확인']
             if self._balance is None:
                 lines.append('아직 확인한 모의 잔고가 없어요.')
             else:

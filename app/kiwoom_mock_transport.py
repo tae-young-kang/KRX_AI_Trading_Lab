@@ -1,4 +1,4 @@
-"""MOCK-only, single-attempt HTTP. Imported by no GUI or automatic worker.
+"""MOCK-only, single-attempt HTTP, behind explicitly started watch workers.
 
 Credentials live in memory. Mutations belong behind MockDispatchJournal;
 neither this transport nor its journal implements the offline broker protocol.
@@ -64,6 +64,7 @@ class MockTransport:
         self.profile_id = profile_id
         self._clock = clock or (lambda: datetime.now(KST))
         self.cancelled = cancelled or (lambda: False)
+        self.mutation_allowed = lambda: True  # Explicit watch workers replace this gate.
         self._monotonic = monotonic or time.monotonic
         self._pause = pause or time.sleep
         self._io_lock = threading.Lock()
@@ -88,6 +89,10 @@ class MockTransport:
                 self._last_request = self._monotonic()
                 if self.cancelled():
                     raise ValueError
+                if path.endswith('/ordr') and not self.mutation_allowed():
+                    raise ValueError
+                if path.endswith('/ordr'):
+                    self.ready()
                 response = self._session.post('https://mockapi.kiwoom.com' + path,
                     headers=headers, json=body, timeout=(3, 10), allow_redirects=False)
             if response.status_code != 200:

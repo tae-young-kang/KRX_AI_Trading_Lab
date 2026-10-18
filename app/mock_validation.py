@@ -33,7 +33,7 @@ class MockValidationProgress:
 
     def summary(self):
         lines = ['[모의 연결 점검 · 현재 실행의 관측]',
-                 '실제 돈·키움 모의 주문 실행은 잠겨 있어요.',
+                 '실제 돈 주문은 잠겨 있어요. 키움 모의 주문은 PC의 별도 당일 허용이 필요해요.',
                  '계좌·잔고 조회: '+('관측됨' if self.account else '아직 관측 없음'),
                  '알림 등록: '+('관측됨' if self.stream else '연결 전 또는 종료'),
                  f'이번 연결의 새 잔고 조회 {self.refreshes}회 · 주문 처리 알림 {self.notices}회',

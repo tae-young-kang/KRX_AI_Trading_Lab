@@ -1,7 +1,7 @@
 """Durable MOCK dispatch receipts, not an executable account/order engine.
 
 UNKNOWN has no automatic clearing/retry path. An ACK never claims a fill or a
-completed cancellation. Network integration in the UI remains disabled.
+completed cancellation. Daily opt-in mock execution uses a separate queue.
 """
 import json
 from pathlib import Path

@@ -28,7 +28,7 @@ ORDER_LABELS = {'OPEN':'접수·미체결', 'PARTIAL':'일부 체결', 'FILLED':
 class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
-                 watch_reconnect=None, watch_validation=None):
+                 watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -43,6 +43,7 @@ class TelegramOrderService:
         self.watch_refresh, self.watch_result = watch_refresh, watch_result
         self.watch_reconnect = watch_reconnect
         self.watch_validation = watch_validation
+        self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
         self.broker_identity = engine.broker.identity
         self.clock = clock or (lambda: datetime.now(KST))
         if self.clock().tzinfo is None:
@@ -69,8 +70,12 @@ class TelegramOrderService:
             # created since startup. Telegram IDs can reset after a long idle.
             db.execute('INSERT INTO tg_sessions VALUES(?,?,1,NULL) ON CONFLICT(scope) DO UPDATE SET session=excluded.session,active=1,cursor=NULL',
                        (self.scope, self.session))
+        if self.watch_cancel_orders:
+            self.watch_cancel_orders(self.scope,None)
 
     def stop(self):
+        if self.watch_cancel_orders:
+            self.watch_cancel_orders(self.scope,self.session)
         if self.conditions is not None:
             self.conditions.cancel_session(self.scope, self.session)
         with connect(self.path) as db:
@@ -144,7 +149,11 @@ class TelegramOrderService:
             previous = db.execute('SELECT reply FROM tg_updates WHERE scope=? AND uid=?', (self.scope, uid)).fetchone()
             if previous:
                 return previous['reply']
-            if text == '/모의점검':
+            mock_command = text.split(' ',1)[0] in ('/매수','/매도','/모의확인','/모의철회','/주문상태')
+            if not self.orders_enabled and mock_command:
+                reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
+                         if self.watch_orders and (owner['active'] or text=='/주문상태') else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')
+            elif text == '/모의점검':
                 reply = (self.watch_validation() if not self.orders_enabled and self.watch_validation
                          else '모의 연결 점검이 없어요. 집 PC에서 키움 모의투자 모드를 확인해 주세요.')
             elif text == '/모의재연결':
@@ -163,12 +172,14 @@ class TelegramOrderService:
                          if owner['active'] or text in ('/조건','/조건도움말') else '조건 변경을 중지했어요. 프로그램에서 수신을 다시 시작해 주세요.')
             elif not self.orders_enabled:
                 if text == '/중지':
+                    if self.watch_cancel_orders:
+                        self.watch_cancel_orders(self.scope,self.session)
                     if self.conditions is not None:
                         self.conditions.cancel_session(self.scope, self.session)
                     db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
-                    reply = '조건 변경을 중지하고 대기 중인 변경을 철회했어요.'
+                    reply = '조건 변경·새 모의 주문 요청을 중지하고 대기 중인 변경·모의 주문 확인을 철회했어요. 이미 전송한 주문을 취소한 것은 아니에요.'
                 else:
-                    reply = '추천 조건·연결 상태를 확인하는 연결이에요. 주문은 할 수 없어요.\n/프로그램상태 · /모의점검 · /잔고 · /잔고결과 · /모의재연결 · /조건 · /조건도움말'
+                    reply = '실제 돈 주문은 잠겨 있어요. 키움 모의 주문은 PC의 당일 허용과 별도 확인이 필요해요.\n/프로그램상태 · /모의점검 · /잔고 · /잔고결과 · /모의재연결 · /주문상태 · /조건 · /조건도움말'
             elif text in ('/도움말', '/start', '/help'):
                 reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
             elif text == '/상태':
