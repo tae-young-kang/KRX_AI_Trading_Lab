@@ -253,10 +253,6 @@ class MockTelegramOrders:
         return amend_plan(payload['code'],receipt['order_no'],remaining_quantity=quantity,limit_price=payload['limit_price'])
 
     def handle(self,text,*,scope,session,uid,now):
-        if text.split(' ',1)[0] in ('/주문목록','/미체결'):
-            from app.mock_order_views import render
-            with self.lock:
-                return render(self,text,scope,now)
         if text=='/긴급중지':
             self.armed=False
             return self.emergency.stop()
@@ -265,6 +261,20 @@ class MockTelegramOrders:
             with connect(self.path) as db:
                 db.execute('BEGIN')
                 return mock_order_safety.summary(db,armed=self.armed,open_now=self._open(),day=self.day,now=self.clock())
+        # Never hold Telegram's single receiver behind a long broker preflight.
+        # A busy reply is final for this update: no deferred/automatic execution.
+        if not self.lock.acquire(timeout=0.1):
+            return ('모의 조회 또는 주문을 처리 중이에요. 이번 명령은 처리하지 않았고 자동 실행하지 않아요.\n'
+                    '/주문점검으로 상태를 확인해 주세요. 긴급히 새 전송을 막으려면 /긴급중지를 보내 주세요.')
+        try:
+            return self._handle_ready(text,scope=scope,session=session,uid=uid,now=now)
+        finally:
+            self.lock.release()
+
+    def _handle_ready(self,text,*,scope,session,uid,now):
+        if text.split(' ',1)[0] in ('/주문목록','/미체결'):
+            from app.mock_order_views import render
+            return render(self,text,scope,now)
         if text=='/모의재개' or text.startswith('/모의재개확인'):
             with self.lock:
                 return self._resume(text,scope,session)
