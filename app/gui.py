@@ -703,6 +703,9 @@ class MainWindow(QMainWindow):
         recommendation_cached = QPushButton('저장된 일별 시세로 추천 성적 계산하기 (고급)')
         recommendation_cached.clicked.connect(self.evaluate_cached_recommendations)
         v.addWidget(recommendation_cached)
+        recommendation_repeat = QPushButton('저장한 거래일로 추천 성적 다시 계산하기 (고급)')
+        recommendation_repeat.clicked.connect(self.repeat_cached_recommendations)
+        v.addWidget(recommendation_repeat)
         theme_prepare=QPushButton('테마1 · 저장 시세와 확인한 거래일로 판정하기 (고급)')
         theme_prepare.clicked.connect(self.prepare_theme_one)
         v.addWidget(theme_prepare)
@@ -866,6 +869,19 @@ class MainWindow(QMainWindow):
                 f"자료 확인 완료일 {result['available_through']}\n"
                 '빠진 가격은 자료 없음으로 표시해요. /추천성적 에서 확인하세요.\n실제 거래 수익률이 아니에요.'),
             '저장 시세 추천 평가 완료')
+
+    def repeat_cached_recommendations(self):
+        if self.work is not None and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 평가해 주세요.')
+            return
+        from app.recommendation_cache import evaluate_saved
+        db,history,mode=self.db,self.history,current_mode(self.cfg).key
+        self.run_task(lambda:evaluate_saved(db,history,mode),
+            lambda result:QMessageBox.information(self,'저장한 거래일로 다시 평가',
+                f"추천 {result['recommendations']}개 대조 · 새 평가 {result['added']}개\n"
+                f"확인한 기간 끝 {result['available_through']} · 이후 날짜는 자동으로 늘리지 않아요.\n"
+                '/추천성적 에서 확인하세요. 실제 거래 수익률이 아니에요.'),
+            '저장한 거래일 추천 평가 완료')
 
     def run_research(self):
         source=self.research_source.currentText()

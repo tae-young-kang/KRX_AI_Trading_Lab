@@ -14,6 +14,8 @@ from app.recommendation_overview import SOURCES, CALENDARS, change_label, price_
 
 def initialize(db):
     db.executescript('''
+        CREATE TABLE IF NOT EXISTS recommendation_selections (
+            mode TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS recommendation_batches (
             scan_id INTEGER PRIMARY KEY, created_at TEXT NOT NULL,
             mode TEXT NOT NULL, source TEXT NOT NULL, conditions_json TEXT NOT NULL,

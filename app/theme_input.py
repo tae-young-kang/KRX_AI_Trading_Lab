@@ -9,6 +9,10 @@ from app.trading_clock import KST
 def load_selection(path, mode, *, today=None, minimum_sessions=7):
     with open(path,'rb') as stream:
         raw=stream.read(100001)
+    return parse_selection(raw,mode,today=today,minimum_sessions=minimum_sessions)
+
+
+def parse_selection(raw, mode, *, today=None, minimum_sessions=7):
     try:
         if len(raw)>100000:
             raise ValueError()
