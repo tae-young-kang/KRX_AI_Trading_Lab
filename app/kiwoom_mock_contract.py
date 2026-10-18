@@ -4,6 +4,7 @@ An acknowledgement is NOT a BrokerOrder/fill. The offline engine deliberately
 cannot accept this module as a broker. See docs/KIWOOM_MOCK_PREPARATION.md.
 """
 import re
+from datetime import date
 from dataclasses import dataclass
 
 from app.order_engine import OrderRequest, OrderError
@@ -95,14 +96,23 @@ def cancel_plan(code, original_order_no, *, remaining_quantity=0):
     ))
 
 
-def query_plan(kind):
+def query_plan(kind, *, trade_date=None):
     choices = {
         'unfilled': ('ka10075', {'all_stk_tp': '0', 'trde_tp': '0', 'stk_cd': '', 'stex_tp': '1'}),
         # ord_no is a historical cursor, NOT an exact order-number filter.
         'fills': ('ka10076', {'stk_cd': '', 'qry_tp': '0', 'sell_tp': '0', 'ord_no': '', 'stex_tp': '1'}),
         'holdings': ('kt00018', {'qry_tp': '2', 'dmst_stex_tp': 'KRX'}),
         'deposit': ('kt00001', {'qry_tp': '2'}),
+        'identity': ('ka00001', {}),
     }
+    if kind == 'executions':
+        if type(trade_date) is not date:
+            raise ContractError('체결 조회 날짜가 필요합니다.')
+        return MockPlan('kt00009', tuple(dict(ord_dt=trade_date.strftime('%Y%m%d'),
+            stk_bond_tp='1', mrkt_tp='0', sell_tp='0', qry_tp='1', stk_cd='',
+            fr_ord_no='', dmst_stex_tp='KRX').items()))
+    if trade_date is not None:
+        raise ContractError('이 조회에는 날짜를 지정할 수 없습니다.')
     if kind not in choices:
         raise ContractError('지원하지 않는 조회입니다.')
     api_id, body = choices[kind]
@@ -143,7 +153,9 @@ def query_page(kind, payload, headers):
     keys = {'unfilled': ('oso', ('ord_no', 'orig_ord_no', 'stk_cd', 'ord_qty', 'oso_qty')),
             'fills': ('cntr', ('ord_no', 'orig_ord_no', 'stk_cd', 'cntr_qty', 'cntr_pric',
                                'tdy_trde_cmsn', 'tdy_trde_tax')),
-            'holdings': ('acnt_evlt_remn_indv_tot', ('stk_cd', 'rmnd_qty', 'trde_able_qty'))}
+            'holdings': ('acnt_evlt_remn_indv_tot', ('stk_cd', 'rmnd_qty', 'trde_able_qty')),
+            'executions': ('acnt_ord_cntr_prst_array', ('ord_no', 'orig_ord_no', 'cntr_no',
+                'stk_cd', 'io_tp_nm', 'cntr_qty', 'cntr_uv', 'dmst_stex_tp'))}
     if kind not in keys:
         raise ContractError('지원하지 않는 목록입니다.')
     _success(payload)

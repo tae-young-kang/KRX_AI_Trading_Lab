@@ -7,6 +7,7 @@ from datetime import datetime
 import re
 import threading
 import time
+import uuid
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -36,8 +37,12 @@ def validated_plan(plan):
             canonical = cancel_plan(body['stk_cd'], body['orig_ord_no'],
                 remaining_quantity=int(body['cncl_qty']))
         else:
-            canonical = next(query_plan(kind) for kind in
-                ('unfilled', 'fills', 'holdings', 'deposit') if query_plan(kind).api_id == plan.api_id)
+            if plan.api_id == 'kt00009':
+                day = datetime.strptime(body['ord_dt'], '%Y%m%d').date()
+                canonical = query_plan('executions', trade_date=day)
+            else:
+                canonical = next(query_plan(kind) for kind in
+                    ('unfilled', 'fills', 'holdings', 'deposit', 'identity') if query_plan(kind).api_id == plan.api_id)
         if (len(plan.fields) != len(body) or body != canonical.body()
                 or any(type(k) is not str or type(v) is not str for k, v in plan.fields)):
             raise ValueError
@@ -68,6 +73,7 @@ class MockTransport:
             self._session.mount('https://', HTTPAdapter(max_retries=0))
         self._token = None
         self._expires = None
+        self._auth_generation = uuid.uuid4().hex
 
     def _post(self, path, headers, body):
         try:
@@ -91,6 +97,7 @@ class MockTransport:
         return payload, headers
 
     def login(self, appkey, secretkey):
+        self._auth_generation = uuid.uuid4().hex
         self._token = self._expires = None
         if any(not isinstance(value, str) or not value.strip() for value in (appkey, secretkey)):
             raise ContractError('모의 인증정보를 확인하세요.')
@@ -132,12 +139,23 @@ class MockTransport:
             raise UncertainResponse('모의 응답 종류가 일치하지 않습니다.')
         return payload, response_headers
 
-    def read_all(self, kind, *, max_pages=100):
-        if kind not in ('unfilled', 'fills', 'holdings') or type(max_pages) is not int or max_pages < 1:
+    @property
+    def auth_generation(self):
+        return self._auth_generation
+
+    @property
+    def current_day(self):
+        moment = self._clock()
+        if moment.tzinfo is None or moment.utcoffset() is None:
+            raise ContractError('한국 날짜를 확인할 수 없습니다.')
+        return moment.astimezone(KST).date()
+
+    def read_all(self, kind, *, max_pages=100, trade_date=None):
+        if kind not in ('unfilled', 'fills', 'holdings', 'executions') or type(max_pages) is not int or max_pages < 1:
             raise ContractError('조회 범위를 확인하세요.')
         rows, cursor, seen = [], None, set()
         for _ in range(max_pages):
-            payload, headers = self.exchange(query_plan(kind), cursor=cursor)
+            payload, headers = self.exchange(query_plan(kind, trade_date=trade_date), cursor=cursor)
             page, cursor = query_page(kind, payload, headers)
             rows.extend(page)
             if cursor is None:
@@ -148,5 +166,6 @@ class MockTransport:
         raise UncertainResponse('전체 페이지를 확인하지 못했습니다. 잔고 대조를 중단하세요.')
 
     def close(self):
+        self._auth_generation = uuid.uuid4().hex
         self._token = self._expires = None
         self._session.close()
