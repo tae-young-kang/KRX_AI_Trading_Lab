@@ -149,10 +149,10 @@ class TelegramOrderService:
             previous = db.execute('SELECT reply FROM tg_updates WHERE scope=? AND uid=?', (self.scope, uid)).fetchone()
             if previous:
                 return previous['reply']
-            mock_command = text.split(' ',1)[0] in ('/매수','/매도','/정정','/취소','/모의확인','/모의철회','/주문상태')
+            mock_command = text.split(' ',1)[0] in ('/매수','/매도','/정정','/취소','/모의확인','/모의철회','/주문상태','/주문점검')
             if not self.orders_enabled and mock_command:
                 reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
-                         if self.watch_orders and (owner['active'] or text=='/주문상태') else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')
+                         if self.watch_orders and (owner['active'] or text in ('/주문상태','/주문점검')) else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')
             elif text == '/모의점검':
                 reply = (self.watch_validation() if not self.orders_enabled and self.watch_validation
                          else '모의 연결 점검이 없어요. 집 PC에서 키움 모의투자 모드를 확인해 주세요.')
@@ -179,7 +179,7 @@ class TelegramOrderService:
                     db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
                     reply = '조건 변경·새 모의 주문 요청을 중지하고 대기 중인 변경·모의 주문 확인을 철회했어요. 이미 전송한 주문을 취소한 것은 아니에요.'
                 else:
-                    reply = '실제 돈 주문은 잠겨 있어요. 키움 모의 주문은 PC의 당일 허용과 별도 확인이 필요해요.\n/프로그램상태 · /모의점검 · /잔고 · /잔고결과 · /모의재연결 · /주문상태 · /조건 · /조건도움말'
+                    reply = '실제 돈 주문은 잠겨 있어요. 키움 모의 주문은 PC의 당일 허용과 별도 확인이 필요해요.\n/프로그램상태 · /모의점검 · /잔고 · /잔고결과 · /모의재연결 · /주문상태 · /주문점검 · /조건 · /조건도움말'
             elif text in ('/도움말', '/start', '/help'):
                 reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
             elif text == '/상태':

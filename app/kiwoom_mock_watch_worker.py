@@ -117,8 +117,12 @@ class MockWatchWorker(QThread):
                 if self.orders and order_armed:
                     result = self.orders.process(session)
                     if result:
-                        if self.status_store: self.status_store.order_result(result)
-                        self.notice.emit('모의 주문 처리 결과가 있어요. 텔레그램 /주문상태와 /잔고로 확인해 주세요.')
+                        if self.orders.needs_review:
+                            if self.status_store: self.status_store.order_warning()
+                            self.notice.emit('모의 기록 충돌로 주문을 차단했어요. 텔레그램 /주문점검으로 확인해 주세요.')
+                        else:
+                            if self.status_store: self.status_store.order_result(result)
+                            self.notice.emit('모의 주문 처리 결과가 있어요. 텔레그램 /주문상태와 /잔고로 확인해 주세요.')
                 if self.status_store and self.status_store.take_refresh():
                     report = session.refresh()
                     if self._cancelled():
@@ -127,6 +131,9 @@ class MockWatchWorker(QThread):
                     if self.orders:
                         self.orders.observe(session._last_capture,stream=session.stream,
                                             notices=session.cancellation_notices())
+                        if self.orders.needs_review:
+                            self.status_store.order_warning()
+                            self.notice.emit('모의 기록 충돌로 주문을 차단했어요. 텔레그램 /주문점검으로 확인해 주세요.')
                     self.verified.emit(report)
                 for text in session.poll():
                     if self.status_store:

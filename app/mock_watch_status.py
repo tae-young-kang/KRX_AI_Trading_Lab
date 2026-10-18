@@ -146,6 +146,11 @@ class MockWatchStatus:
             self._stale = True
             self._notice = '모의 주문 처리 결과가 있어요. /주문상태와 /잔고로 확인해 주세요.'
 
+    def order_warning(self):
+        with self._lock:
+            self._stale = True
+            self._notice = '모의 기록 충돌로 주문을 차단했어요. /주문점검으로 이유를 확인해 주세요.'
+
     def stopped(self):
         with self._lock:
             self._validation.record('STOP')

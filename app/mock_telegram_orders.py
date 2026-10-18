@@ -17,6 +17,7 @@ from app.kiwoom_mock_review import order_number
 from app.kiwoom_mock_status import money_view
 from app.runtime_lock import ReceiverLock
 from app.trading_clock import KST, TradingCalendar
+from app import mock_order_safety
 
 
 class MockTelegramOrders:
@@ -51,6 +52,21 @@ class MockTelegramOrders:
                 db.execute("UPDATE intents SET state='UNKNOWN' WHERE state='CLAIMED'")
                 db.execute("UPDATE intents SET state='CANCELED' WHERE state IN ('WAITING','QUEUED')")
                 db.execute('CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY,state TEXT,filled INTEGER,quantity INTEGER,checked_at TEXT)')
+                mock_order_safety.initialize(db)
+                self._latched=mock_order_safety.load(db) is not None
+
+    @property
+    def needs_review(self):
+        return self._latched
+
+    def _latch(self,reason,db=None):
+        self._latched=True
+        self.armed=False
+        if db is not None:
+            mock_order_safety.latch(db,reason,self.clock())
+        else:
+            with connect(self.path) as record:
+                mock_order_safety.latch(record,reason,self.clock())
 
     def _open(self):
         now = self.clock().astimezone(KST)
@@ -70,11 +86,11 @@ class MockTelegramOrders:
             self.account_tag = session._account_tag
             self.ledger = MockFillLedger(self.root/'fills.db',account_tag=self.account_tag)
             self._capture = None
-            self.armed = True
+            self.armed = not self._latched
             session.transport.mutation_allowed = self.can_dispatch
 
     def can_dispatch(self):
-        if not self.armed or not self._sending or not self._open(): return False
+        if self._latched or not self.armed or not self._sending or not self._open(): return False
         scope,session,expires,captured=self._sending
         now=self.clock().timestamp()
         return captured<=now<=expires and now-captured<=5 and not self._canceled(scope,session)
@@ -155,6 +171,10 @@ class MockTelegramOrders:
                 return True
         return False
 
+    def _observation_pending(self,db):
+        return db.execute('SELECT 1 FROM observation_blocks b JOIN intents i ON i.id=b.id WHERE i.day=?',
+                          (self.day.isoformat(),)).fetchone() is not None
+
     def _preview_action(self,text,db,scope,session,uid,now):
         match=re.fullmatch(r'/정정 ([0-9]{1,7}) ([1-9][0-9]?) ([1-9][0-9,]{0,9})',text)
         cancel=re.fullmatch(r'/취소 ([0-9]{1,7})',text)
@@ -162,6 +182,8 @@ class MockTelegramOrders:
             return '정정: /정정 주문번호 남길잔량 지정가\n취소: /취소 주문번호\n먼저 /잔고 조회 후 /주문상태에서 최신 주문번호를 확인해 주세요.'
         if match and self._unresolved_cancel(db):
             return '취소 접수 뒤 최종 상태 대조가 남아 있어 새 주문·정정을 차단했어요. 모의 HTS/MTS에서 확인해 주세요.'
+        if match and self._observation_pending(db):
+            return '새 조회 대조가 필요해 새 주문·정정을 차단했어요. /주문점검을 확인해 주세요.'
         if db.execute("SELECT 1 FROM intents WHERE state IN ('UNKNOWN','CLAIMED','WAITING','QUEUED')").fetchone():
             return '미확인 또는 대기 중인 모의 요청이 있어요. /주문상태를 확인해 주세요.'
         if db.execute('SELECT 1 FROM intents WHERE scope=? AND session=? AND uid=?',(scope,session,uid)).fetchone():
@@ -226,6 +248,11 @@ class MockTelegramOrders:
         return amend_plan(payload['code'],receipt['order_no'],remaining_quantity=quantity,limit_price=payload['limit_price'])
 
     def handle(self,text,*,scope,session,uid,now):
+        if text=='/주문점검':
+            # No owner lock or broker IO: remains responsive during a long query.
+            with connect(self.path) as db:
+                db.execute('BEGIN')
+                return mock_order_safety.summary(db,armed=self.armed,open_now=self._open(),day=self.day,now=self.clock())
         with self.lock, connect(self.path) as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute("UPDATE intents SET state='EXPIRED' WHERE state IN ('WAITING','QUEUED') AND expires<?",(now,))
@@ -247,7 +274,10 @@ class MockTelegramOrders:
                     seen=db.execute('SELECT * FROM observations WHERE id=?',(row['id'],)).fetchone()
                     if seen: detail+=f"\n{seen['checked_at']} 조회: {seen['state']} · 체결 {seen['filled']}/{seen['quantity']}주"
                 gate='오늘 모의 주문 허용 중' if self.armed and self._open() else '새 모의 주문 잠금'
+                if self._latched: gate='기록 충돌로 새 모의 주문 차단 · /주문점검으로 이유 확인'
                 return '[키움 모의투자 · 실제 돈 사용 안 함]\n'+gate+'\n'+(labels[row['state']] if row else '주문 기록 없음')+detail+'\n/잔고: 잔고·주문 상태 재조회 · 접수는 체결 완료가 아니에요.'
+            if self._latched:
+                return '모의 기록 충돌로 주문을 차단했어요. /주문점검으로 이유를 확인해 주세요.'
             if not self.armed or not self._open() or self._canceled(scope,session):
                 return '키움 모의 주문이 잠겨 있거나 거래 가능 시간이 아니에요. 집 PC에서 오늘의 모의 주문 허용을 확인해 주세요.'
             token=re.fullmatch(r'/(모의확인|모의철회) ([A-Za-z0-9_-]{20,32})',text)
@@ -272,6 +302,8 @@ class MockTelegramOrders:
                 return '모의 시험 한도는 한 주문 10주·10만원이에요.'
             if self._unresolved_cancel(db):
                 return '취소 접수 뒤 최종 상태 대조가 남아 있어 새 주문·정정을 차단했어요. 모의 HTS/MTS에서 확인해 주세요.'
+            if self._observation_pending(db):
+                return '새 조회 대조가 필요해 새 주문·정정을 차단했어요. /주문점검을 확인해 주세요.'
             if db.execute("SELECT 1 FROM intents WHERE state IN ('UNKNOWN','CLAIMED')").fetchone():
                 return '미확인 주문이 있어 새 모의 주문을 차단했어요. 재주문하지 말고 확인해 주세요.'
             if db.execute("SELECT 1 FROM intents WHERE state IN ('WAITING','QUEUED')").fetchone():
@@ -308,10 +340,19 @@ class MockTelegramOrders:
                     raise ContractError('모의 연결 변경')
                 if session.poll(): raise ContractError('새 알림 뒤 잔고 확인 필요')
                 capture=session.capture_for_order()
+                with connect(self.path) as db:
+                    has_receipts=db.execute("SELECT 1 FROM intents WHERE state='ACKNOWLEDGED' AND day=?",(self.day.isoformat(),)).fetchone()
+                if self._capture is not None or has_receipts:
+                    self.observe(capture)
+                    if self._latched: raise ContractError('기록 충돌 차단')
                 payload=json.loads(row['payload'])
                 request=self._request(payload)
                 observed=capture.observations
                 action=payload.get('action','NEW')
+                if action!='CANCEL':
+                    with connect(self.path) as db:
+                        if self._observation_pending(db):
+                            raise ContractError('새 조회 대조가 필요해요.')
                 if action!='NEW':
                     plan=self._followup_plan(payload,capture,row['scope'])
                 elif observed.unfilled:
@@ -347,19 +388,28 @@ class MockTelegramOrders:
     def observe(self,capture,*,stream=None,notices=()):
         """Fresh read observations only; never clear UNKNOWN or infer cancellation."""
         with self.lock:
-            if (not self.armed or not self.journal or capture.profile_id!=self.profile
-                    or capture.auth_generation!=self.generation or capture.observations.account_tag!=self.account_tag
-                    or capture.observations.day!=self.day):
+            if not self.journal or not self.ledger:
                 return
-            self.ledger.ingest(capture.observations)
+            if (capture.profile_id!=self.profile or capture.auth_generation!=self.generation
+                    or capture.observations.account_tag!=self.account_tag or capture.observations.day!=self.day):
+                self._latch('CONTEXT_CONFLICT')
+                return
+            try:
+                self.ledger.ingest(capture.observations)
+            except ContractError:
+                self._latch('LEDGER_CONFLICT')
+                return
             self._capture=capture
             with connect(self.path) as db:
                 rows=db.execute("SELECT * FROM intents WHERE state='ACKNOWLEDGED' AND day=?",(self.day.isoformat(),)).fetchall()
+                superseded={json.loads(x['payload']).get('parent_key') for x in rows}
                 for row in rows:
                     receipt=self.journal.get(row['id'])
                     if not receipt or receipt['state']!='ACKNOWLEDGED': continue
                     payload=json.loads(row['payload'])
                     req=self._request(payload)
+                    if row['id'] in superseded:
+                        db.execute('DELETE FROM observation_blocks WHERE id=?',(row['id'],))
                     if payload.get('action') in ('AMEND','CANCEL'):
                         try:
                             chain=project_chain(self.journal,self.ledger,payload['root_key'])
@@ -379,9 +429,21 @@ class MockTelegramOrders:
                                 state='정정 계보 체결 수량 조회 일치 · 비용/결제 별도 확인'
                             else:
                                 state=f'정정 접수 응답 확인 · 조회된 남은 주문 {pending}주 · 최종 상태 별도 확인'
+                            if payload['action']=='AMEND' and row['id'] not in superseded:
+                                if qty+pending>payload['target_total']:
+                                    self._latch('ORDER_CONFLICT',db)
+                                pending_rows=[x for x in capture.observations.unfilled if x[0] in chain.order_nos]
+                                valid_pending=(not pending_rows or (len(pending_rows)==1 and
+                                    pending_rows[0][0]==receipt['order_no'] and pending_rows[0][1]==req.code and
+                                    pending_rows[0][2]==req.quantity))
+                                if qty+pending==payload['target_total'] and valid_pending:
+                                    db.execute('DELETE FROM observation_blocks WHERE id=?',(row['id'],))
+                                else:
+                                    db.execute('INSERT OR IGNORE INTO observation_blocks VALUES (?)',(row['id'],))
                         except ContractError:
                             qty=0
                             state='정정·취소 계보 대조 필요 · 최종 상태 미확인'
+                            self._latch('CHAIN_CONFLICT',db)
                         db.execute('INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?)',
                             (row['id'],state,qty,payload['target_total'],capture.finished_at.astimezone(KST).strftime('%m/%d %H:%M:%S')))
                         continue
@@ -391,6 +453,13 @@ class MockTelegramOrders:
                     valid=all(x.code==req.code and x.side==req.side for x in fills)
                     valid=valid and all(x[1]==req.code and x[2]==req.quantity for x in pending)
                     remaining=sum(x[3] for x in pending)
+                    if not valid or qty>req.quantity or qty+remaining>req.quantity:
+                        self._latch('ORDER_CONFLICT',db)
+                    if row['id'] not in superseded:
+                        if valid and qty+remaining==req.quantity:
+                            db.execute('DELETE FROM observation_blocks WHERE id=?',(row['id'],))
+                        else:
+                            db.execute('INSERT OR IGNORE INTO observation_blocks VALUES (?)',(row['id'],))
                     state='최종 상태 미확인 · 별도 확인 필요'
                     if valid and 0<=qty<=req.quantity:
                         if qty==req.quantity and not pending: state='체결 수량 조회 일치 · 비용/결제 별도 확인'
