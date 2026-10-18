@@ -60,3 +60,22 @@ def test_snapshot_and_completion_marker_roll_back_together_on_storage_failure(tm
     assert history.load_bars('KRX')[0].close==100
     with history.connect() as db:
         assert tuple(db.execute('SELECT * FROM fetched_days').fetchone())==before
+
+
+@pytest.mark.parametrize('patch',[
+    {'high':99},{'low':101},{'open':float('inf')},{'volume':-1},
+    {'trade_value_eok':-1},{'cap_eok':float('nan')},{'date':'20261019'},
+    {'name':''},{'code':'bad-code'}])
+def test_bad_cache_batches_preserve_previous_rows(tmp_path,patch):
+    from dataclasses import replace
+    history=HistoryStore(tmp_path/'history.db');day='2026-10-19'
+    history.insert_bars([bar(day)],'CSV_USER')
+    before=history.load_bars('CSV_USER')
+    with pytest.raises(ValueError): history.insert_bars([bar(day),replace(bar(day,'900002'),**patch)],'CSV_USER')
+    assert history.load_bars('CSV_USER')==before
+
+
+def test_duplicate_write_batch_is_not_silently_last_row_wins(tmp_path):
+    history=HistoryStore(tmp_path/'history.db');day='2026-10-19'
+    with pytest.raises(ValueError): history.insert_bars([bar(day),bar(day,price=110)],'CSV_USER')
+    assert history.load_bars('CSV_USER')==[]

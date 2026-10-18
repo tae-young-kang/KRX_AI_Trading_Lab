@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -14,9 +15,36 @@ from urllib.request import Request, urlopen
 from app.backtest import Bar, load_ohlcv_csv
 from app.db import ClosingConnection
 from app.trading_clock import KST
+from app.recommendation_outcomes import session_day
 
 API_ROOT = 'https://data-dbg.krx.co.kr/svc/apis/sto/'
 ENDPOINTS = {'KOSPI': 'stk_bydd_trd', 'KOSDAQ': 'ksq_bydd_trd'}
+
+
+def validate_bars(bars):
+    """Reject a malformed write batch before touching an existing cache snapshot."""
+    rows=list(bars)
+    seen=set()
+    try:
+        for row in rows:
+            session_day(row.date)
+            key=(row.date,row.market,row.code)
+            if (not isinstance(row.code,str) or not re.fullmatch(r'[A-Za-z0-9]{6}',row.code)
+                    or row.market not in ENDPOINTS or key in seen
+                    or not isinstance(row.name,str) or not 1<=len(row.name)<=100):
+                raise ValueError()
+            values=(row.open,row.high,row.low,row.close,row.volume)
+            if (not all(type(v) in (int,float) and math.isfinite(v) for v in values)
+                    or min(values[:4])<=0 or row.volume<0
+                    or row.low>min(row.open,row.close) or row.high<max(row.open,row.close)):
+                raise ValueError()
+            for value in (row.trade_value_eok,row.cap_eok):
+                if value is not None and (type(value) not in (int,float) or not math.isfinite(value) or value<0):
+                    raise ValueError()
+            seen.add(key)
+    except (AttributeError,TypeError,ValueError,OverflowError):
+        raise ValueError('일별 자료의 날짜·시장·중복 종목·가격·거래대금을 확인해 주세요. 기존 자료는 바꾸지 않았어요.') from None
+    return rows
 
 
 def num(value):
@@ -122,6 +150,7 @@ class HistoryStore:
             ''')
 
     def insert_bars(self,bars,source):
+        bars=validate_bars(bars)
         ts=datetime.now().isoformat(timespec='seconds')
         with self.connect() as db:
             db.executemany('''INSERT OR REPLACE INTO daily_bars
@@ -179,9 +208,11 @@ class HistoryStore:
                     if (market,key) in done:
                         continue
                     rows=client.fetch_day(market,key)
-                    if (not isinstance(rows,(list,tuple)) or any(b.date!=key or b.market!=market for b in rows)
-                            or len({b.code for b in rows})!=len(rows)):
+                    if not isinstance(rows,(list,tuple)):
                         raise ValueError('KRX 응답의 날짜·시장·중복 종목을 확인해야 합니다.')
+                    rows=validate_bars(rows)
+                    if any(b.date!=key or b.market!=market for b in rows):
+                        raise ValueError('KRX 응답의 날짜·시장을 확인해야 합니다.')
                     if rows:
                         ts=moment.astimezone(KST).isoformat(timespec='seconds')
                         with self.connect() as db:
