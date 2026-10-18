@@ -216,11 +216,13 @@ class TelegramOrderService:
                 else:
                     reply=(self.practice_sales(None,int(listing[1] or 1)) if listing else
                            self.practice_sales(int(match[1]) if match[1] else None,int(match[2] or 1)))
-            elif text in ('/추천검색', '/검색상태'):
+            elif text in ('/추천검색', '/검색상태', '/검색취소'):
                 if not self.recommendation_request:
                     reply = '추천 검색 연결이 없어요. 집 PC에서 수신을 다시 시작해 주세요.'
                 elif text == '/검색상태':
                     reply = self.recommendation_request.summary()
+                elif text == '/검색취소':
+                    reply = self.recommendation_request.cancel()
                 elif not owner['active']:
                     reply = '새 검색 요청을 중지했어요. 집 PC에서 수신을 다시 시작해 주세요.'
                 else:
@@ -285,6 +287,7 @@ class TelegramOrderService:
             elif text in ('/도움말', '/start', '/help'):
                 reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
                 reply += '\n/추천검색: 새 검색 요청 · /검색상태: 진행 확인'
+                reply += '\n/검색취소: 대기·진행 중인 원격 검색 취소'
                 reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
                 reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'

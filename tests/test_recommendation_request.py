@@ -69,6 +69,39 @@ def test_status_expires_busy_request_and_running_progress_survives_wait():
     assert 'late' not in request.summary()
 
 
+def test_cancel_pending_and_running_before_save():
+    bridge = RecommendationRequest('MOCK')
+    bridge.request()
+    assert '취소했어요' in bridge.cancel()
+    assert not bridge.take('MOCK', busy=False, active=True)
+    bridge.request()
+    assert bridge.take('MOCK', busy=False, active=True)
+    assert '취소 요청' in bridge.cancel()
+    bridge.progress('late progress')
+    assert 'late progress' not in bridge.summary()
+    fake = SimpleNamespace(remote_scan_active=True, remote_scan=bridge)
+    with pytest.raises(RuntimeError, match='취소'):
+        gui_method('on_scan')(fake, [], {}, 'KIWOOM')
+    bridge.finish(success=False)
+    assert '중단 처리를 마쳤어요' in bridge.summary()
+    assert not bridge.cancellation_requested()
+    assert '취소할 검색 요청이 없어요' in bridge.cancel()
+
+
+def test_remote_cancel_interrupts_only_remote_work():
+    bridge = RecommendationRequest('DEMO')
+    bridge.request()
+    bridge.take('DEMO', busy=False, active=True)
+    bridge.cancel()
+    calls = []
+    fake = SimpleNamespace(remote_scan=bridge, remote_scan_active=True,
+                           telegram_order_worker=None,
+                           work=SimpleNamespace(isRunning=lambda: True,
+                                                requestInterruption=lambda: calls.append('cancel')))
+    gui_method('poll_remote_scan')(fake)
+    assert calls == ['cancel']
+
+
 def test_commands_authorization_replay_stop_and_no_orders(sandbox):
     service, broker, _, _ = sandbox
     request = RecommendationRequest('DEMO')
@@ -89,6 +122,18 @@ def test_commands_authorization_replay_stop_and_no_orders(sandbox):
     assert not service.accepts_search_requests()
     assert '중지했어요' in service.handle(update(sandbox, 5, '/추천검색'))
     assert broker.calls == []
+
+
+def test_cancel_command_after_stop_is_read_only_and_replay_safe(sandbox):
+    service, broker, _, _ = sandbox
+    bridge = RecommendationRequest('DEMO')
+    service.recommendation_request = bridge
+    service.handle(update(sandbox, 1, '/추천검색'))
+    bridge.take('DEMO', busy=False, active=True)
+    service.handle(update(sandbox, 2, '/중지'))
+    event = update(sandbox, 3, '/검색취소')
+    assert service.handle(event) == service.handle(event)
+    assert bridge.cancellation_requested() and broker.calls == []
 
 
 def test_exact_search_command_pages_replay_and_stop(sandbox):
@@ -112,7 +157,7 @@ def test_gui_handoff_and_saved_result_skip_trade_side_effects():
     bridge = RecommendationRequest('MOCK')
     bridge.request()
     calls = []
-    fake = SimpleNamespace(remote_scan=bridge, work=None, cfg={},
+    fake = SimpleNamespace(remote_scan=bridge, remote_scan_active=False, work=None, cfg={},
                            telegram_order_worker=SimpleNamespace(isRunning=lambda: True,
                                isInterruptionRequested=lambda: False,
                                service=SimpleNamespace(accepts_search_requests=lambda: True)),

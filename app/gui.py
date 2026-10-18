@@ -1511,6 +1511,10 @@ class MainWindow(QMainWindow):
         worker = self.telegram_order_worker
         if not self.remote_scan:
             return
+        if self.remote_scan_active and self.remote_scan.cancellation_requested():
+            if self.work and self.work.isRunning():
+                self.work.requestInterruption()
+            return
         active = bool(worker and worker.isRunning() and worker.service is not None
                       and not worker.isInterruptionRequested())
         if active:
@@ -1558,6 +1562,8 @@ class MainWindow(QMainWindow):
             self.show_scan_progress('조회 취소 대기 중 · 현재 요청 종료 후 중지')
 
     def on_scan(self, stocks, cfg, mode):
+        if self.remote_scan_active and self.remote_scan.cancellation_requested():
+            raise RuntimeError('원격 검색을 취소하여 추천을 생성하지 않았습니다.')
         if self.work and self.work.isInterruptionRequested():
             raise RuntimeError('조회가 취소되어 추천을 생성하지 않았습니다.')
         self.scanning = False
