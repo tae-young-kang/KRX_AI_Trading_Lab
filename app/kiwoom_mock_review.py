@@ -157,6 +157,15 @@ class MockAccountReviewer:
             raise UncertainResponse('조회 도중 계좌·인증·잔고·체결이 바뀌었습니다. 다시 조회하세요.')
         return second
 
+    def collect_into(self, ledger, *, expected_account, trade_date):
+        """Only complete/stable observations may update the dedicated ledger."""
+        from app.kiwoom_mock_ledger import MockFillLedger
+        if type(ledger) is not MockFillLedger:
+            raise ContractError('모의 체결 장부가 필요합니다.')
+        observed = self.collect(expected_account=expected_account, trade_date=trade_date)
+        ledger.ingest(observed)
+        return observed
+
 
 @dataclass(frozen=True)
 class Comparison:
