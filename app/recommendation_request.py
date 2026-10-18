@@ -57,13 +57,14 @@ class RecommendationRequest:
                 detail = ''.join(c for c in message if c.isprintable())[:240]
                 self._message = '조회 중 · '+detail
 
-    def finish(self, *, success):
+    def finish(self, *, success, result=''):
         with self._lock:
             if self._state == 'RUNNING':
                 self._state = 'DONE' if success else 'FAILED'
                 self._message = ('검색 결과를 저장했어요. /추천기록 으로 확인하세요.' if success else
                                  '검색을 완료하지 못했어요. 집 PC의 연결·검색 상태를 확인해 주세요.')
-                self._notice = (self._generation, f'[{self.mode} · 추천 검색]\n{self._message}')
+                self._notice = (self._generation, f'[{self.mode} · 추천 검색]\n{self._message}'
+                                + ('\n'+result if success and result else ''))
                 self._delivery = '완료 알림 준비 중'
 
     def send_notice(self, sender, *, active):

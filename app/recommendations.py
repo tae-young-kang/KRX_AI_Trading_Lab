@@ -111,6 +111,37 @@ def page_count(db,mode):
     return max(1,(count+4)//5)
 
 
+def search_result(db, mode, scan_id, *, page=1):
+    if (mode not in ('DEMO','MOCK','REAL_QUOTES') or type(scan_id) is not int or scan_id < 1
+            or type(page) is not int or not 1 <= page <= 999999):
+        raise ValueError('검색 번호와 페이지를 확인해 주세요.')
+    batch = db.execute('SELECT * FROM recommendation_batches WHERE mode=? AND scan_id=?',
+                       (mode,scan_id)).fetchone()
+    if batch is None:
+        return '같은 모드의 검색 기록이 없어요. /추천기록 에서 검색 번호를 확인하세요.'
+    pages = max(1,(batch['selected_count']+4)//5)
+    if page > pages:
+        return f'이 검색은 {pages}페이지까지 있어요. /추천결과 {scan_id} {pages}'
+    label = {'DEMO':'가상 연습','MOCK':'키움 모의 시세','REAL_QUOTES':'실제 시세'}[mode]
+    lines = [f'[{label} · 검색 #{scan_id} · {page}/{pages}]',
+             f"검색 시각 {batch['created_at']} · 추천 {batch['selected_count']}개",
+             '그때의 조건: '+condition_label(json.loads(batch['conditions_json']))]
+    rows = db.execute('''SELECT * FROM recommendations WHERE scan_id=?
+        ORDER BY rank LIMIT 5 OFFSET ?''',(scan_id,(page-1)*5)).fetchall()
+    for row in rows:
+        name = ''.join(c for c in row['name'] if c.isprintable())[:24]
+        lines.append(f"{row['rank']}위 {name}({row['code']}) · {row['market']} · {price_label(row['price'])}"
+                     + (' · ETF' if row['is_etf'] else ''))
+    if not rows:
+        lines.append('이 검색에서는 조건에 맞는 추천이 없었어요.')
+    lines.append('저장 당시 시세예요. 새 시세 조회·체결·수익 예측이 아니에요.')
+    if page < pages:
+        lines.append(f'다음 종목: /추천결과 {scan_id} {page+1}')
+    if page > 1:
+        lines.append(f'이전 종목: /추천결과 {scan_id} {page-1}')
+    return '\n'.join(lines)
+
+
 def summary(db, mode, *, performance=False,page=1):
     if type(page) is not int or not 1<=page<=999999:
         raise ValueError('추천 기록 페이지 번호를 확인해 주세요.')

@@ -91,6 +91,23 @@ def test_commands_authorization_replay_stop_and_no_orders(sandbox):
     assert broker.calls == []
 
 
+def test_exact_search_command_pages_replay_and_stop(sandbox):
+    service, broker, _, _ = sandbox
+    calls = []
+    def report(performance, *, scan_id, page):
+        calls.append((scan_id, page))
+        return f'검색 #{scan_id} 페이지 {page}'
+    service.recommendation_report = report
+    event = update(sandbox, 1, '/추천결과 123 2')
+    assert service.handle(event) == service.handle(event) == '검색 #123 페이지 2'
+    assert calls == [(123, 2)]
+    service.handle(update(sandbox, 2, '/중지'))
+    assert '검색 #123' in service.handle(update(sandbox, 3, '/추천결과 123'))
+    for uid, text in enumerate(('/추천결과', '/추천결과 0', '/추천결과 1 0', '/추천결과 x'), 4):
+        assert '사용법' in service.handle(update(sandbox, uid, text))
+    assert calls == [(123, 2), (123, 1)] and broker.calls == []
+
+
 def test_gui_handoff_and_saved_result_skip_trade_side_effects():
     bridge = RecommendationRequest('MOCK')
     bridge.request()
@@ -105,7 +122,8 @@ def test_gui_handoff_and_saved_result_skip_trade_side_effects():
     gui_method('poll_remote_scan', current_mode=mode)(fake)
     assert calls == [dict(remote=True)]
     fake.remote_scan_active = True
-    fake.db = SimpleNamespace(save_scan=lambda *args: calls.append('saved') or 1)
+    fake.db = SimpleNamespace(save_scan=lambda *args: calls.append('saved') or 1,
+                              recommendation_search_result=lambda mode, scan_id: '검색 #1 고정 결과')
     fake.history = object()
     fake.fill_stock_tables = lambda: calls.append('table')
     fake.count_info = SimpleNamespace(setText=lambda text: None)
@@ -113,6 +131,9 @@ def test_gui_handoff_and_saved_result_skip_trade_side_effects():
                record_nxt_evidence=lambda *args: None)(fake, [], {'market': '전체'}, 'KIWOOM')
     assert calls == [dict(remote=True), 'saved', 'table']
     assert '저장했어요' in bridge.summary() and not fake.remote_scan_active
+    notices = []
+    bridge.send_notice(lambda text: notices.append(text) or 1, active=True)
+    assert '검색 #1 고정 결과' in notices[0]
 
 
 @pytest.mark.parametrize('receipt', [None, True, 0, -1, '1', 7])

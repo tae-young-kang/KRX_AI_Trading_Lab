@@ -1399,8 +1399,9 @@ class MainWindow(QMainWindow):
                                      watch_validation=self.mock_watch_status.validation_summary,
                                      watch_history=self.mock_watch_status.history_summary,
                                      watch_funds=self.mock_watch_status.funds_summary,
-                                     recommendation_report=lambda performance, page=1, db=self.db, mode=current_mode(self.cfg).key:
-                                         db.recommendation_summary(mode,performance=performance,page=page),
+                                     recommendation_report=lambda performance, page=1, scan_id=None, db=self.db, mode=current_mode(self.cfg).key:
+                                         (db.recommendation_search_result(mode,scan_id,page=page) if scan_id is not None else
+                                          db.recommendation_summary(mode,performance=performance,page=page)),
                                      theme_budget=lambda total, fee, buffer, page, history=self.history, mode=current_mode(self.cfg).key: theme_budget_text(theme_budget_preview(history,mode=mode,total_won=total,fee_bps=fee,buffer_bps=buffer),page=page),
                                      theme_status=lambda destination, history=self.history, mode=current_mode(self.cfg).key: theme_delivery_summary(history,mode=mode,destination=destination),
                                      theme_report=lambda page=1, history=self.history, mode=current_mode(self.cfg).key: theme_latest_report(history,mode=mode,page=page),
@@ -1572,7 +1573,7 @@ class MainWindow(QMainWindow):
         if self.remote_scan_active:
             self.fill_stock_tables()
             self.count_info.setText(f'원격 추천 검색 저장 완료 · 조회 {len(stocks):,}개')
-            self.remote_scan.finish(success=True)
+            self.remote_scan.finish(success=True, result=self.db.recommendation_search_result(current_mode(cfg).key,scan_id))
             self.remote_scan_active = False
             return
         self.shadow.initialize_defaults(cfg,mode)

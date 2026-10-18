@@ -89,6 +89,40 @@ def test_latest_empty_search_is_visible_above_older_recommendations(tmp_path):
     assert '마지막 검색' not in db.recommendation_summary('MOCK')
 
 
+def test_exact_search_results_keep_old_symbols_prices_and_mode(tmp_path):
+    db = Database(tmp_path/'results.db')
+    rows = candidates()
+    first = save(db, rows, deepcopy(DEFAULTS))
+    frozen = db.recommendation_search_result('DEMO', first)
+    rows[0].stock.name = '나중이름'
+    rows[0].stock.price = 99999
+    for row in rows:
+        row.passed = False
+    second = save(db, rows, deepcopy(DEFAULTS))
+    assert db.recommendation_search_result('DEMO', first) == frozen
+    assert '시험1' in frozen and '나중이름' not in frozen
+    assert '추천 0개' in db.recommendation_search_result('DEMO', second)
+    assert '기록이 없어요' in db.recommendation_search_result('MOCK', first)
+    assert '페이지까지' in db.recommendation_search_result('DEMO', first,page=2)
+    assert len(frozen) < 3500
+
+
+def test_exact_search_pages_cover_all_selected_symbols(tmp_path):
+    db = Database(tmp_path/'pages.db')
+    rows = []
+    for i in range(1,8):
+        row = deepcopy(candidates()[0])
+        row.stock.code = f'90000{i}'
+        row.stock.name = f'페이지종목{i}'
+        rows.append(row)
+    sid = save(db, rows, {**DEFAULTS, 'recommend_count': 7})
+    first = db.recommendation_search_result('DEMO',sid)
+    second = db.recommendation_search_result('DEMO',sid,page=2)
+    assert first.count('위 페이지종목') == 5 and second.count('위 페이지종목') == 2
+    assert '900001' not in second and '900007' not in first
+    assert f'/추천결과 {sid} 2' in first and f'/추천결과 {sid} 1' in second
+
+
 @pytest.mark.parametrize('damage',['missing','extra','different_price','duplicate_ranked','duplicate_population'])
 def test_rankings_cannot_be_saved_against_a_different_scan_population(tmp_path,damage):
     db=Database(tmp_path/'practice.db')

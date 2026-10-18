@@ -116,6 +116,11 @@ class Database:
             db.execute('BEGIN')
             return recommendation_overview.summary(db,mode)
 
+    def recommendation_search_result(self, mode, scan_id, *, page=1):
+        with self.connect() as db:
+            db.execute('BEGIN')
+            return recommendations.search_result(db,mode,scan_id,page=page)
+
     def recommendation_page_count(self, mode):
         with self.connect() as db:
             return recommendations.page_count(db,mode)
