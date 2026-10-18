@@ -956,6 +956,9 @@ class MainWindow(QMainWindow):
         self.mock_account.setMaxLength(10)
         self.mock_account.setPlaceholderText('확인할 키움 모의 계좌번호 10자리 · 저장하지 않아요')
         watch.addWidget(self.mock_account)
+        self.mock_recovery = QCheckBox('오늘 텔레그램 재연결 허용 · 주문은 잠금')
+        self.mock_recovery.setToolTip('켜면 오늘 이 프로그램에서만 복구용 모의 키·계좌를 메모리에 보관해요. 중지·종료하면 지워요.')
+        watch.addWidget(self.mock_recovery)
         controls = QHBoxLayout()
         self.mock_verify = QPushButton('1. 모의 계좌 확인',objectName='Primary')
         self.mock_listen = QPushButton('2. 알림 받기 시작')
@@ -1025,7 +1028,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self,'모의 계좌 확인',str(error))
             return
         self.mock_account.clear()
-        worker = MockWatchWorker(data_dir()/'kiwoom_mock_watch',key,secret,account,self.mock_watch_status)
+        worker = MockWatchWorker(data_dir()/'kiwoom_mock_watch',key,secret,account,self.mock_watch_status,
+                                 allow_recovery=self.mock_recovery.isChecked())
         self.mock_watch_worker = worker
         worker.verified.connect(self.mock_account_verified)
         worker.status.connect(self.mock_status.setText)
@@ -1033,6 +1037,7 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self.mock_watch_finished)
         self.mock_verify.setEnabled(False)
         self.mock_account.setEnabled(False)
+        self.mock_recovery.setEnabled(False)
         self.mock_listen.setEnabled(False)
         self.mock_stop.setEnabled(True)
         self.mode_select.setEnabled(False)
@@ -1077,6 +1082,8 @@ class MainWindow(QMainWindow):
         self.mock_stop.setEnabled(False)
         self.mock_verify.setEnabled(True)
         self.mock_account.setEnabled(True)
+        self.mock_recovery.setEnabled(True)
+        self.mock_recovery.setChecked(False)
         self.mode_select.setEnabled(True)
         for name in ('kiwoom_appkey','kiwoom_secret'):
             self.secrets[name].setEnabled(self.mode_select.currentData()!='DEMO')
@@ -1154,7 +1161,8 @@ class MainWindow(QMainWindow):
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
                                      watch_status=self.mock_watch_status.summary,
                                      watch_refresh=self.mock_watch_status.request_refresh,
-                                     watch_result=self.mock_watch_status.refresh_result)
+                                     watch_result=self.mock_watch_status.refresh_result,
+                                     watch_reconnect=self.mock_watch_status.request_reconnect)
         self.telegram_order_worker = worker
         worker.status.connect(self.telegram_orders_status)
         worker.finished.connect(self.telegram_orders_finished)

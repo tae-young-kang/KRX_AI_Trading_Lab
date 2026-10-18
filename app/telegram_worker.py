@@ -18,7 +18,7 @@ class TelegramOrderWorker(QThread):
     status = Signal(str)
 
     def __init__(self, root, token, user_id, chat_id, catalog, conditions=None, orders_enabled=True, watch_status=None,
-                 watch_refresh=None, watch_result=None):
+                 watch_refresh=None, watch_result=None, watch_reconnect=None):
         super().__init__()
         self.root, self.token = Path(root), token
         self.user_id, self.chat_id, self.catalog = user_id, chat_id, dict(catalog)
@@ -26,6 +26,7 @@ class TelegramOrderWorker(QThread):
         self.conditions, self.orders_enabled = conditions, orders_enabled
         self.watch_status = watch_status
         self.watch_refresh, self.watch_result = watch_refresh, watch_result
+        self.watch_reconnect = watch_reconnect
 
     def stop(self):
         self.requestInterruption()
@@ -60,7 +61,7 @@ class TelegramOrderWorker(QThread):
                                                 self.user_id, self.chat_id, identity, self.catalog,
                                                 conditions=self.conditions, orders_enabled=self.orders_enabled,
                                                 watch_status=self.watch_status, watch_refresh=self.watch_refresh,
-                                                watch_result=self.watch_result)
+                                                watch_result=self.watch_result, watch_reconnect=self.watch_reconnect)
             report = self.service.recovery_status(startup=True) if self.orders_enabled else None
             self.status.emit('수신 중 · '+(self.service.safety_text(report) if self.orders_enabled else '추천 조건 관리 · 주문 불가'))
             last_banner = self.service.safety_banner() if self.orders_enabled else ''

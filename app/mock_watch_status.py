@@ -20,6 +20,36 @@ class MockWatchStatus:
         self._refresh_busy = False
         self._last_request = None
         self._positions = ()
+        self._reconnect_available = self._reconnect_pending = False
+        self._last_reconnect = None
+
+    def offer_reconnect(self):
+        with self._lock:
+            self.stopped()
+            self._reconnect_available = True
+            self._status = '모의 연결 끊김 · /모의재연결로 다시 연결할 수 있어요.'
+
+    def request_reconnect(self):
+        with self._lock:
+            if self._reconnect_pending:
+                return '이미 모의 재연결을 요청했어요. /모의상태로 확인해 주세요.'
+            if not self._reconnect_available:
+                return '지금은 원격 재연결할 수 없어요. 집 PC의 모의 연결과 원격 복구 허용을 확인해 주세요.'
+            moment = time.monotonic()
+            if self._last_reconnect is not None and moment-self._last_reconnect < 30:
+                return '재연결 요청 간격은 30초예요. /모의상태로 확인해 주세요.'
+            self._last_reconnect = moment
+            self._reconnect_pending = True
+            self._status = '모의 재연결 요청 대기 · 주문은 보내지 않아요.'
+            return self._status
+
+    def take_reconnect(self):
+        with self._lock:
+            if not self._reconnect_available or not self._reconnect_pending:
+                return False
+            self._reconnect_available = self._reconnect_pending = False
+            self._status = '모의 계좌부터 다시 확인하고 있어요. 주문은 보내지 않아요.'
+            return True
 
     def enable_refresh(self):
         with self._lock:
@@ -63,6 +93,7 @@ class MockWatchStatus:
 
     def reset(self):
         with self._lock:
+            self._reconnect_available = self._reconnect_pending = False
             self._refresh_enabled = self._refresh_pending = self._refresh_busy = False
             self._last_request = None
             self._refresh_state = '아직 새 잔고를 요청하지 않았어요.'
@@ -83,6 +114,7 @@ class MockWatchStatus:
 
     def stopped(self):
         with self._lock:
+            self._reconnect_available = self._reconnect_pending = False
             if self._refresh_pending or self._refresh_busy:
                 self._refresh_state = '잔고 조회를 완료하지 못했어요. 연결을 다시 확인해 주세요.'
             self._refresh_enabled = self._refresh_pending = self._refresh_busy = False
