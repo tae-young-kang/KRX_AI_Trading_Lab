@@ -22,6 +22,7 @@ from app.strategy import evaluate, auto_paper_exit, create_proposals
 from app.practice_quotes import fresh_practice_price
 from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
+from app.theme_input import prepare_selection as prepare_theme_selection
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
@@ -627,6 +628,9 @@ class MainWindow(QMainWindow):
         recommendation_import.setToolTip('직접 확인한 거래일·종가 자료 파일을 저장된 추천과 대조해요. 실제 수익률이나 공식 검증 완료로 처리하지 않아요.')
         recommendation_import.clicked.connect(self.import_recommendation_prices)
         v.addWidget(recommendation_import)
+        theme_prepare=QPushButton('테마1 · 저장 시세와 확인한 거래일로 판정하기 (고급)')
+        theme_prepare.clicked.connect(self.prepare_theme_one)
+        v.addWidget(theme_prepare)
         box=QFrame(objectName='Panel');form=QGridLayout(box)
         self.research_source=QComboBox();self.research_source.addItems(['CSV_USER','KRX','DEMO_SYNTHETIC'])
         form.addWidget(lbl('연구 데이터'),0,0);form.addWidget(self.research_source,0,1)
@@ -742,6 +746,18 @@ class MainWindow(QMainWindow):
                       lambda r:(self.research_source.setCurrentText('KRX'),self.refresh_research(),
                                 QMessageBox.information(self,'KRX 저장',f'신규 응답 {r["requests"]}회 / {r["rows"]:,}행 저장')),
                       'KRX 수집 완료')
+
+    def prepare_theme_one(self):
+        mode=current_mode(self.cfg).key
+        path,_=QFileDialog.getOpenFileName(self,'테마1 거래일·자료 출처 선택','','테마1 자료 선택 (*.json)')
+        if not path:
+            return
+        self.run_task(lambda:prepare_theme_selection(self.history,path,mode),
+                      lambda result:QMessageBox.information(self,'테마1 판정 완료',
+                          f'저장된 종목 {result["symbols"]}개 · 감지 {result["matched"]}개\n'
+                          f'자료 부족 종목 {result["states"].get("PRICE_MISSING",0)}개\n'
+                          '전체 시장 자료 완료는 미확인입니다. 홈의 테마1 결과 또는 /테마1에서 확인하세요.\n'
+                          '실제 발송·주문은 하지 않았어요.'),'테마1 저장 시세 판정')
 
     def import_recommendation_prices(self):
         if self.work is not None and self.work.isRunning():
