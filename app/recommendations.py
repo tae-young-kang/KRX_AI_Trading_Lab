@@ -9,7 +9,7 @@ from app.modes import current_mode
 from app.trade_review import settings_snapshot
 from app.trading_clock import KST
 from app.recommendation_outcomes import evaluate
-from app.recommendation_overview import SOURCES, CALENDARS
+from app.recommendation_overview import SOURCES, CALENDARS, change_label, price_label
 
 
 def initialize(db):
@@ -100,7 +100,7 @@ def summary(db, mode, *, performance=False):
               'CALENDAR_MISSING':'거래일 자료 부족'}
     for row in rows:
         name = ''.join(c for c in row['name'] if c.isprintable())[:24]
-        lines.append(f"검색 #{row['scan_id']} {row['created_at'][:16]} · {row['rank']}위 {name}({row['code']}) · {row['price']:,.0f}원")
+        lines.append(f"검색 #{row['scan_id']} {row['created_at'][:16]} · {row['rank']}위 {name}({row['code']}) · {price_label(row['price'])}")
         if not performance:
             continue
         seen = db.execute('''SELECT * FROM recommendation_reviews WHERE scan_id=? AND code=?
@@ -110,7 +110,7 @@ def summary(db, mode, *, performance=False):
             continue
         lines.append(f"{SOURCES[seen['price_source']]} · {CALENDARS[seen['calendar_source']]} · 확인 완료일 {seen['available_through']}")
         for result in json.loads(seen['results_json']):
-            detail = (f"{result['change_pct']:+.2f}%" if result['state']=='OBSERVED'
+            detail = (change_label(result['change_pct']) if result['state']=='OBSERVED'
                       else labels[result['state']])
             lines.append(f"{result['horizon']}거래일 ({result['target_day'] or '미확인'}): {detail}")
     if performance:

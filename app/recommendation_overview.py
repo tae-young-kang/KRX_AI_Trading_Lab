@@ -2,12 +2,23 @@
 from datetime import datetime
 import hashlib
 import json
+from statistics import mean
 from app.trade_review import FILTER_KEYS, condition_label
 from app.trading_clock import KST
 
 
 SOURCES = {'DEMO':'가상 자료','KRX':'KRX 자료','CSV_USER':'사용자 제공','NONE':'자료 없음'}
 CALENDARS = {'DEMO':'가상 거래일','USER_CONFIRMED':'사용자 확인 거래일','OFFICIAL':'공식 거래일','NONE':'거래일 미확인'}
+
+
+def change_label(value):
+    return f'{value:+.3g}%' if abs(value)>=1_000_000 else f'{value:+.2f}%'
+
+
+def price_label(value):
+    if 0<abs(value)<1:
+        return f'{value:.6g}원'
+    return f'{value:.3g}원' if abs(value)>=1_000_000_000_000 else f'{value:,.0f}원'
 
 
 def groups(db,mode):
@@ -39,7 +50,7 @@ def groups(db,mode):
         if key not in grouped:
             grouped[key] = dict(condition_id=hashlib.sha256(signature.encode()).hexdigest()[:8],
                 label=condition_label(cfg),source=source,calendar=calendar,count=0,last_scan=0,
-                horizons={h:dict(observed=0,up=0,down=0,flat=0,waiting=0,missing=0,unreviewed=0,total=0.0) for h in (1,3,5)})
+                horizons={h:dict(observed=0,up=0,down=0,flat=0,waiting=0,missing=0,unreviewed=0,values=[]) for h in (1,3,5)})
         group = grouped[key]
         group['count'] += 1
         group['last_scan'] = max(group['last_scan'],row['scan_id'])
@@ -52,14 +63,15 @@ def groups(db,mode):
                 change = result['change_pct']
                 bucket['observed'] += 1
                 bucket['up' if change>1e-9 else 'down' if change< -1e-9 else 'flat'] += 1
-                bucket['total'] += change
+                bucket['values'].append(change)
             elif result['state']=='NOT_DUE':
                 bucket['waiting'] += 1
             else:
                 bucket['missing'] += 1
     for group in grouped.values():
         for bucket in group['horizons'].values():
-            bucket['mean'] = bucket['total']/bucket['observed'] if bucket['observed'] else None
+            values = bucket.pop('values')
+            bucket['mean'] = mean(values) if values else None
     return sorted(grouped.values(),key=lambda g:g['last_scan'],reverse=True),unverified_time
 
 
@@ -75,9 +87,9 @@ def summary(db,mode):
         lines.append(f"조건 {group['condition_id']} · {group['count']}개 종목/날짜 · {group['label'][:140]}")
         lines.append(SOURCES[group['source']]+' · '+CALENDARS[group['calendar']])
         for horizon,bucket in group['horizons'].items():
-            mean = '평균 미확인' if bucket['mean'] is None else f"평균 변화 {bucket['mean']:+.2f}%"
+            mean_label = '평균 미확인' if bucket['mean'] is None else '평균 변화 '+change_label(bucket['mean'])
             short = ' · 관측 20개 미만' if bucket['observed']<20 else ''
-            lines.append(f"{horizon}거래일: 관측 {bucket['observed']} · 상승 {bucket['up']}/하락 {bucket['down']}/동일 {bucket['flat']} · {mean}{short}")
+            lines.append(f"{horizon}거래일: 관측 {bucket['observed']} · 상승 {bucket['up']}/하락 {bucket['down']}/동일 {bucket['flat']} · {mean_label}{short}")
             lines.append(f"대기 {bucket['waiting']} · 자료 부족 {bucket['missing']} · 미평가 {bucket['unreviewed']}")
     if len(data)>3:
         lines.append(f'나머지 {len(data)-3}개 묶음은 표시를 생략했어요.')

@@ -1,7 +1,9 @@
 """Descriptive summaries cannot inflate repeated scans into independent samples."""
 from copy import deepcopy
 from app.config import DEFAULTS
-from app.recommendation_overview import groups
+from app.recommendation_overview import groups, price_label
+from dataclasses import replace
+from math import isfinite
 from test_recommendation_reports import store
 from test_recommendations import candidates,save
 from test_recommendation_outcomes import DAYS,prices
@@ -65,3 +67,21 @@ def test_telegram_summary_is_authenticated_and_readonly_after_stop(tmp_path,sand
     event=update(sandbox,3,'/추천요약')
     reply=service.handle(event)
     assert '가격 변화는 비용' in reply and service.handle(event)==reply and broker.calls==[]
+
+
+def test_large_finite_changes_have_finite_mean_and_bounded_reports(tmp_path):
+    db,evidence=store(tmp_path)
+    with db.connect() as record:
+        record.execute('UPDATE recommendations SET price=1')
+    extreme=[replace(bar,close=1e306) for bar in prices()]
+    for code in ('900001','900002','900004'):
+        bars=[replace(bar,code=code) for bar in extreme]
+        db.review_recommendation(**{**evidence,'code':code,'bars':bars})
+    with db.connect() as record:
+        data,_=groups(record,'DEMO')
+    assert len(data)==1
+    assert all(isfinite(bucket['mean']) and bucket['observed']==3 for bucket in data[0]['horizons'].values())
+    report=db.recommendation_overview('DEMO')
+    assert 'inf' not in report and len(report)<4096
+    assert len(db.recommendation_summary('DEMO',performance=True))<4096
+    assert price_label(0.00001)!='0원'
