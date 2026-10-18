@@ -75,6 +75,8 @@ class Database:
                        (now(), kind, str(message)[:1500]))
 
     def save_scan(self, stocks, ranked, settings, market, source):
+        stocks,ranked = list(stocks),list(ranked)
+        recommendations.validate_population(stocks,ranked)
         with self.connect() as db:
             ts = datetime.now(KST).isoformat(timespec='seconds')
             cur = db.execute('INSERT INTO scans(ts, mode, market, strategy_json,count) VALUES(?,?,?,?,?)',

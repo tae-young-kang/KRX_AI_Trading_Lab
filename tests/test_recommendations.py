@@ -72,3 +72,29 @@ def test_empty_recommendations_record_complete_batch_without_inventing_entries(t
     assert db.recommendation_history('DEMO') == []
     with db.connect() as record:
         assert record.execute('SELECT selected_count FROM recommendation_batches').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('damage',['missing','extra','different_price','duplicate_ranked','duplicate_population'])
+def test_rankings_cannot_be_saved_against_a_different_scan_population(tmp_path,damage):
+    db=Database(tmp_path/'practice.db')
+    ranked=candidates();stocks=[row.stock for row in ranked]
+    if damage=='missing': ranked=ranked[:-1]
+    elif damage=='extra': stocks=stocks[:-1]
+    elif damage=='different_price':
+        ranked=deepcopy(ranked);ranked[0].stock.price=999
+    elif damage=='duplicate_ranked': ranked.append(ranked[-1])
+    elif damage=='duplicate_population': stocks.append(stocks[-1])
+    with pytest.raises(ValueError,match='자료가 맞지 않아요'):
+        db.save_scan(stocks,ranked,deepcopy(DEFAULTS),'전체','DEMO')
+    with db.connect() as record:
+        for table in ('scans','snapshots','recommendations','recommendation_batches'):
+            assert record.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]==0
+
+
+def test_equivalent_copies_and_generators_do_not_lose_recommendations(tmp_path):
+    db=Database(tmp_path/'practice.db')
+    rows=candidates()
+    stocks=(row.stock for row in rows)
+    ranked=(row for row in deepcopy(rows))
+    db.save_scan(stocks,ranked,deepcopy(DEFAULTS),'전체','DEMO')
+    assert len(db.recommendation_history('DEMO'))==3

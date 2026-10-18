@@ -35,6 +35,19 @@ def initialize(db):
     ''')
 
 
+def validate_population(stocks,ranked):
+    """A saved recommendation must come from the exact saved scan population."""
+    try:
+        population = {stock.code:stock for stock in stocks}
+        codes = [row.stock.code for row in ranked]
+        if len(population)!=len(stocks) or len(set(codes))!=len(codes) or set(codes)!=set(population):
+            raise ValueError()
+        if any(row.stock.as_dict()!=population[row.stock.code].as_dict() for row in ranked):
+            raise ValueError()
+    except (ValueError,TypeError,AttributeError):
+        raise ValueError('검색한 종목 목록과 추천 계산 자료가 맞지 않아요. 검색 기록을 저장하지 않았어요.') from None
+
+
 def record(db, scan_id, ranked, settings, source, created_at):
     count = settings.get('recommend_count', 15)
     if type(count) is not int or not 1 <= count <= 50:
