@@ -164,6 +164,29 @@ class Database:
         with self.connect() as db:
             return [dict(row) for row in db.execute('SELECT * FROM paper_exits WHERE trade_id=? ORDER BY id',(trade_id,))]
 
+    def practice_sale_report(self, trade_id=None, page=1):
+        from app.practice_details import sale_details
+        with self.connect() as db:
+            db.execute('BEGIN')
+            if trade_id is None:
+                rows=db.execute('SELECT id,name,remaining_qty FROM paper_trades ORDER BY id DESC LIMIT 5').fetchall()
+                return ('[앱 안의 연습 매도 기록 · 실제 체결 아님]\n'+
+                        ('\n'.join(f'{r["id"]}: {r["name"]} · 남은 {r["remaining_qty"]}주' for r in rows)
+                         if rows else '연습 기록이 없어요.')+'\n사용법: /연습내역 기록번호\n예: /연습내역 1')
+            if type(trade_id) is not int or trade_id<=0 or type(page) is not int or not 1<=page<=999999:
+                return '기록 번호와 페이지를 확인해 주세요.'
+            trade=db.execute('SELECT * FROM paper_trades WHERE id=?',(trade_id,)).fetchone()
+            if trade is None:
+                return '이 모드의 연습 기록에 없는 번호예요.'
+            count=db.execute('SELECT COUNT(*) FROM paper_exits WHERE trade_id=?',(trade_id,)).fetchone()[0]
+            pages=max(1,count)
+            if page>pages:
+                return f'마지막 페이지는 {pages}예요.'
+            sales=db.execute('SELECT * FROM paper_exits WHERE trade_id=? ORDER BY id LIMIT 1 OFFSET ?',
+                             (trade_id,page-1)).fetchall()
+            return (f'[연습 매도 내역 · {page}/{pages}페이지]\n'+sale_details(trade,sales,start=page)+
+                    (f'\n다음: /연습내역 {trade_id} {page+1}' if page<pages else ''))
+
     def open_trades(self):
         with self.connect() as db:
             return [dict(x) for x in db.execute('SELECT * FROM paper_trades WHERE closed_at IS NULL ORDER BY id DESC')]

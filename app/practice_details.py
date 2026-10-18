@@ -8,14 +8,14 @@ def _money(value):
     return f'{value:,.2f}원'
 
 
-def sale_details(trade, sales):
+def sale_details(trade, sales, *, start=1):
     lines=[f'{trade["name"]} · 앱 안의 연습 기록',
            f'남은 수량 {trade["remaining_qty"]}주 / 처음 {trade["qty"]}주',
            '실제 증권사 체결이 아니며 비용과 체결가는 가정값입니다.',
            '남은 수량을 모두 판 뒤에만 한 번의 승·패·본전을 정합니다.']
     if not sales:
         lines.append('매도별 기록이 없습니다. 아직 팔지 않았거나 이전 버전의 완료 기록일 수 있어요.')
-    for index,sale in enumerate(sales,1):
+    for index,sale in enumerate(sales,start):
         lines.extend(['',f'{index}번째 매도 · {sale["sold_at"]}',
                       f'판 수량 {sale["qty"]}주 · {sale["reason"]}',
                       f'관측 가격 {_money(sale["reference"])} → 가정 체결가 {_money(sale["fill"])}',

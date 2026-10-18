@@ -169,3 +169,20 @@ def test_changed_engine_environment_cannot_use_old_confirmation(sandbox):
     broker.environment = 'REAL'
     assert '주문하지' in service.handle(update(sandbox, 2, '/확인 '+token))
     assert broker.calls == []
+
+
+def test_practice_sales_command_is_authorized_read_only_and_replayed(sandbox):
+    service,broker,_,_=sandbox
+    calls=[]
+    service.practice_sales=lambda tid,page: calls.append((tid,page)) or '연습 매도 내역'
+    assert service.handle(update(sandbox,1,'/연습내역'))=='연습 매도 내역'
+    event=update(sandbox,2,'/연습내역 7 2')
+    assert service.handle(event)=='연습 매도 내역'
+    assert service.handle(event)=='연습 매도 내역'
+    bad=update(sandbox,3,'/연습내역 7')
+    bad['message']['from']['id']=99
+    assert service.handle(bad) is None
+    assert '사용법' in service.handle(update(sandbox,4,'/연습내역 -1'))
+    assert calls==[(None,1),(7,2)] and broker.calls==[]
+    service.stop()
+    assert service.handle(update(sandbox,5,'/연습내역'))=='연습 매도 내역'

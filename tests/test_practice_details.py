@@ -17,3 +17,22 @@ def test_legacy_and_unknown_money_are_not_invented():
     trade=dict(name='이전종목',remaining_qty=0,qty=3,pnl=None,closed_at='old',realized_pnl=0)
     text=sale_details(trade,[])
     assert '이전 버전' in text and '누적 실현손익 확인 필요' in text
+
+
+def test_practice_sale_report_pages_and_mode_database_isolation(tmp_path):
+    from app.storage import Database
+    from app.market import Stock
+    from app.config import DEFAULTS
+    db=Database(tmp_path/'one.db')
+    st=Stock('900001','연습종목','KOSPI',1000,3,200,150,4000)
+    db.paper_open(st,3,2,4,2,0,0,dict(DEFAULTS),3)
+    tid=db.open_trades()[0]['id']
+    db.paper_sell(tid,1,1100,'일부',0,0,0)
+    db.paper_close(tid,1200,'나머지',0,0,0)
+    assert f'{tid}: 연습종목' in db.practice_sale_report()
+    first=db.practice_sale_report(tid)
+    second=db.practice_sale_report(tid,2)
+    assert '1/2페이지' in first and f'/연습내역 {tid} 2' in first
+    assert '2번째 매도' in second and '나머지' in second
+    assert '마지막 페이지' in db.practice_sale_report(tid,3)
+    assert '없는 번호' in Database(tmp_path/'other.db').practice_sale_report(tid)

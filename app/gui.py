@@ -1275,6 +1275,7 @@ class MainWindow(QMainWindow):
                                      watch_funds=self.mock_watch_status.funds_summary,
                                      recommendation_report=lambda performance, page=1, db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_summary(mode,performance=performance,page=page),
+                                     practice_sales=lambda trade_id=None, page=1, db=self.db: db.practice_sale_report(trade_id,page),
                                      recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_overview(mode),
                                      watch_orders=self.mock_watch_status.handle_orders,
