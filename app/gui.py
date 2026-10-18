@@ -521,6 +521,10 @@ class MainWindow(QMainWindow):
         note=lbl('KRX 시세·시가총액의 일봉 기준입니다. 매일 종가에 선정 → 다음 거래일 시가 가상진입, 1·3·5일 보유 수익률 검증.\n'
                  '실제 자동주문·AI 예측확률이 아닙니다. 미적용 조건은 독립 비교되며 사용자 승인 없이 실전 적용되지 않습니다.','Muted')
         note.setWordWrap(True);v.addWidget(note)
+        recommendation_import = QPushButton('저장된 추천의 가격 자료 넣기 (고급)')
+        recommendation_import.setToolTip('직접 확인한 거래일·종가 자료 파일을 저장된 추천과 대조해요. 실제 수익률이나 공식 검증 완료로 처리하지 않아요.')
+        recommendation_import.clicked.connect(self.import_recommendation_prices)
+        v.addWidget(recommendation_import)
         box=QFrame(objectName='Panel');form=QGridLayout(box)
         self.research_source=QComboBox();self.research_source.addItems(['CSV_USER','KRX','DEMO_SYNTHETIC'])
         form.addWidget(lbl('연구 데이터'),0,0);form.addWidget(self.research_source,0,1)
@@ -636,6 +640,22 @@ class MainWindow(QMainWindow):
                       lambda r:(self.research_source.setCurrentText('KRX'),self.refresh_research(),
                                 QMessageBox.information(self,'KRX 저장',f'신규 응답 {r["requests"]}회 / {r["rows"]:,}행 저장')),
                       'KRX 수집 완료')
+
+    def import_recommendation_prices(self):
+        if self.work is not None and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 자료를 넣어 주세요.')
+            return
+        path,_ = QFileDialog.getOpenFileName(self,'확인한 거래일·종가 자료 넣기','','추천 가격 자료 (*.json)')
+        if not path:
+            return
+        from app.recommendation_import import import_package
+        db,mode = self.db,current_mode(self.cfg).key
+        self.run_task(lambda:import_package(db,path,mode),
+            lambda result:QMessageBox.information(self,'추천 가격 자료 반영',
+                f"추천 {result['recommendations']}개 대조 · 새 평가 {result['added']}개\n"
+                f"자료 확인 완료일 {result['available_through']}\n"
+                '텔레그램 /추천성적에서 확인할 수 있어요. 실제 거래 수익률이 아니에요.'),
+            '추천 가격 자료 대조 완료')
 
     def run_research(self):
         source=self.research_source.currentText()
