@@ -167,7 +167,7 @@ def test_gui_handoff_and_saved_result_skip_trade_side_effects():
     gui_method('poll_remote_scan', current_mode=mode)(fake)
     assert calls == [dict(remote=True)]
     fake.remote_scan_active = True
-    fake.db = SimpleNamespace(save_scan=lambda *args: calls.append('saved') or 1,
+    fake.db = SimpleNamespace(save_scan=lambda *args,**kwargs: calls.append('saved') or 1,
                               recommendation_search_result=lambda mode, scan_id: '검색 #1 고정 결과')
     fake.history = object()
     fake.fill_stock_tables = lambda: calls.append('table')

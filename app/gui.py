@@ -1604,15 +1604,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f'조회 중: {mode}')
         def fetch(progress, cancelled):
             if mode == 'DEMO':
-                return self.demo.scan(cfg['market'])
+                return self.demo.scan(cfg['market']),None
             key, secret = self.broker_keys(cfg['kiwoom_env'])
             client = KiwoomMarket(key, secret, cfg['kiwoom_env'],batch_profile=self.quote_batch_profile)
             try:
-                return client.scan(cfg['market'], progress=progress, cancelled=cancelled,
+                rows=client.scan(cfg['market'], progress=progress, cancelled=cancelled,
                                    include_etf=cfg['include_etf'])
+                return rows,client.last_scan_metrics
             finally:
                 client.session.close()
-        self.run_task(fetch, lambda rows: self.on_scan(rows,cfg,mode), '전체 대상 검색 및 DB 저장 완료', with_progress=True)
+        self.run_task(fetch, lambda output: self.on_scan(output[0],cfg,mode,metrics=output[1]), '전체 대상 검색 및 DB 저장 완료', with_progress=True)
 
     def show_scan_progress(self, message):
         if self.remote_scan_active:
@@ -1628,7 +1629,7 @@ class MainWindow(QMainWindow):
             self.cancel_scan_button.setEnabled(False)
             self.show_scan_progress('조회 취소 대기 중 · 현재 요청 종료 후 중지')
 
-    def on_scan(self, stocks, cfg, mode):
+    def on_scan(self, stocks, cfg, mode, *, metrics=None):
         if self.remote_scan_active and self.remote_scan.cancellation_requested():
             raise RuntimeError('원격 검색을 취소하여 추천을 생성하지 않았습니다.')
         if self.work and self.work.isInterruptionRequested():
@@ -1636,7 +1637,7 @@ class MainWindow(QMainWindow):
         self.scanning = False
         self.stocks = stocks
         self.results = evaluate(stocks, cfg)
-        scan_id=self.db.save_scan(stocks, self.results, cfg, cfg['market'], mode)
+        scan_id=self.db.save_scan(stocks, self.results, cfg, cfg['market'], mode,metrics=metrics)
         try:
             record_nxt_evidence(self.history,current_mode(cfg).key,stocks)
         except Exception:

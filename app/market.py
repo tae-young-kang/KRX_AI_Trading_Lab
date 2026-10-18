@@ -100,6 +100,8 @@ class KiwoomMarket:
         self.session = requests.Session()
         self.batch_profile = batch_profile
         self._scan_batch_size = self.QUOTE_BATCH_SIZE
+        self._measuring_scan = False
+        self.last_scan_metrics = None
 
     def login(self):
         resp = self.session.post(self.url + '/oauth2/token', json={
@@ -125,6 +127,8 @@ class KiwoomMarket:
             if interval < delay:
                 time.sleep(delay - interval)
             self.last_api_call = time.monotonic()
+            if self._measuring_scan:
+                self._scan_http_calls += 1
             try:
                 resp = self.session.post(self.url + path, headers={
                     'authorization': f'Bearer {self.token}', 'api-id': api_id,
@@ -187,6 +191,7 @@ class KiwoomMarket:
             if len(codes) <= 2:
                 raise
             notify('묶음 요청 거부 · 작은 묶음으로 재조회 중')
+            if self._measuring_scan: self._scan_fallbacks += 1
             middle = len(codes) // 2
             self._scan_batch_size=min(self._scan_batch_size,middle)
             return (self._quote_rows(codes[:middle], cancelled, notify) +
@@ -202,6 +207,7 @@ class KiwoomMarket:
             if len(codes) <= 2:
                 raise RuntimeError(f'시세 {len(missing)}개 누락: 전체 조회 미완료. 추천을 생성하지 않습니다.')
             notify(f'묶음 응답 {len(missing)}개 누락 · 누락 종목 재조회 중')
+            if self._measuring_scan: self._scan_fallbacks += 1
             if len(missing) == len(codes):
                 middle = len(codes) // 2
                 self._scan_batch_size=min(self._scan_batch_size,middle)
@@ -212,6 +218,20 @@ class KiwoomMarket:
         return rows
 
     def scan(self, market='전체', progress=None, cancelled=None, include_etf=True):
+        started=time.monotonic()
+        self._scan_http_calls=self._scan_fallbacks=0
+        self._measuring_scan=True
+        completed=False
+        try:
+            rows=self._scan(market,progress,cancelled,include_etf)
+            completed=True
+            return rows
+        finally:
+            self.last_scan_metrics=dict(completed=completed,elapsed_seconds=max(0,time.monotonic()-started),
+                                        http_calls=self._scan_http_calls,fallbacks=self._scan_fallbacks)
+            self._measuring_scan=False
+
+    def _scan(self, market='전체', progress=None, cancelled=None, include_etf=True):
         """Enumerate the selected markets before screening every listed symbol.
 
         Official specs: ka10099 (0=KOSPI, 10=KOSDAQ), ka10095

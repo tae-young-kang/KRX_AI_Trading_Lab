@@ -131,6 +131,9 @@ def search_result(db, mode, scan_id, *, page=1):
              f"검색 시각 {batch['created_at']} · 추천 {batch['selected_count']}개",
              '그때의 조건: '+condition_label(json.loads(batch['conditions_json']))]
     lines.extend(scan_scope(db,batch))
+    metric=db.execute('SELECT * FROM scan_metrics WHERE scan_id=?',(scan_id,)).fetchone()
+    if metric:
+        lines.append(f"조회 {metric['elapsed_seconds']:.1f}초 · 목록/시세 요청 {metric['http_calls']}회 · 작은 묶음 재시도 {metric['fallbacks']}회")
     rows = db.execute('''SELECT * FROM recommendations WHERE scan_id=?
         ORDER BY rank LIMIT 5 OFFSET ?''',(scan_id,(page-1)*5)).fetchall()
     for row in rows:

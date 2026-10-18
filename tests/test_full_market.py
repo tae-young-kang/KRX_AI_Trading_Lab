@@ -109,8 +109,10 @@ def test_successful_batch_hint_reduces_rejected_calls_without_caching_quotes(bro
                                          if not omit_last[0] or code!=codes[-1]]))
     broker.session.post.side_effect=post
     first=broker.scan('KOSPI')
+    assert broker.last_scan_metrics['completed'] and broker.last_scan_metrics['http_calls']==13
     first_count=len(calls);calls.clear();round_number[0]=1
     second=broker.scan('KOSPI')
+    assert broker.last_scan_metrics['http_calls']==10 and broker.last_scan_metrics['fallbacks']==0
     assert first_count==11 and len(calls)==8 and max(calls)==25
     assert {row.code for row in first}=={row.code for row in second}==set(codes)
     assert all(row.price==10001 for row in second)
@@ -119,6 +121,7 @@ def test_successful_batch_hint_reduces_rejected_calls_without_caching_quotes(bro
     with pytest.raises(RuntimeError,match='누락'):
         broker.scan('KOSPI')
     assert broker.batch_profile.limit(broker.url)==100
+    assert broker.last_scan_metrics['completed'] is False
 
 
 def test_batch_hint_expiry_clock_reversal_and_server_scope():

@@ -142,6 +142,21 @@ def test_exact_search_pages_cover_all_selected_symbols(tmp_path):
     assert f'/추천결과 {sid} 2' in first and f'/추천결과 {sid} 1' in second
 
 
+def test_scan_timing_is_frozen_and_invalid_metrics_do_not_save(tmp_path):
+    db=Database(tmp_path/'metrics.db');rows=candidates()
+    metrics=dict(completed=True,elapsed_seconds=12.3,http_calls=10,fallbacks=2)
+    sid=db.save_scan([r.stock for r in rows],rows,deepcopy(DEFAULTS),'전체','DEMO',metrics=metrics)
+    metrics['http_calls']=999
+    text=db.recommendation_search_result('DEMO',sid)
+    assert '조회 12.3초' in text and '요청 10회' in text and '재시도 2회' in text
+    for change in (dict(completed=False),dict(elapsed_seconds=float('nan')),dict(http_calls=True),dict(fallbacks=-1)):
+        with pytest.raises(ValueError):
+            db.save_scan([r.stock for r in rows],rows,deepcopy(DEFAULTS),'전체','DEMO',metrics={**metrics,**change})
+    with db.connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM scans').fetchone()[0]==1
+        assert conn.execute('SELECT COUNT(*) FROM scan_metrics').fetchone()[0]==1
+
+
 @pytest.mark.parametrize('damage',['missing','extra','different_price','duplicate_ranked','duplicate_population'])
 def test_rankings_cannot_be_saved_against_a_different_scan_population(tmp_path,damage):
     db=Database(tmp_path/'practice.db')

@@ -45,6 +45,8 @@ class Database:
                   source TEXT NOT NULL, FOREIGN KEY(scan_id) REFERENCES scans(scan_id));
                 CREATE INDEX IF NOT EXISTS idx_snapshot_code_ts ON snapshots(code,ts);
                 CREATE INDEX IF NOT EXISTS idx_snapshot_scan ON snapshots(scan_id);
+                CREATE TABLE IF NOT EXISTS scan_metrics(
+                    scan_id INTEGER PRIMARY KEY,elapsed_seconds REAL,http_calls INTEGER,fallbacks INTEGER);
                 CREATE TABLE IF NOT EXISTS paper_trades(
                   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL,
                   name TEXT NOT NULL, market TEXT NOT NULL,
@@ -78,7 +80,13 @@ class Database:
             db.execute('INSERT INTO audit(created_at,kind,message) VALUES(?,?,?)',
                        (now(), kind, str(message)[:1500]))
 
-    def save_scan(self, stocks, ranked, settings, market, source):
+    def save_scan(self, stocks, ranked, settings, market, source, *, metrics=None):
+        if metrics is not None:
+            if (not isinstance(metrics,dict) or set(metrics)!={'completed','elapsed_seconds','http_calls','fallbacks'}
+                    or metrics['completed'] is not True or type(metrics['elapsed_seconds']) not in (int,float)
+                    or not isfinite(metrics['elapsed_seconds']) or not 0<=metrics['elapsed_seconds']<=86400
+                    or any(type(metrics[key]) is not int or not 0<=metrics[key]<=100000 for key in ('http_calls','fallbacks'))):
+                raise ValueError('완료된 검색의 시간·요청 집계를 확인해 주세요.')
         stocks,ranked = list(stocks),list(ranked)
         recommendations.validate_population(stocks,ranked)
         with self.connect() as db:
@@ -86,6 +94,9 @@ class Database:
             cur = db.execute('INSERT INTO scans(ts, mode, market, strategy_json,count) VALUES(?,?,?,?,?)',
                              (ts, source, market, json.dumps(settings_snapshot(settings), ensure_ascii=False), len(stocks)))
             scan_id = cur.lastrowid
+            if metrics is not None:
+                db.execute('INSERT INTO scan_metrics VALUES(?,?,?,?)',
+                           (scan_id,metrics['elapsed_seconds'],metrics['http_calls'],metrics['fallbacks']))
             recommendations.record(db,scan_id,ranked,settings,source,ts)
             scores = {r.stock.code: r for r in ranked}
             for st in stocks:
