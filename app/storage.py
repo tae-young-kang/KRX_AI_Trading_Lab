@@ -6,6 +6,7 @@ from pathlib import Path
 from app.db import ClosingConnection
 from app.trade_review import settings_snapshot, review_conditions, outcome
 from app import recommendations
+from app.trading_clock import KST
 
 
 def now():
@@ -74,7 +75,7 @@ class Database:
 
     def save_scan(self, stocks, ranked, settings, market, source):
         with self.connect() as db:
-            ts = now()
+            ts = datetime.now(KST).isoformat(timespec='seconds')
             cur = db.execute('INSERT INTO scans(ts, mode, market, strategy_json,count) VALUES(?,?,?,?,?)',
                              (ts, source, market, json.dumps(settings_snapshot(settings), ensure_ascii=False), len(stocks)))
             scan_id = cur.lastrowid
