@@ -18,11 +18,31 @@ def prepare(history, *, sessions, through, mode, source):
     eligible=[d for d in days if d.isoformat()<=through]
     if len(eligible)<7:
         raise ValueError('전일 종가를 포함한 7거래일 근거가 필요해요.')
-    bars=history.load_bars(source,eligible[-7].isoformat(),through)
+    bars,observations=history.load_evidence(source,eligible[-7].isoformat(),through)
     expected_days={d.isoformat() for d in eligible[-7:]}
     observed_market_days={(b.market,b.date) for b in bars}
     missing_market_days=[(market,day) for market in ('KOSPI','KOSDAQ') for day in sorted(expected_days)
                          if (market,day) not in observed_market_days]
+    observed={(row['market'],row['day']):row for row in observations}
+    price_counts=defaultdict(int)
+    for bar in bars:
+        price_counts[(bar.market,bar.date)]+=1
+    quality={}
+    for market in ('KOSPI','KOSDAQ'):
+        unknown=omitted=stale=0
+        for day in expected_days:
+            row=observed.get((market,day))
+            if row is None or row['received_count'] is None:
+                unknown+=1
+            else:
+                counts=(row['received_count'],row['kept_count'],row['omitted_count'])
+                if (not all(type(value) is int and value>=0 for value in counts)
+                        or counts[0]!=counts[1]+counts[2]):
+                    raise ValueError('일별 정규화 관측 수를 확인해야 해요.')
+                omitted+=counts[2]
+                if counts[1]!=price_counts[(market,day)]:
+                    stale+=1
+        quality[market]=dict(unknown_days=unknown,omitted_rows=omitted,stale_days=stale)
     grouped=defaultdict(list)
     for bar in bars:
         if bar.market in ('KOSPI','KOSDAQ'):
@@ -34,6 +54,7 @@ def prepare(history, *, sessions, through, mode, source):
                       mode=mode,price_source=source)
         states[result['status']]+=1
         if result['matched']:
+            result['ingest_quality']=quality[market]
             results.append(result)
     results.sort(key=lambda r:(-r['hits'][-1]['trade_value_eok'],r['market'],r['code']))
     with history.connect() as db:
@@ -56,7 +77,7 @@ def prepare(history, *, sessions, through, mode, source):
             inserted+=cur.rowcount
             alert_ids.append(db.execute('SELECT id FROM theme_alerts WHERE fingerprint=?',(key,)).fetchone()[0])
         report=dict(symbols=len(grouped),states=dict(states),matched=len(results),prepared=inserted,
-                    missing_market_days=missing_market_days,coverage='CACHED_SYMBOLS_ONLY')
+                    missing_market_days=missing_market_days,coverage='CACHED_SYMBOLS_ONLY',ingest_quality=quality)
         db.execute('INSERT INTO theme_runs(mode,source,day,report_json,alert_ids_json) VALUES(?,?,?,?,?)',
                    (mode,source,through,json.dumps(report,sort_keys=True),json.dumps(alert_ids)))
     return dict(report,results=results)

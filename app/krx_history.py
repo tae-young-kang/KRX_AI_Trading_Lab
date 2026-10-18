@@ -198,6 +198,16 @@ class HistoryStore:
         with self.connect() as db:
             return db.execute('SELECT COUNT(*),COUNT(DISTINCT day),COUNT(DISTINCT code),MIN(day),MAX(day) FROM daily_bars WHERE source=?',(source,)).fetchone()
 
+    def load_evidence(self,source,begin,end):
+        """Prices and ingest observations from the same SQLite read snapshot."""
+        with self.connect() as db:
+            db.execute('BEGIN')
+            rows=db.execute('''SELECT day,code,name,market,open,high,low,close,volume,trade_value_eok,cap_eok
+                FROM daily_bars WHERE source=? AND day BETWEEN ? AND ? ORDER BY day,code''',(source,begin,end)).fetchall()
+            observations=db.execute('SELECT * FROM daily_ingest_status WHERE source=? AND day BETWEEN ? AND ?',
+                                    (source,begin,end)).fetchall()
+            return [Bar(*tuple(row)) for row in rows],[dict(row) for row in observations]
+
     def ingest_summary(self,source):
         with self.connect() as db:
             rows=db.execute('SELECT * FROM daily_ingest_status WHERE source=? ORDER BY day DESC,market LIMIT 10',(source,)).fetchall()

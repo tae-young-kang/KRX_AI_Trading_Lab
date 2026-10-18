@@ -96,4 +96,8 @@ def alert_text(result, *, nxt_eligible=None, nxt_asof=None, nxt_source=None):
                   f'만족일 거래대금 합계: {fsum(h["trade_value_eok"] for h in result["hits"]):,.2f}억 원',
                   '고가 상승률 합계는 투자 수익률이 아닙니다. 주문은 보내지 않았어요.',
                   f'가격 출처: {result["price_source"]} · 거래일 근거: {result["calendar_source"]}'])
+    quality=result.get('ingest_quality')
+    if quality:
+        lines.extend([f'전일 종가 포함 7거래일 수집 근거: 원본 수 미확인 {quality["unknown_days"]}일 · 정규화 제외 {quality["omitted_rows"]}행 · 관측/가격 행 수 불일치 {quality["stale_days"]}일',
+                      '저장된 자료 범위의 감지입니다. 전체 종목 수집 완료는 미확인입니다.'])
     return '\n'.join(lines)
