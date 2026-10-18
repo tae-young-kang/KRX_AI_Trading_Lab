@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime,timezone
 import pytest
 from app.krx_history import HistoryStore
-from app.recommendation_schedule import run_due
+from app.recommendation_schedule import run_due,summary
 from app.storage import Database
 from app.config import DEFAULTS
 
@@ -35,3 +35,17 @@ def test_failure_and_interrupted_attempt_are_not_retried(tmp_path):
         conn.execute("INSERT INTO recommendation_evaluation_jobs VALUES('DEMO','2026-10-19','RUNNING',?,NULL)",(NOW.isoformat(),))
     assert run_due(db,history,'DEMO',enabled=True,now=NOW)['previous']=='RUNNING'
     with pytest.raises(ValueError): run_due(db,history,'DEMO',enabled=True,now=NOW.replace(tzinfo=None))
+
+
+def test_summary_is_mode_scoped_read_only_and_does_not_echo_corruption(tmp_path):
+    db=Database(tmp_path/'practice.db')
+    text=summary(db,'DEMO',enabled=False,now=NOW)
+    assert '자동 갱신: 꺼짐' in text and '거래일 설정 없음' in text and '시도 기록 없음' in text
+    with db.connect() as conn:
+        conn.execute("INSERT INTO recommendation_evaluation_jobs VALUES('MOCK','2026-10-19','FAILED',?,NULL)",(NOW.isoformat(),))
+        conn.execute("INSERT INTO recommendation_selections VALUES('MOCK',?,?)",('PRIVATE_INVALID_JSON',NOW.isoformat()))
+        before=tuple(conn.iterdump())
+    text=summary(db,'MOCK',enabled=True,now=NOW)
+    assert '설정 확인 필요' in text and '평가 미완료' in text and 'PRIVATE' not in text
+    assert '평가 미완료' not in summary(db,'DEMO',enabled=True,now=NOW)
+    with db.connect() as conn: assert tuple(conn.iterdump())==before

@@ -29,7 +29,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -54,6 +54,7 @@ class TelegramOrderService:
         self.theme_budget = theme_budget
         self.practice_daily = practice_daily
         self.recommendation_request = recommendation_request
+        self.recommendation_status = recommendation_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
         from app.theme_delivery import destination_scope
         self.theme_destination = destination_scope(bot_id,chat_id)
@@ -240,6 +241,8 @@ class TelegramOrderService:
                     reply = '추천 기록 연결이 없어요. 집 PC에서 확인해 주세요.'
                 else:
                     reply = self.recommendation_report(False,scan_id=int(match[1]),page=int(match[2] or 1))
+            elif text == '/평가상태':
+                reply=self.recommendation_status() if self.recommendation_status else '추천 성적 상태 연결이 없어요. 집 PC에서 수신을 다시 시작해 주세요.'
             elif text == '/추천요약':
                 reply = (self.recommendation_overview() if self.recommendation_overview
                          else '추천 요약 연결이 없어요. 집 PC에서 확인해 주세요.')
@@ -294,6 +297,7 @@ class TelegramOrderService:
                 reply += '\n/추천검색: 새 검색 요청 · /검색상태: 진행 확인'
                 reply += '\n/검색취소: 대기·진행 중인 원격 검색 취소'
                 reply += '\n/보호상태: 모의 보호 판단 기록 (자동 매도 미연결)'
+                reply += '\n/평가상태: 추천 성적 자동 갱신 상태'
                 reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
                 reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'

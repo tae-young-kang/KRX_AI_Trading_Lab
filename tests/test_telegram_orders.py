@@ -274,6 +274,18 @@ def test_protection_status_is_read_only_after_stop(sandbox):
     assert seen==['/보호상태 2'] and broker.calls==[]
 
 
+def test_recommendation_evaluation_status_after_stop_and_replay(sandbox):
+    service,broker,_,_=sandbox
+    seen=[]
+    service.recommendation_status=lambda:seen.append('read') or '저장 자료 평가 상태'
+    bad=update(sandbox,1,'/평가상태');bad['message']['from']['id']=99
+    assert service.handle(bad) is None
+    service.handle(update(sandbox,2,'/중지'))
+    event=update(sandbox,3,'/평가상태')
+    assert service.handle(event)==service.handle(event)=='저장 자료 평가 상태'
+    assert seen==['read'] and broker.calls==[]
+
+
 def test_practice_list_page_command_does_not_become_trade_number(sandbox):
     service,broker,_,_=sandbox;seen=[]
     service.practice_sales=lambda tid,page:seen.append((tid,page)) or '목록'
