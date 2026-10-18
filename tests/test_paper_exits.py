@@ -170,3 +170,19 @@ def test_unknown_legacy_pnl_is_excluded_instead_of_counted_as_break_even(tmp_pat
         record.execute("UPDATE paper_trades SET closed_at='2026-10-19T12:00:00',pnl=NULL,remaining_qty=0 WHERE id=?",(tid,))
     stats=db.stats()
     assert stats['unknown_count']==1 and stats['count']==0 and stats['wins']==0
+
+@pytest.mark.parametrize('column,value', [
+    ('allocated_cost',1),('sell_fee',99),('sell_tax',99),('fill',1),
+    ('reference',1),('pnl',1),('qty',-2),('costs_json','broken'),
+    ('costs_json','{}'),('costs_json','{"paper_fee_pct":-1,"paper_sell_tax_pct":0,"paper_slippage_pct":0}')])
+def test_corrupt_segment_blocks_followup_without_modifying_ledger(tmp_path,column,value):
+    db,tid=position(tmp_path)
+    db.paper_sell(tid,2,1100,'첫 매도',1,1,1)
+    # Column names are a fixed test matrix, never user input.
+    with db.connect() as record:
+        record.execute(f'UPDATE paper_exits SET {column}=? WHERE trade_id=?',(value,tid))
+    before=db.trades()[0]
+    history=db.paper_exit_history(tid)
+    with pytest.raises(ValueError,match='대조해야'):
+        db.paper_close(tid,1200,'나머지',1,1,1)
+    assert db.trades()[0]==before and db.paper_exit_history(tid)==history

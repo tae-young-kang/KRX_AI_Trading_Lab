@@ -39,6 +39,34 @@ def _check_chronology(opened_at, previous, stamp):
         raise ValueError('연습 매도 시각이 이전 기록보다 이르거나 잘못됐어요. PC 시각과 기록을 확인해 주세요.') from None
 
 
+def _check_segments(previous, entry_cost, original):
+    """Validate open-position segments before trusting their cost allocations."""
+    try:
+        keys=('paper_fee_pct','paper_sell_tax_pct','paper_slippage_pct')
+        for row in previous:
+            costs=json.loads(row['costs_json'])
+            if (not isinstance(costs,dict) or set(costs)!=set(keys)
+                    or not all(_finite(costs[k]) and 0<=costs[k]<100 for k in keys)
+                    or costs[keys[0]]+costs[keys[1]]>=100
+                    or type(row['qty']) is not int or not 0<row['qty']<original
+                    or not all(_finite(row[k]) for k in
+                               ('reference','fill','sell_fee','sell_tax','allocated_cost','pnl'))
+                    or row['reference']<=0):
+                raise ValueError('invalid segment')
+            fill=row['reference']*(1-costs[keys[2]]/100)
+            proceeds=fill*row['qty']
+            fee=proceeds*costs[keys[0]]/100
+            tax=proceeds*costs[keys[1]]/100
+            allocated=entry_cost*row['qty']/original
+            expected=(fill,fee,tax,allocated,proceeds-fee-tax-allocated)
+            actual=(row[k] for k in ('fill','sell_fee','sell_tax','allocated_cost','pnl'))
+            if not all(_finite(value) and isclose(value,stored,rel_tol=1e-12,abs_tol=1e-7)
+                       for value,stored in zip(expected,actual)):
+                raise ValueError('segment mismatch')
+    except (TypeError,ValueError,OverflowError,KeyError):
+        raise ValueError('이전 분할매도의 비용·원가·손익 기록을 대조해야 해요. 기록을 바꾸지 않았어요.') from None
+
+
 def sell(db,trade_id,quantity,observed_price,reason,fee_pct,tax_pct,slip_pct,*,stamp,request_key=None):
     if (type(trade_id) is not int or trade_id<=0 or quantity is not None and (type(quantity) is not int or quantity<=0)
             or not _finite(observed_price) or observed_price<=0
@@ -62,6 +90,13 @@ def sell(db,trade_id,quantity,observed_price,reason,fee_pct,tax_pct,slip_pct,*,s
     _check_chronology(trade['opened_at'],previous,stamp)
     remaining=trade['remaining_qty']
     original=trade['qty']
+    if (type(original) is not int or original<=0
+            or not all(_finite(trade[k]) for k in ('buy_fill','buy_fee'))):
+        raise ValueError('연습 진입 기록을 대조해야 해요.')
+    entry_cost=trade['buy_fill']*original+trade['buy_fee']
+    if not _finite(entry_cost) or entry_cost<=0:
+        raise ValueError('연습 진입 원가를 대조해야 해요.')
+    _check_segments(previous,entry_cost,original)
     if (type(original) is not int or type(remaining) is not int or not 0<remaining<=original
             or sum(r['qty'] for r in previous)!=original-remaining
             or not all(_finite(trade[k]) for k in ('buy_fill','buy_fee','realized_pnl'))
