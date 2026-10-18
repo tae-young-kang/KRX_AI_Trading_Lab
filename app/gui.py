@@ -19,6 +19,7 @@ from app.config import Settings, Credentials, data_dir
 from app.storage import Database
 from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
 from app.strategy import evaluate, auto_paper_exit, create_proposals
+from app.practice_quotes import fresh_practice_price
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
@@ -1460,6 +1461,8 @@ class MainWindow(QMainWindow):
                 f'{st.name} {qty}주 · 관측가 {st.price:,.0f}원\n가상매매이며 실제 증권계좌에 주문하지 않습니다.\n진행할까요?') != QMessageBox.StandardButton.Yes:
             return
         try:
+            if not fresh_practice_price(st):
+                raise ValueError('가격 조회가 오래됐어요. [지금 검색] 후 다시 시도하세요.')
             fill = self.db.paper_open(st,qty,self.cfg['exit_stop_pct'],self.cfg['exit_take_pct'],
                 self.cfg['exit_max_days'],self.cfg['paper_fee_pct'],self.cfg['paper_slippage_pct'],
                 dict(self.cfg),self.cfg['max_paper_positions'])
@@ -1480,7 +1483,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self,'선택 오류','이미 청산된 거래입니다.')
             return
         st = next((s for s in self.stocks if s.code == trade['code']),None)
-        if st is None or datetime.now() - datetime.fromisoformat(st.stamp) > timedelta(minutes=3):
+        if not fresh_practice_price(st):
             QMessageBox.warning(self,'가격 갱신 필요','최신 가격이 없습니다. 먼저 [지금 검색]을 눌러주세요.')
             return
         remaining=trade['remaining_qty']
@@ -1494,6 +1497,8 @@ class MainWindow(QMainWindow):
                 f'매도 후 남은 수량 {remaining-quantity}주\n앱 안의 연습 기록이며 증권계좌에 주문하지 않아요. 진행할까요?') != QMessageBox.StandardButton.Yes:
             return
         try:
+            if not fresh_practice_price(st):
+                raise ValueError('가격 조회가 오래됐어요. [지금 검색] 후 다시 시도하세요.')
             self.db.paper_sell(trade_id,quantity,st.price,'가상 수동청산' if quantity==remaining else '가상 분할매도',
                 self.cfg['paper_fee_pct'],self.cfg['paper_sell_tax_pct'],self.cfg['paper_slippage_pct'],request_key=uuid.uuid4().hex)
         except ValueError as error:

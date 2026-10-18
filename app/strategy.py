@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+from app.practice_quotes import fresh_practice_price
 
 
 @dataclass
@@ -41,7 +42,7 @@ def evaluate(stocks, cfg):
 
 def auto_paper_exit(db, stocks, cfg):
     """Simplified paper exit on observed snapshots, NOT exchange stop order."""
-    latest = {s.code: s for s in stocks if s.price > 0}
+    latest = {s.code: s for s in stocks if fresh_practice_price(s)}
     emitted = []
     for trade in db.open_trades():
         st = latest.get(trade['code'])

@@ -48,6 +48,7 @@ def test_paper_trade_math_and_idempotency(tmp_path):
         pass
     assert db.stats()['open_count']==1
     s.price=10500
+    s.stamp=datetime.now().isoformat()
     events=auto_paper_exit(db,[s],settings)
     assert len(events)==1 and events[0][1]=='가상 익절'
     assert db.stats()['count']==1
