@@ -186,3 +186,13 @@ app/theme_delivery.py는 주입한 송신 함수만 호출하는 기반이며 �
 나중에 관측 상태가 바뀌어도 과거 결과를 바꾸지 않고 새 판정으로 별도 버전을 만듭니다.
 빈 응답 후 기존 가격 보존처럼 관측과 캐시 행 수가 다르면 불일치로 안내합니다.
 이 메타데이터는 저장 자료 범위의 품질 안내이며 전체 상장 종목 수집 완료/공식 확정 증명이 아닙니다.
+
+## NXT 근거 수집 첫 단계
+
+키움 공식 배포 Postman 명세의 ka10099 응답 nxtEnable은 ‘Y: 가능’을 명시합니다.
+참고: https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/main/postman/kiwoom-openapi.postman_collection.json
+공식 예제 필드: https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/main/examples/국내주식/종목정보/list_domestic_stocks.py
+전체 종목 조회의 Stock에 명시적 Y만 긍정, 기타/빈 값은 미확인으로 담고 한국 시각과 API 출처를 보관합니다.
+현재 수집 객체에만 연결됐으며 날짜별 영속 저장과 과거 감지일 알림 연결은 아직 후속입니다.
+이 값은 관측 당시 가능 여부이며 과거 날짜/다음 거래일에 소급·연장하거나 실제 주문 허용에 사용하지 않습니다.
+N/누락을 KRX 전용으로 해석하지 않으며 실계좌 주문/거래소 라우팅 기능을 활성화하지 않습니다.

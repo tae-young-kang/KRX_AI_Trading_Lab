@@ -235,3 +235,18 @@ def test_unrecoverable_missing_symbol_still_blocks_large_batch(broker):
     broker.session.post.side_effect = post
     with pytest.raises(RuntimeError, match='누락'):
         broker._quote_rows(codes, None, lambda text: None)
+
+
+@pytest.mark.parametrize('flag,expected',[('Y',True),('N',None),('',None),(None,None),(True,None),(1,None)])
+def test_nxt_positive_observation_is_captured_without_guessing_negative(broker,flag,expected):
+    from datetime import datetime
+    def post(url,headers,json,timeout):
+        if headers['api-id']=='ka10099':
+            if json['mrkt_tp']=='8': return response({'list':[dict(code='999999',name='FAKE ETF')]})
+            return response({'list':[dict(code='900001',name='연습',nxtEnable=flag)]})
+        return response({'atn_stk_infr':[quote('900001')]})
+    broker.session.post.side_effect=post
+    stock=broker.scan('KOSPI')[0]
+    assert stock.nxt_eligible is expected and stock.nxt_source=='KIWOOM_KA10099'
+    assert datetime.fromisoformat(stock.nxt_observed_at).utcoffset().total_seconds()==32400
+    assert stock.as_dict()['nxt_eligible'] is expected

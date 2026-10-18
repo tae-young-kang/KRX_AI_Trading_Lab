@@ -6,6 +6,7 @@ from datetime import datetime
 from dataclasses import dataclass, asdict
 import requests
 from app.trading_clock import PRICE_BASIS_NOTICE
+from app.trading_clock import KST
 
 
 @dataclass
@@ -23,6 +24,9 @@ class Stock:
     stamp: str = ''
     quote_stamp: str = ''
     is_etf: bool = False
+    nxt_eligible: bool | None = None
+    nxt_observed_at: str = ''
+    nxt_source: str = ''
 
     def as_dict(self):
         return asdict(self)
@@ -223,7 +227,11 @@ class KiwoomMarket:
                     raise RuntimeError(f'{mrkt} 종목코드 형식 오류: 전체 조회 미완료')
                 if code in universe and universe[code][0] != mrkt:
                     raise RuntimeError('시장별 종목 목록이 서로 일치하지 않습니다.')
-                universe[code] = (mrkt, row.get('name') or code)
+                # Official ka10099 documents Y as available. Absence is not a
+                # documented negative; do not turn an unknown into KRX only.
+                nxt=True if row.get('nxtEnable')=='Y' else None
+                universe[code] = (mrkt, row.get('name') or code,nxt,
+                                  datetime.now(KST).isoformat(timespec='seconds'))
                 market_count += 1
             if not market_count:
                 raise RuntimeError(f'{mrkt} 전체 종목 목록이 비어 있습니다.')
@@ -256,7 +264,7 @@ class KiwoomMarket:
                 if (price is None or change is None or volume is None or
                         amount is None or price < 0 or volume < 0 or amount < 0):
                     raise RuntimeError('종목 시세 필수값 누락: 전체 조회 미완료')
-                mrkt, name = universe[code]
+                mrkt, name, nxt, nxt_stamp = universe[code]
                 # Keep receipt time separate from the exchange's quote time.
                 quote_stamp = ''
                 try:
@@ -269,7 +277,7 @@ class KiwoomMarket:
                     code, name, mrkt, price, change, amount / 100,
                     numeric(row.get('pred_trde_qty_pre')), numeric(row.get('mac')),
                     int(volume), 'KIWOOM', datetime.now().isoformat(timespec='seconds'), quote_stamp,
-                    code in etfs)
+                    code in etfs,nxt,nxt_stamp,'KIWOOM_KA10099')
             if set(received) != set(batch):
                 missing = len(set(batch) - set(received))
                 raise RuntimeError(f'시세 {missing}개 누락: 전체 조회 미완료. 추천을 생성하지 않습니다.')
