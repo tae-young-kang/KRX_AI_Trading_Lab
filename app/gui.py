@@ -25,6 +25,7 @@ from app.theme_store import latest_report as theme_latest_report
 from app.theme_input import prepare_selection as prepare_theme_selection
 from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
+from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
@@ -340,9 +341,32 @@ class MainWindow(QMainWindow):
         continue_button=QPushButton('미시도 알림만 이어 보내기')
         continue_button.clicked.connect(lambda:self.send_theme_alerts(continue_unattempted=True))
         layout.addWidget(continue_button)
+        budget_button=QPushButton('총예산으로 예상 주수 보기 · 주문 안 함')
+        budget_button.clicked.connect(self.show_theme_budget)
+        layout.addWidget(budget_button)
         close=QPushButton('닫기')
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)
+        dialog.exec()
+
+    def show_theme_budget(self):
+        total,ok=QInputDialog.getInt(self,'1/3 · 총예산','전체 종목에 나눌 총예산 (원)',1000000,1,2000000000,10000)
+        if not ok:return
+        fee,ok=QInputDialog.getDouble(self,'2/3 · 매수 비용 가정','매수 수수료 가정 (%) · 실제 증권사 비용과 다를 수 있어요',0,0,100,2)
+        if not ok:return
+        buffer,ok=QInputDialog.getDouble(self,'3/3 · 가격 여유','가격 상승에 대비해 남겨둘 여유 (%)',0,0,100,2)
+        if not ok:return
+        try:
+            text=theme_budget_text(theme_budget_preview(self.history,mode=current_mode(self.cfg).key,total_won=total,
+                                                       fee_bps=round(fee*100),buffer_bps=round(buffer*100)))
+        except ValueError as error:
+            QMessageBox.information(self,'예산 미리보기 확인',str(error));return
+        dialog=QDialog(self)
+        dialog.setWindowTitle('테마1 예산 미리보기 · 주문 안 함')
+        dialog.resize(800,600)
+        layout=QVBoxLayout(dialog)
+        view=QTextEdit();view.setReadOnly(True);view.setPlainText(text);layout.addWidget(view)
+        close=QPushButton('닫기');close.clicked.connect(dialog.accept);layout.addWidget(close)
         dialog.exec()
 
     def send_theme_alerts(self, checked=False, *, continue_unattempted=False):

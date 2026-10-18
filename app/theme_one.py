@@ -66,6 +66,7 @@ def detect(*, code, market, bars, sessions, through, mode, price_source):
         raise ValueError('테마1 합계 계산 범위를 벗어났어요.') from None
     return dict(status='COMPLETE',matched=len(hits)>=3,code=code,name=today.name,market=market,
                 detected_on=through,window=[d.isoformat() for d in window[1:]],hits=hits,
+                reference_close=today.close,
                 high_sum=high_sum,trade_value_sum_eok=value_sum,sum_band='ABOVE' if exact_sum>65 else 'EQUAL' if exact_sum==65 else 'BELOW',cap_eok=cap,
                 price_source=price_source,calendar_source=sessions.source)
 
