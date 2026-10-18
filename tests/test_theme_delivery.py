@@ -63,3 +63,22 @@ def test_scope_and_status_hide_raw_recipient_and_separate_destinations(tmp_path)
     assert '발송 응답 확인 1개' in delivery_summary(history,**kwargs)
     other=delivery_summary(history,mode='DEMO',source='DEMO',destination=destination_scope(123,457))
     assert '미시도 1개' in other and '456' not in other
+
+
+def test_explicit_batch_binds_run_and_recipient_and_never_resends(tmp_path):
+    from app.theme_delivery import latest_snapshot,deliver_run
+    history,args=setup(tmp_path)
+    class Transport:
+        def __init__(self): self.calls=[]
+        def identity(self): return 123
+        def send(self,chat,text): self.calls.append((chat,text));return 9
+    transport=Transport()
+    snapshot=latest_snapshot(history,'DEMO')
+    result=deliver_run(history,mode='DEMO',run_id=snapshot['run_id'],transport=transport,chat_id=456)
+    assert result['SENT']==1 and transport.calls[0][0]==456
+    deliver_run(history,mode='DEMO',run_id=snapshot['run_id'],transport=transport,chat_id=456)
+    assert len(transport.calls)==1
+    prepare(history,**args)
+    with pytest.raises(ValueError,match='바뀌었어요'):
+        deliver_run(history,mode='DEMO',run_id=snapshot['run_id'],transport=transport,chat_id=456)
+    assert len(transport.calls)==1

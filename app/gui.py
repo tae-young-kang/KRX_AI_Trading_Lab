@@ -24,6 +24,7 @@ from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
 from app.theme_input import prepare_selection as prepare_theme_selection
 from app.theme_delivery import delivery_summary as theme_delivery_summary
+from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
@@ -333,10 +334,40 @@ class MainWindow(QMainWindow):
             view.setPlainText(text)
         page.valueChanged.connect(load)
         load(1)
+        send_button=QPushButton('저장된 최신 테마1 종목을 텔레그램으로 보내기')
+        send_button.clicked.connect(self.send_theme_alerts)
+        layout.addWidget(send_button)
         close=QPushButton('닫기')
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)
         dialog.exec()
+
+    def send_theme_alerts(self):
+        mode=current_mode(self.cfg).key
+        try:
+            snapshot=theme_snapshot(self.history,mode)
+            chat_id=int(self.cfg['telegram_chat_id'])
+            token=self.creds.get('telegram_token')
+            if chat_id<=0 or not token or snapshot['count']==0:
+                raise ValueError('감지 종목과 저장된 텔레그램 연결 정보를 확인해 주세요.')
+        except (ValueError,TypeError) as error:
+            QMessageBox.information(self,'테마1 알림 확인',str(error))
+            return
+        if QMessageBox.question(self,'테마1 알림 보내기',
+                f'{snapshot["day"]} · {snapshot["source"]} · {snapshot["count"]}종목\n'
+                '저장된 개인 대화방으로 종목별 알림을 보냅니다. 주문은 하지 않아요.\n'
+                '이미 시도한 알림은 다시 보내지 않으며 미확인 응답에서 중단합니다. 진행할까요?')!=QMessageBox.StandardButton.Yes:
+            return
+        def send():
+            from app.telegram_receiver import TelegramTransport
+            client=TelegramTransport(token)
+            try:
+                return theme_deliver_run(self.history,mode=mode,run_id=snapshot['run_id'],transport=client,chat_id=chat_id)
+            finally:
+                client.close()
+        self.run_task(send,lambda result:QMessageBox.information(self,'테마1 알림 결과',
+            f'발송 응답 확인(기존 포함) {result["SENT"]}개 · 미확인 {result["UNKNOWN"]}개 · 남은 {result["remaining"]}개\n'
+            '자세한 기록은 /테마1알림상태에서 확인하세요.'),'테마1 알림 처리 완료')
 
     def show_recommendation_history(self):
         mode = current_mode(self.cfg)
