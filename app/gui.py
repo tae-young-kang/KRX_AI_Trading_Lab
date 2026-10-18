@@ -1543,6 +1543,8 @@ class MainWindow(QMainWindow):
         self.run_task(fetch, lambda rows: self.on_scan(rows,cfg,mode), '전체 대상 검색 및 DB 저장 완료', with_progress=True)
 
     def show_scan_progress(self, message):
+        if self.remote_scan_active:
+            self.remote_scan.progress(message)
         self.count_info.setText(message)
         self.statusBar().showMessage(message)
 

@@ -38,6 +38,37 @@ def test_single_claim_busy_mode_and_completion():
     assert '완료하지 못했어요' in request.summary()
 
 
+@pytest.mark.parametrize('elapsed,starts', [(119.9, True), (120, False), (121, False), (-1, False)])
+def test_pending_request_expiry_uses_elapsed_time(elapsed, starts):
+    clock = [1000.0]
+    request = RecommendationRequest('MOCK', clock=lambda: clock[0])
+    request.request()
+    clock[0] += elapsed
+    assert request.take('MOCK', busy=False, active=True) is starts
+    if not starts:
+        assert '만료' in request.summary()
+        request.request()
+        assert request.take('MOCK', busy=False, active=True)
+
+
+def test_status_expires_busy_request_and_running_progress_survives_wait():
+    clock = [0]
+    request = RecommendationRequest('MOCK', clock=lambda: clock[0])
+    request.request()
+    assert not request.take('MOCK', busy=True, active=True)
+    clock[0] = 120
+    assert '만료' in request.summary()
+    request.request()
+    assert request.take('MOCK', busy=False, active=True)
+    clock[0] = 999
+    request.progress('KOSPI 조회 100/900\n'+'x'*300)
+    assert 'KOSPI 조회 100/900' in request.summary()
+    assert '만료' not in request.summary() and len(request.summary()) < 400
+    request.finish(success=True)
+    request.progress('late')
+    assert 'late' not in request.summary()
+
+
 def test_commands_authorization_replay_stop_and_no_orders(sandbox):
     service, broker, _, _ = sandbox
     request = RecommendationRequest('DEMO')
