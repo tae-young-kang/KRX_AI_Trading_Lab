@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QFrame, QStackedWidget, QListWidget, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox, QComboBox, QSpinBox,
     QDoubleSpinBox, QCheckBox, QFormLayout, QLineEdit, QScrollArea, QFileDialog,
-    QInputDialog, QAbstractItemView, QTextEdit
+    QInputDialog, QAbstractItemView, QTextEdit, QDialog, QTabWidget
 )
 
 from app.config import Settings, Credentials, data_dir
@@ -283,6 +283,9 @@ class MainWindow(QMainWindow):
         live.setEnabled(False)
         shortcuts.addWidget(live)
         v.addLayout(shortcuts)
+        history_button = QPushButton('지난 추천 확인하기 · 기록과 이후 가격')
+        history_button.clicked.connect(self.show_recommendation_history)
+        v.addWidget(history_button)
         cards = QHBoxLayout()
         cards.addWidget(self.card('연습으로 번 돈 / 잃은 돈', 'kpi_pnl'))
         cards.addWidget(self.card('이익을 낸 연습 비율', 'kpi_win'))
@@ -297,6 +300,39 @@ class MainWindow(QMainWindow):
         b.addWidget(lbl('실험 메모  |  수익률·손절·승률은 가상체결 기준이며 실제 체결이나 미래 수익을 보장하지 않습니다.','Muted'))
         v.addWidget(bottom)
         return page
+
+    def show_recommendation_history(self):
+        mode = current_mode(self.cfg)
+        try:
+            reports = [('추천 기록',self.db.recommendation_summary(mode.key)),
+                       ('이후 가격',self.db.recommendation_summary(mode.key,performance=True)),
+                       ('조건별 요약',self.db.recommendation_overview(mode.key))]
+        except Exception:
+            QMessageBox.information(self,'추천 기록 확인','기록을 읽지 못했어요. 집 PC의 저장 공간과 기록 파일 상태를 확인해 주세요.')
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(mode.title+' · 지난 추천 확인하기')
+        layout = QVBoxLayout(dialog)
+        guide = lbl('① 추천 기록 → ② 이후 가격 → ③ 조건별 요약 순서로 확인하세요.\n'
+                    '자료가 없으면 아직 평가할 수 없어요. 실제 매매 수익률과는 달라요.','Muted')
+        guide.setWordWrap(True)
+        layout.addWidget(guide)
+        tabs = QTabWidget()
+        for title,text in reports:
+            view = QTextEdit()
+            view.setReadOnly(True)
+            view.setPlainText(text)
+            tabs.addTab(view,title)
+        layout.addWidget(tabs)
+        note = lbl('새 검색부터 추천을 보관해요. 확인한 가격 자료는 고급 연구 화면에서 넣을 수 있어요.\n'
+                   '텔레그램에서는 /추천기록 · /추천성적 · /추천요약을 보내세요.','Muted')
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        close_button = QPushButton('닫기')
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        dialog.resize(900,650)
+        dialog.exec()
 
     def make_screener(self):
         page = QWidget()
