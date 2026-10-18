@@ -65,6 +65,7 @@ DEFAULTS = {
     'last_notification_day': '',
     'last_optimize_day': '',
     'research_auto_daily': False,
+    'recommendation_auto_evaluate': False,
     'research_last_update': '',
 }
 

@@ -170,8 +170,10 @@ class MainWindow(QMainWindow):
         self.daily_research_timer=QTimer(self)
         self.daily_research_timer.setInterval(10*60*1000)
         self.daily_research_timer.timeout.connect(self.maybe_daily_research)
+        self.daily_research_timer.timeout.connect(self.maybe_daily_recommendation_evaluation)
         self.daily_research_timer.start()
         QTimer.singleShot(25000,self.maybe_daily_research)
+        QTimer.singleShot(30000,self.maybe_daily_recommendation_evaluation)
         self.db.log('START', 'GUI 실행 - 실계좌 주문 기능 없음')
 
     def build(self):
@@ -706,6 +708,13 @@ class MainWindow(QMainWindow):
         recommendation_repeat = QPushButton('저장한 거래일로 추천 성적 다시 계산하기 (고급)')
         recommendation_repeat.clicked.connect(self.repeat_cached_recommendations)
         v.addWidget(recommendation_repeat)
+        recommendation_auto = QCheckBox('PC가 켜져 있으면 매일 저녁 추천 성적 갱신 (저장 자료만 사용)')
+        recommendation_auto.setChecked(self.cfg.get('recommendation_auto_evaluate') is True)
+        recommendation_auto.toggled.connect(self.save_auto_recommendation_evaluation)
+        v.addWidget(recommendation_auto)
+        self.recommendation_auto_status=lbl('20:30 이후 약 10분 간격 확인 · 확인한 거래일 범위만 평가 · 자동 보고 발송/주문 아님','Muted')
+        self.recommendation_auto_status.setWordWrap(True)
+        v.addWidget(self.recommendation_auto_status)
         theme_prepare=QPushButton('테마1 · 저장 시세와 확인한 거래일로 판정하기 (고급)')
         theme_prepare.clicked.connect(self.prepare_theme_one)
         v.addWidget(theme_prepare)
@@ -758,6 +767,25 @@ class MainWindow(QMainWindow):
     def save_auto_research(self,checked):
         self.cfg['research_auto_daily']=bool(checked)
         self.settings.save()
+
+    def save_auto_recommendation_evaluation(self,checked):
+        self.cfg['recommendation_auto_evaluate']=bool(checked)
+        self.settings.save()
+
+    def maybe_daily_recommendation_evaluation(self):
+        from app.recommendation_schedule import run_due
+        if self.cfg.get('recommendation_auto_evaluate') is not True or (self.work and self.work.isRunning()):
+            return
+        db,history,mode=self.db,self.history,current_mode(self.cfg).key
+        def finish(result):
+            if result['state']=='SUCCEEDED':
+                self.recommendation_auto_status.setText('저장 자료로 추천 성적 갱신 완료 · 확인한 기간 끝 '+result['result']['available_through'])
+            elif result['state']=='FAILED':
+                self.recommendation_auto_status.setText('자동 갱신 미완료 · 거래일/저장 자료를 확인해 수동 재평가하세요. 오늘 자동 재시도하지 않아요.')
+            elif result['state']=='ALREADY_ATTEMPTED':
+                labels={'SUCCEEDED':'완료','FAILED':'실패 · 수동 재평가 필요','RUNNING':'종료 미확인 · 수동 확인 필요'}
+                self.recommendation_auto_status.setText('오늘 자동 평가 기록: '+labels.get(result['previous'],'확인 필요'))
+        self.run_task(lambda:run_due(db,history,mode,enabled=True,now=datetime.now(KST)),finish,'추천 성적 자동 갱신 점검 완료')
 
     def maybe_daily_research(self):
         # Runs ONLY while GUI is alive; no hidden service. Does not send real orders.
