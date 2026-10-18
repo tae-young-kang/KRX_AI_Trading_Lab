@@ -4,7 +4,7 @@ from datetime import date, datetime
 import json
 from math import isfinite
 import re
-from app.recommendation_outcomes import SessionEvidence
+from app.recommendation_outcomes import SessionEvidence, session_day
 from app.recommendations import review
 from app.trading_clock import KST
 
@@ -39,7 +39,7 @@ def load_package(path, mode, *, today=None):
             raise ValueError()
         sessions = SessionEvidence(tuple(calendar['days']),calendar['begin'],calendar['end'],calendar['source'])
         begin,end,days = sessions.validate(mode)
-        through = date.fromisoformat(data['available_through'])
+        through = session_day(data['available_through'])
         if (not begin<=through<=end or through>(today or datetime.now(KST).date())
                 or not isinstance(data['prices'],list) or len(data['prices'])>50000):
             raise ValueError()
@@ -48,7 +48,7 @@ def load_package(path, mode, *, today=None):
         for row in data['prices']:
             if not isinstance(row,dict) or set(row)!={'day','code','market','close'}:
                 raise ValueError()
-            day = date.fromisoformat(row['day'])
+            day = session_day(row['day'])
             code,market,close = row['code'],row['market'],row['close']
             key = (row['day'],code,market)
             if (not isinstance(code,str) or not re.fullmatch(r'[A-Za-z0-9]{6}',code)

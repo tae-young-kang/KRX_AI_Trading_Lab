@@ -1,7 +1,7 @@
 """Explicit local calendar selection for cached daily theme research."""
 from datetime import date, datetime
 import json
-from app.recommendation_outcomes import SessionEvidence
+from app.recommendation_outcomes import SessionEvidence, session_day
 from app.theme_store import prepare
 from app.trading_clock import KST
 
@@ -29,7 +29,7 @@ def load_selection(path, mode, *, today=None):
             raise ValueError()
         sessions=SessionEvidence(tuple(calendar['days']),calendar['begin'],calendar['end'],calendar['source'])
         _,_,days=sessions.validate(mode)
-        target=date.fromisoformat(data['through'])
+        target=session_day(data['through'])
         if target not in days or target>(today or datetime.now(KST).date()) or sum(day<=target for day in days)<7:
             raise ValueError()
         return data,sessions

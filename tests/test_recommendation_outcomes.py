@@ -76,3 +76,16 @@ def test_finite_input_prices_cannot_store_infinite_percentage():
     bars=[replace(bar,close=1e308) for bar in prices()]
     with pytest.raises(ValueError,match='계산 범위'):
         run(entry_price=1e-308,bars=bars)
+
+
+@pytest.mark.parametrize('value',['20261019','2026-W43-1','2026-10-19 ',None,20261019])
+def test_session_dates_require_canonical_iso_keys(value):
+    from app.recommendation_outcomes import session_day
+    with pytest.raises(ValueError,match='YYYY-MM-DD'): session_day(value)
+    with pytest.raises(ValueError): replace(CALENDAR,begin=value).validate('DEMO')
+
+
+def test_noncanonical_prices_and_completion_day_cannot_alias_evidence():
+    with pytest.raises(ValueError,match='YYYY-MM-DD'): run(available_through='20261027')
+    bars=prices();bars[1]=replace(bars[1],date='20261020')
+    with pytest.raises(ValueError,match='YYYY-MM-DD'): run(bars=bars)

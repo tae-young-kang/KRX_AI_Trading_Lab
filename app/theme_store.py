@@ -4,6 +4,7 @@ from hashlib import sha256
 import json
 from datetime import date
 from app.theme_one import detect, alert_text
+from app.recommendation_outcomes import session_day
 
 
 def prepare(history, *, sessions, through, mode, source):
@@ -12,7 +13,7 @@ def prepare(history, *, sessions, through, mode, source):
             or (mode=='DEMO')!=(source=='DEMO')):
         raise ValueError('자료 모드와 출처를 확인해 주세요.')
     _,_,days=sessions.validate(mode)
-    if date.fromisoformat(through) not in days:
+    if session_day(through) not in days:
         raise ValueError('감지일은 확인된 거래일이어야 해요.')
     eligible=[d for d in days if d.isoformat()<=through]
     if len(eligible)<7:

@@ -103,3 +103,14 @@ def test_out_of_range_or_naive_time_records_are_not_silently_repaired(tmp_path):
         record.execute('UPDATE recommendation_batches SET created_at=?',('2026-10-19T10:00:00',))
     with pytest.raises(ValueError,match='추천이 없어요'):
         import_package(db,write(tmp_path,package()),'DEMO',today=TODAY)
+
+
+@pytest.mark.parametrize('field',['available_through','price_day','calendar_day'])
+def test_compact_date_input_is_rejected_before_review_writes(tmp_path,field):
+    db,_=store(tmp_path);data=package()
+    if field=='available_through': data['available_through']=data['available_through'].replace('-','')
+    elif field=='price_day': data['prices'][1]['day']=data['prices'][1]['day'].replace('-','')
+    else: data['calendar']['days'][1]=data['calendar']['days'][1].replace('-','')
+    with pytest.raises(ValueError): import_package(db,write(tmp_path,data),'DEMO',today=TODAY)
+    with db.connect() as record:
+        assert record.execute('SELECT COUNT(*) FROM recommendation_reviews').fetchone()[0]==0

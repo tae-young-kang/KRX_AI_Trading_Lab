@@ -3,6 +3,7 @@ from datetime import date
 from math import isfinite, fsum
 from fractions import Fraction
 import re
+from app.recommendation_outcomes import session_day
 
 
 def detect(*, code, market, bars, sessions, through, mode, price_source):
@@ -13,7 +14,7 @@ def detect(*, code, market, bars, sessions, through, mode, price_source):
     if price_source not in ('DEMO','KRX','CSV_USER') or (mode=='DEMO')!=(price_source=='DEMO'):
         raise ValueError('가격 자료 출처를 확인해 주세요.')
     begin,end,days=sessions.validate(mode)
-    target=date.fromisoformat(through)
+    target=session_day(through)
     if not begin<=target<=end or target not in days:
         raise ValueError('감지 기준일은 확인된 거래일이어야 해요.')
     window=[day for day in days if day<=target][-7:]

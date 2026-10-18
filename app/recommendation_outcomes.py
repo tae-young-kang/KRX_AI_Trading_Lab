@@ -5,6 +5,17 @@ from math import isfinite
 from app.trading_clock import KST
 
 
+def session_day(value):
+    """One canonical representation across SQL, cache keys and evidence hashes."""
+    try:
+        parsed=date.fromisoformat(value)
+        if type(value) is not str or value!=parsed.isoformat():
+            raise ValueError()
+        return parsed
+    except (TypeError,ValueError):
+        raise ValueError('날짜는 YYYY-MM-DD 형식으로 확인해 주세요.') from None
+
+
 @dataclass(frozen=True)
 class SessionEvidence:
     days: tuple[str, ...]
@@ -13,12 +24,14 @@ class SessionEvidence:
     source: str  # DEMO, USER_CONFIRMED or OFFICIAL; never inferred from weekdays.
 
     def validate(self, mode):
+        if mode not in ('DEMO','MOCK','REAL_QUOTES') or not isinstance(self.days,(tuple,list)):
+            raise ValueError('자료 모드와 거래일 목록을 확인해 주세요.')
         if self.source not in ('DEMO','USER_CONFIRMED','OFFICIAL'):
             raise ValueError('거래일 자료의 출처를 확인해 주세요.')
         if (mode == 'DEMO') != (self.source == 'DEMO'):
             raise ValueError('가상 연습과 실제 거래일 자료를 섞을 수 없어요.')
-        begin, end = date.fromisoformat(self.begin), date.fromisoformat(self.end)
-        parsed = tuple(date.fromisoformat(day) for day in self.days)
+        begin, end = session_day(self.begin), session_day(self.end)
+        parsed = tuple(session_day(day) for day in self.days)
         if begin > end or parsed != tuple(sorted(set(parsed))) or any(not begin <= day <= end for day in parsed):
             raise ValueError('확인한 거래일 범위와 목록이 맞지 않아요.')
         return begin,end,parsed
@@ -45,14 +58,14 @@ def evaluate(*, mode, code, market, entry_price, recommended_at, bars,
     signal_day = recommended_at.astimezone(KST).date()
     begin,end,days = sessions.validate(mode)
     day_set = set(days)
-    through = date.fromisoformat(available_through)
+    through = session_day(available_through)
     if not begin <= signal_day <= end or not begin <= through <= end or through < signal_day:
         raise ValueError('추천일과 자료 확인일을 포함하는 거래일 범위가 필요해요.')
     prices = {}
     for bar in bars:
         if bar.code != code or bar.market != market:
             continue
-        day = date.fromisoformat(bar.date)
+        day = session_day(bar.date)
         if day > through:  # Future data supplied by caller cannot leak into results.
             continue
         if (type(bar.close) not in (int,float) or not isfinite(bar.close) or bar.close <= 0
