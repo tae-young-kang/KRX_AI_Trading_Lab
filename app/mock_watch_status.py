@@ -5,10 +5,11 @@ import time
 
 from app.trading_clock import KST
 from app.mock_validation import MockValidationProgress
+from app.mock_observation_history import MockObservationHistory
 
 
 class MockWatchStatus:
-    def __init__(self, clock=None):
+    def __init__(self, clock=None, *, history_path=None):
         self._clock = clock or (lambda:datetime.now(KST))
         self._lock = threading.RLock()
         self._status = '모의 알림 연결 전'
@@ -25,6 +26,15 @@ class MockWatchStatus:
         self._last_reconnect = None
         self._validation = MockValidationProgress(self._clock)
         self._orders = None
+        self._history = MockObservationHistory(history_path)
+
+    def history_summary(self):
+        with self._lock:
+            return self._history.summary()
+
+    def _record(self, event):
+        self._validation.record(event)
+        self._history.record(event, self._clock())
 
     def bind_orders(self, orders):
         with self._lock:
@@ -40,6 +50,7 @@ class MockWatchStatus:
             with self._lock:
                 self._stale=True
                 self._notice='키움 모의 긴급중지 요청을 기록했어요. /주문점검과 모의 HTS/MTS에서 확인해 주세요.'
+                self._history.record('HALT', self._clock())
         return reply
 
     def cancel_orders(self, scope, session):
@@ -68,7 +79,7 @@ class MockWatchStatus:
                 return '재연결 요청 간격은 30초예요. /모의상태로 확인해 주세요.'
             self._last_reconnect = moment
             self._reconnect_pending = True
-            self._validation.record('RECOVERY')
+            self._record('RECOVERY')
             self._status = '모의 재연결 요청 대기 · 주문은 보내지 않아요.'
             return self._status
 
@@ -83,7 +94,7 @@ class MockWatchStatus:
     def enable_refresh(self):
         with self._lock:
             if not self._refresh_enabled:
-                self._validation.record('STREAM')
+                self._record('STREAM')
             self._refresh_enabled = True
 
     def request_refresh(self):
@@ -111,7 +122,7 @@ class MockWatchStatus:
     def finish_refresh(self, report):
         with self._lock:
             self.verified(report)
-            self._validation.record('REFRESH')
+            self._record('REFRESH')
             self._refresh_busy = False
             self._refresh_state = '모의 잔고 새 조회 완료 · 조회 시점의 값이에요.'
 
@@ -126,7 +137,7 @@ class MockWatchStatus:
     def reset(self):
         with self._lock:
             self._orders = None
-            self._validation.record('START')
+            self._record('START')
             self._reconnect_available = self._reconnect_pending = False
             self._refresh_enabled = self._refresh_pending = self._refresh_busy = False
             self._last_request = None
@@ -137,7 +148,7 @@ class MockWatchStatus:
 
     def verified(self, report):
         with self._lock:
-            self._validation.record('ACCOUNT')
+            self._record('ACCOUNT')
             # Whitelisted display fields only; no account/token/profile IDs.
             self._balance = {key:report[key] for key in ('checked_at','order_money','held','pending')}
             self._positions = tuple(report.get('positions',()))
@@ -145,22 +156,25 @@ class MockWatchStatus:
 
     def notice(self, text):
         with self._lock:
-            self._validation.record('NOTICE')
+            self._record('NOTICE')
             self._notice, self._stale = text, True
 
     def order_result(self, state):
         with self._lock:
+            if state in ('ACKNOWLEDGED','REJECTED','UNKNOWN','FAILED'):
+                self._history.record(state, self._clock())
             self._stale = True
             self._notice = '모의 주문 처리 결과가 있어요. /주문상태와 /잔고로 확인해 주세요.'
 
     def order_warning(self):
         with self._lock:
+            self._history.record('WARNING', self._clock())
             self._stale = True
             self._notice = '모의 기록 충돌로 주문을 차단했어요. /주문점검으로 이유를 확인해 주세요.'
 
     def stopped(self):
         with self._lock:
-            self._validation.record('STOP')
+            self._record('STOP')
             self._reconnect_available = self._reconnect_pending = False
             if self._refresh_pending or self._refresh_busy:
                 self._refresh_state = '잔고 조회를 완료하지 못했어요. 연결을 다시 확인해 주세요.'

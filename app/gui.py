@@ -133,7 +133,7 @@ class MainWindow(QMainWindow):
         self.work = None
         self.telegram_order_worker = None
         self.mock_watch_worker = None
-        self.mock_watch_status = MockWatchStatus()
+        self.mock_watch_status = MockWatchStatus(history_path=data_dir()/'kiwoom_mock_watch'/'observations.db')
         self.scanning = False
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
         self.resize(1390, 860)
@@ -1184,6 +1184,7 @@ class MainWindow(QMainWindow):
                                      watch_result=self.mock_watch_status.refresh_result,
                                      watch_reconnect=self.mock_watch_status.request_reconnect,
                                      watch_validation=self.mock_watch_status.validation_summary,
+                                     watch_history=self.mock_watch_status.history_summary,
                                      watch_orders=self.mock_watch_status.handle_orders,
                                      watch_cancel_orders=self.mock_watch_status.cancel_orders)
         self.telegram_order_worker = worker
