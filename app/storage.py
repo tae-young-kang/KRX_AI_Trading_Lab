@@ -1,12 +1,14 @@
 import csv
 import json
 import sqlite3
+from math import isfinite
 from datetime import datetime
 from pathlib import Path
 from app.db import ClosingConnection
 from app.trade_review import settings_snapshot, review_conditions, outcome
 from app import recommendations
 from app import recommendation_overview
+from app import paper_exits
 from app.trading_clock import KST
 
 
@@ -68,6 +70,7 @@ class Database:
                 if column not in columns:
                     db.execute(f'ALTER TABLE paper_trades ADD COLUMN {column} TEXT')
             recommendations.initialize(db)
+            paper_exits.initialize(db)
 
     def log(self, kind, message):
         with self.connect() as db:
@@ -118,7 +121,9 @@ class Database:
             return recommendations.page_count(db,mode)
 
     def paper_open(self, stock, qty, stop, take, max_days, fee_pct, slippage_pct, settings, max_positions):
-        if stock.price <= 0 or qty < 1:
+        if (type(qty) is not int or qty<1 or type(stock.price) not in (int,float)
+                or not isfinite(stock.price) or stock.price<=0
+                or not all(type(v) in (int,float) and isfinite(v) and 0<=v<100 for v in (fee_pct,slippage_pct))):
             raise ValueError('종목 가격 또는 수량을 확인하세요.')
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -130,6 +135,8 @@ class Database:
                 raise ValueError('이미 가상 보유 중인 종목입니다.')
             fill = stock.price * (1 + slippage_pct / 100)
             fee = fill * qty * fee_pct / 100
+            if not isfinite(fill) or not isfinite(fee) or not isfinite(fill*qty+fee):
+                raise ValueError('연습 매수 금액의 계산 범위를 벗어났어요.')
             snapshot = settings_snapshot(settings)
             snapshot.update(exit_stop_pct=stop, exit_take_pct=take, exit_max_days=max_days,
                             paper_fee_pct=fee_pct, paper_slippage_pct=slippage_pct)
@@ -137,34 +144,25 @@ class Database:
                      ('price', 'change_pct', 'trade_value_eok', 'vol_ratio_pct', 'cap_eok',
                       'volume', 'source', 'stamp', 'quote_stamp', 'is_etf')}
             db.execute('''INSERT INTO paper_trades(code,name,market,opened_at,qty,buy_ref,buy_fill,buy_fee,
-                stop_pct,take_pct,max_days,highwater,source,strat_json,entry_json)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                stop_pct,take_pct,max_days,highwater,source,strat_json,entry_json,remaining_qty,realized_pnl)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (stock.code, stock.name, stock.market, now(), qty, stock.price, fill, fee,
                  stop, take, max_days, stock.price, stock.source, json.dumps(snapshot, ensure_ascii=False),
-                 json.dumps(entry, ensure_ascii=False)))
+                 json.dumps(entry, ensure_ascii=False),qty,0))
         return fill
 
-    def paper_close(self, trade_id, observed_price, reason, fee_pct, tax_pct, slip_pct):
+    def paper_close(self, trade_id, observed_price, reason, fee_pct, tax_pct, slip_pct, *, request_key=None):
+        return self.paper_sell(trade_id,None,observed_price,reason,fee_pct,tax_pct,slip_pct,request_key=request_key)
+
+    def paper_sell(self, trade_id, quantity, observed_price, reason, fee_pct, tax_pct, slip_pct, *, request_key=None):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            trade = db.execute('SELECT * FROM paper_trades WHERE id=? AND closed_at IS NULL', (trade_id,)).fetchone()
-            if trade is None:
-                raise ValueError('청산 가능한 가상 포지션이 없습니다.')
-            if observed_price <= 0:
-                raise ValueError('유효한 관측 가격이 없습니다.')
-            fill = observed_price * (1 - slip_pct / 100)
-            proceeds = fill * trade['qty']
-            sell_fee = proceeds * fee_pct / 100
-            sell_tax = proceeds * tax_pct / 100
-            cost = trade['buy_fill'] * trade['qty'] + trade['buy_fee']
-            pnl = proceeds - sell_fee - sell_tax - cost
-            pnl_pct = (pnl / cost) * 100 if cost else 0
-            db.execute('''UPDATE paper_trades SET close_ref=?,close_fill=?,close_fee=?,close_tax=?,
-                         closed_at=?,close_reason=?,pnl=?,pnl_pct=?,exit_settings_json=? WHERE id=?''',
-                       (observed_price, fill, sell_fee, sell_tax, now(), reason, pnl, pnl_pct,
-                        json.dumps(dict(paper_fee_pct=fee_pct, paper_sell_tax_pct=tax_pct,
-                                        paper_slippage_pct=slip_pct), sort_keys=True), trade_id))
-        return pnl
+            return paper_exits.sell(db,trade_id,quantity,observed_price,reason,fee_pct,tax_pct,slip_pct,
+                                    stamp=now(),request_key=request_key)
+
+    def paper_exit_history(self, trade_id):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute('SELECT * FROM paper_exits WHERE trade_id=? ORDER BY id',(trade_id,))]
 
     def open_trades(self):
         with self.connect() as db:
