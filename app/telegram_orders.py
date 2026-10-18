@@ -12,6 +12,7 @@ from pathlib import Path
 from app.order_engine import OrderEngine, OrderRequest, OrderError, connect
 from app.trading_clock import KST
 from app import order_safety
+from app import telegram_menu
 
 HELP = ('[가짜 서버 주문 연습 · 실제 돈 사용 안 함]\n'
         '/매수 900001 1 1000 또는 /매도 900001 1 1000\n'
@@ -159,6 +160,7 @@ class TelegramOrderService:
             self.stop()
             return '연습 서버 연결이 달라져 수신을 중지했습니다. 주문하지 않았습니다.'
         uid, text = update['update_id'], update['message']['text'].strip()
+        text=telegram_menu.COMMANDS.get(text,text)
         action = None
         operation = None
         with connect(self.path) as db:
@@ -171,7 +173,11 @@ class TelegramOrderService:
                 return previous['reply']
             mock_command = text.split(' ',1)[0] in ('/매수','/매도','/정정','/취소','/모의확인','/모의철회','/주문상태','/주문점검','/주문목록','/미체결',
                                                    '/긴급중지','/모의재개','/모의재개확인')
-            if not self.orders_enabled and mock_command:
+            if text in ('/메뉴','/start'):
+                reply=telegram_menu.text(practice=self.orders_enabled,active=bool(owner['active']))
+            elif text=='/메뉴숨기기':
+                reply=telegram_menu.HIDDEN
+            elif not self.orders_enabled and mock_command:
                 reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                          if self.watch_orders and (owner['active'] or text.split(' ',1)[0] in ('/주문상태','/주문점검','/긴급중지','/주문목록','/미체결')) else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')
             elif text.split(' ',1)[0] == '/보호상태':

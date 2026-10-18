@@ -5,6 +5,7 @@ No automatic retries or webhook removal. Errors never contain a token URL.
 """
 import re
 import requests
+from app.telegram_menu import markup
 
 
 class TelegramTransport:
@@ -46,7 +47,10 @@ class TelegramTransport:
     def send(self, chat_id, text):
         if type(chat_id) is not int or chat_id==0:
             raise ValueError('텔레그램 대화방을 확인해 주세요.')
-        result=self._call('sendMessage', dict(chat_id=chat_id, text=text))
+        body=dict(chat_id=chat_id,text=text)
+        keyboard=markup(text)
+        if keyboard is not None: body['reply_markup']=keyboard
+        result=self._call('sendMessage', body)
         if (not isinstance(result,dict) or type(result.get('message_id')) is not int or result['message_id']<=0
                 or not isinstance(result.get('chat'),dict) or type(result['chat'].get('id')) is not int
                 or result['chat']['id']!=chat_id):
