@@ -8,11 +8,18 @@ class RecommendationRequest:
         self._lock = Lock()
         self._state = 'IDLE'
         self._message = '아직 새 검색 요청이 없어요.'
+        self._generation = 0
+        self._notice = None
+        self._delivery = ''
 
     def request(self):
         with self._lock:
             if self._state in ('PENDING', 'RUNNING'):
                 return '이미 검색 요청이 있어요. /검색상태 로 확인하세요.'
+            if self._notice is not None:
+                return '완료 알림을 준비 중이에요. 잠시 뒤 /검색상태 를 확인하세요.'
+            self._generation += 1
+            self._delivery = ''
             self._state = 'PENDING'
             self._message = '집 PC에 새 검색을 요청했어요. /검색상태 로 확인하세요.'
             return self._message
@@ -37,7 +44,29 @@ class RecommendationRequest:
                 self._state = 'DONE' if success else 'FAILED'
                 self._message = ('검색 결과를 저장했어요. /추천기록 으로 확인하세요.' if success else
                                  '검색을 완료하지 못했어요. 집 PC의 연결·검색 상태를 확인해 주세요.')
+                self._notice = (self._generation, f'[{self.mode} · 추천 검색]\n{self._message}')
+                self._delivery = '완료 알림 준비 중'
+
+    def send_notice(self, sender, *, active):
+        """Claim once before IO. Unknown outcomes never trigger an automatic retry."""
+        with self._lock:
+            notice = self._notice
+            if notice is None:
+                return
+            self._notice = None
+            self._delivery = '완료 알림 응답 미확인 · 자동 재전송 안 함' if active else '수신 중지로 완료 알림 생략'
+        if not active:
+            return
+        try:
+            receipt = sender(notice[1])
+            confirmed = type(receipt) is int and receipt > 0
+        except Exception:
+            confirmed = False
+        with self._lock:
+            if self._generation == notice[0]:
+                self._delivery = ('완료 알림 발송 응답 확인 · 읽음 확인은 아님' if confirmed else
+                                  '완료 알림 응답 미확인 · 자동 재전송 안 함')
 
     def summary(self):
         with self._lock:
-            return f'[{self.mode} · 추천 검색]\n{self._message}\n계좌 주문은 하지 않아요.'
+            return f'[{self.mode} · 추천 검색]\n{self._message}\n{self._delivery}\n계좌 주문은 하지 않아요.'
