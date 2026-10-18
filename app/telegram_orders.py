@@ -186,13 +186,15 @@ class TelegramOrderService:
                 else:
                     reply=self.theme_report(int(match[1] or 1)) if self.theme_report else '테마1 기록 연결이 없어요. 집 PC에서 확인해 주세요.'
             elif text.split(' ',1)[0] == '/연습내역':
+                listing=re.fullmatch(r'/연습내역 목록(?: ([1-9][0-9]{0,5}))?',text)
                 match=re.fullmatch(r'/연습내역(?: ([1-9][0-9]{0,8})(?: ([1-9][0-9]{0,5}))?)?',text)
-                if not match:
-                    reply='사용법: /연습내역 또는 /연습내역 기록번호 페이지'
+                if not match and not listing:
+                    reply='사용법: /연습내역 또는 /연습내역 기록번호 페이지\n오래된 기록 찾기: /연습내역 목록 2'
                 elif not self.practice_sales:
                     reply='연습 기록 연결이 없어요. 집 PC에서 확인해 주세요.'
                 else:
-                    reply=self.practice_sales(int(match[1]) if match[1] else None,int(match[2] or 1))
+                    reply=(self.practice_sales(None,int(listing[1] or 1)) if listing else
+                           self.practice_sales(int(match[1]) if match[1] else None,int(match[2] or 1)))
             elif text == '/추천요약':
                 reply = (self.recommendation_overview() if self.recommendation_overview
                          else '추천 요약 연결이 없어요. 집 PC에서 확인해 주세요.')

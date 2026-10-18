@@ -247,3 +247,11 @@ def test_theme_budget_is_only_preview_and_parses_explicit_percentages(sandbox):
     service.stop()
     service.handle(update(sandbox,4,'/테마1예산 1000 0 0'))
     assert seen[-1]==(1000,0,0,1) and broker.calls==[]
+
+
+def test_practice_list_page_command_does_not_become_trade_number(sandbox):
+    service,broker,_,_=sandbox;seen=[]
+    service.practice_sales=lambda tid,page:seen.append((tid,page)) or '목록'
+    assert service.handle(update(sandbox,1,'/연습내역 목록 2'))=='목록'
+    assert seen==[(None,2)] and broker.calls==[]
+    assert '사용법' in service.handle(update(sandbox,2,'/연습내역 목록 0'))

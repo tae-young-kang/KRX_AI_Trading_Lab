@@ -166,13 +166,20 @@ class Database:
 
     def practice_sale_report(self, trade_id=None, page=1):
         from app.practice_details import sale_details
+        if type(page) is not int or not 1<=page<=999999:
+            return '페이지 번호를 확인해 주세요.'
         with self.connect() as db:
             db.execute('BEGIN')
             if trade_id is None:
-                rows=db.execute('SELECT id,name,remaining_qty FROM paper_trades ORDER BY id DESC LIMIT 5').fetchall()
-                return ('[앱 안의 연습 매도 기록 · 실제 체결 아님]\n'+
+                count=db.execute('SELECT COUNT(*) FROM paper_trades').fetchone()[0]
+                pages=max(1,(count+4)//5)
+                if page>pages:
+                    return f'마지막 목록 페이지는 {pages}예요.'
+                rows=db.execute('SELECT id,name,remaining_qty FROM paper_trades ORDER BY id DESC LIMIT 5 OFFSET ?',((page-1)*5,)).fetchall()
+                return (f'[앱 안의 연습 매도 기록 · 실제 체결 아님]\n목록 {page}/{pages}페이지 · 전체 {count}개\n'+
                         ('\n'.join(f'{r["id"]}: {r["name"]} · 남은 {r["remaining_qty"]}주' for r in rows)
-                         if rows else '연습 기록이 없어요.')+'\n사용법: /연습내역 기록번호\n예: /연습내역 1')
+                         if rows else '연습 기록이 없어요.')+'\n사용법: /연습내역 기록번호\n예: /연습내역 1'+
+                        (f'\n다음 목록: /연습내역 목록 {page+1}' if page<pages else ''))
             if type(trade_id) is not int or trade_id<=0 or type(page) is not int or not 1<=page<=999999:
                 return '기록 번호와 페이지를 확인해 주세요.'
             trade=db.execute('SELECT * FROM paper_trades WHERE id=?',(trade_id,)).fetchone()

@@ -36,3 +36,20 @@ def test_practice_sale_report_pages_and_mode_database_isolation(tmp_path):
     assert '2번째 매도' in second and '나머지' in second
     assert '마지막 페이지' in db.practice_sale_report(tid,3)
     assert '없는 번호' in Database(tmp_path/'other.db').practice_sale_report(tid)
+
+
+def test_practice_list_reaches_older_entries_and_empty_page_bounds(tmp_path):
+    from app.storage import Database
+    from app.market import Stock
+    from app.config import DEFAULTS
+    db=Database(tmp_path/'practice.db')
+    assert '전체 0개' in db.practice_sale_report()
+    for i in range(6):
+        stock=Stock(f'{900000+i:06}','연습'+str(i),'KOSPI',1000,3,200,150,4000)
+        db.paper_open(stock,1,2,4,2,0,0,dict(DEFAULTS),10)
+    assert '목록 1/2페이지' in db.practice_sale_report()
+    assert '/연습내역 목록 2' in db.practice_sale_report()
+    second=db.practice_sale_report(None,2)
+    assert '1: 연습0' in second and '6: 연습5' not in second
+    assert '마지막 목록 페이지는 2' in db.practice_sale_report(None,3)
+    assert '페이지 번호' in db.practice_sale_report(None,True)
