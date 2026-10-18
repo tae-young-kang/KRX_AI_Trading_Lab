@@ -24,31 +24,52 @@ def price_label(value):
 def groups(db,mode):
     if mode not in ('DEMO','MOCK','REAL_QUOTES'):
         raise ValueError('추천 모드를 확인해 주세요.')
-    # Explicit bounded window, never silently described as all-time history.
-    rows = db.execute('''SELECT b.scan_id,b.created_at,b.conditions_json,r.code,r.market,
-        v.price_source,v.calendar_source,v.results_json FROM recommendation_batches b
-        JOIN recommendations r ON r.scan_id=b.scan_id LEFT JOIN recommendation_reviews v ON v.id=(
-          SELECT MAX(id) FROM recommendation_reviews WHERE scan_id=r.scan_id AND code=r.code)
-        WHERE b.mode=? ORDER BY b.scan_id DESC,r.rank LIMIT 3000''',(mode,)).fetchall()
+    def kst_day(value):
+        try:
+            stamp=datetime.fromisoformat(value)
+            return stamp.astimezone(KST).date().isoformat() if stamp.tzinfo is not None else None
+        except (TypeError,ValueError,OverflowError):
+            return None
+    def signature(value):
+        cfg=json.loads(value)
+        return json.dumps({key:cfg[key] for key in FILTER_KEYS if key in cfg},sort_keys=True)
+    db.create_function('overview_kst_day',1,kst_day,deterministic=True)
+    db.create_function('overview_signature',1,signature,deterministic=True)
+    unverified_time=db.execute('''SELECT COUNT(*) FROM recommendation_batches b
+        JOIN recommendations r ON r.scan_id=b.scan_id
+        WHERE b.mode=? AND overview_kst_day(b.created_at) IS NULL''',(mode,)).fetchone()[0]
+    # Select first recommendations over full history BEFORE applying the display window.
+    rows = db.execute('''WITH ranked AS (
+        SELECT b.scan_id,b.created_at,b.conditions_json,r.code,r.market,r.rank,
+        ROW_NUMBER() OVER (PARTITION BY overview_kst_day(b.created_at),
+            overview_signature(b.conditions_json),r.code,r.market ORDER BY b.scan_id) AS first_number
+        FROM recommendation_batches b JOIN recommendations r ON r.scan_id=b.scan_id
+        WHERE b.mode=? AND overview_kst_day(b.created_at) IS NOT NULL
+        ), selected AS (SELECT * FROM ranked WHERE first_number=1
+            ORDER BY scan_id DESC,rank LIMIT 3000)
+        SELECT b.scan_id,b.created_at,b.conditions_json,b.code,b.market,
+        v.price_source,v.calendar_source,v.results_json FROM selected b
+        LEFT JOIN recommendation_reviews v ON v.id=(
+          SELECT MAX(id) FROM recommendation_reviews WHERE scan_id=b.scan_id AND code=b.code)
+        ORDER BY b.scan_id DESC,b.rank''',(mode,)).fetchall()
     seen = set()
     grouped = {}
-    unverified_time = 0
     for row in reversed(rows):
         stamp = datetime.fromisoformat(row['created_at'])
         if stamp.tzinfo is None:
             unverified_time += 1
             continue
         cfg = json.loads(row['conditions_json'])
-        signature = json.dumps({key:cfg[key] for key in FILTER_KEYS if key in cfg},sort_keys=True)
-        identity = (stamp.astimezone(KST).date(),row['code'],row['market'],signature)
+        condition_signature = json.dumps({key:cfg[key] for key in FILTER_KEYS if key in cfg},sort_keys=True)
+        identity = (stamp.astimezone(KST).date(),row['code'],row['market'],condition_signature)
         if identity in seen:
             continue
         seen.add(identity)
         source = row['price_source'] or 'NONE'
         calendar = row['calendar_source'] or 'NONE'
-        key = (signature,source,calendar)
+        key = (condition_signature,source,calendar)
         if key not in grouped:
-            grouped[key] = dict(condition_id=hashlib.sha256(signature.encode()).hexdigest()[:8],
+            grouped[key] = dict(condition_id=hashlib.sha256(condition_signature.encode()).hexdigest()[:8],
                 label=condition_label(cfg),source=source,calendar=calendar,count=0,last_scan=0,
                 horizons={h:dict(observed=0,up=0,down=0,flat=0,waiting=0,missing=0,unreviewed=0,values=[]) for h in (1,3,5)})
         group = grouped[key]
@@ -79,7 +100,7 @@ def summary(db,mode):
     data,unverified = groups(db,mode)
     label = {'DEMO':'가상 연습','MOCK':'키움 모의 시세','REAL_QUOTES':'실제 시세'}[mode]
     lines = [f'[{label} · 추천 관측 요약]',
-             '최근 추천 3,000건 안에서 같은 날/조건/종목의 첫 추천만 계산',
+             '전체 이력의 날짜/조건/종목별 첫 추천 중 최근 3,000개 계산',
              '조건·가격 출처·거래일 출처별로 분리 · 최근 조건 묶음 3개 표시']
     if not data:
         lines.append('집계할 추천 기록이 없어요.')

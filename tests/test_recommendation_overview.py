@@ -85,3 +85,22 @@ def test_large_finite_changes_have_finite_mean_and_bounded_reports(tmp_path):
     assert 'inf' not in report and len(report)<4096
     assert len(db.recommendation_summary('DEMO',performance=True))<4096
     assert price_label(0.00001)!='0원'
+
+
+def test_first_recommendation_survives_more_than_three_thousand_repeats(tmp_path):
+    db,evidence=store(tmp_path)
+    db.review_recommendation(**evidence)
+    with db.connect() as record:
+        baseline,_=groups(record,'DEMO')
+        for scan_id in range(2,1003):
+            record.execute('''INSERT INTO recommendation_batches
+                SELECT ?,created_at,mode,source,conditions_json,requested_count,selected_count
+                FROM recommendation_batches WHERE scan_id=1''',(scan_id,))
+            record.execute('''INSERT INTO recommendations
+                SELECT ?,rank,code,name,market,price*2,score,observed_at,quote_stamp,is_etf
+                FROM recommendations WHERE scan_id=1''',(scan_id,))
+        after,_=groups(record,'DEMO')
+    assert after==baseline
+    observed=next(group for group in after if group['source']=='DEMO')
+    assert observed['horizons'][1]['observed']==1
+    assert '전체 이력' in db.recommendation_overview('DEMO')
