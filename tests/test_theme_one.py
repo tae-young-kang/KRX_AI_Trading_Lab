@@ -44,3 +44,30 @@ def test_exact_threshold_and_all_hit_sum_alert():
     assert '2026-10-19(월)' in text and '수익률이 아닙니다' in text
     assert '미확인' in alert_text(result,nxt_eligible=False,nxt_asof='2026-10-16',nxt_source='old')
     assert 'KRX 전용' in alert_text(result,nxt_eligible=False,nxt_asof='2026-10-19',nxt_source='연습 목록')
+
+
+def test_value_and_high_thresholds_must_hold_on_same_day():
+    import pytest
+    for high,value,expected in [(105,100,True),(104.999,100,False),(105,99.999,False)]:
+        bars=[Bar(day,'900001','연습','KOSPI',100,high,99,100,1000,value,4000) for day in DAYS]
+        result=detect(code='900001',market='KOSPI',bars=bars,sessions=SessionEvidence(DAYS,DAYS[0],DAYS[-1],'DEMO'),through=DAYS[-2],mode='DEMO',price_source='DEMO')
+        assert result['matched']==expected
+
+
+def test_nonfinite_or_inconsistent_data_rejected_and_future_ignored():
+    import pytest
+    bars=[Bar(day,'900001','연습','KOSPI',100,110,99,100,1000,100,4000) for day in DAYS]
+    args=dict(code='900001',market='KOSPI',sessions=SessionEvidence(DAYS,DAYS[0],DAYS[-1],'DEMO'),through=DAYS[-2],mode='DEMO',price_source='DEMO')
+    for patch in [dict(high=float('inf')),dict(close=0),dict(trade_value_eok=None),dict(low=101),dict(name='')]:
+        broken=bars.copy();broken[2]=replace(broken[2],**patch)
+        with pytest.raises(ValueError): detect(bars=broken,**args)
+    bars[-1]=replace(bars[-1],high=float('nan'))
+    assert detect(bars=bars,**args)['matched']
+    with pytest.raises(ValueError,match='중복'): detect(bars=bars+[bars[2]],**args)
+
+
+def test_overflowing_aggregate_is_not_persistable_result():
+    import pytest
+    bars=[Bar(day,'900001','연습','KOSPI',100,110,99,100,1000,1e308,4000) for day in DAYS]
+    with pytest.raises(ValueError,match='합계'):
+        detect(code='900001',market='KOSPI',bars=bars,sessions=SessionEvidence(DAYS,DAYS[0],DAYS[-1],'DEMO'),through=DAYS[-2],mode='DEMO',price_source='DEMO')

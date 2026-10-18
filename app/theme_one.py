@@ -1,12 +1,14 @@
 """Theme 1 daily research detector. No network, notifications or orders."""
 from datetime import date
 from math import isfinite, fsum
-from decimal import Decimal
+from fractions import Fraction
+import re
 
 
 def detect(*, code, market, bars, sessions, through, mode, price_source):
     """Require six confirmed sessions plus the preceding close, never weekday guesses."""
-    if market not in ('KOSPI','KOSDAQ') or mode not in ('DEMO','MOCK','REAL_QUOTES'):
+    if (market not in ('KOSPI','KOSDAQ') or mode not in ('DEMO','MOCK','REAL_QUOTES')
+            or not isinstance(code,str) or not re.fullmatch(r'[A-Za-z0-9]{6}',code)):
         raise ValueError('시장과 자료 모드를 확인해 주세요.')
     if price_source not in ('DEMO','KRX','CSV_USER') or (mode=='DEMO')!=(price_source=='DEMO'):
         raise ValueError('가격 자료 출처를 확인해 주세요.')
@@ -18,8 +20,9 @@ def detect(*, code, market, bars, sessions, through, mode, price_source):
     if len(window)<7:
         return dict(status='CALENDAR_MISSING',matched=False,hits=[])
     indexed={}
+    window_days={d.isoformat() for d in window}
     for bar in bars:
-        if bar.code!=code or bar.market!=market or bar.date not in {d.isoformat() for d in window}:
+        if bar.code!=code or bar.market!=market or bar.date not in window_days:
             continue
         if bar.date in indexed:
             raise ValueError('같은 종목·날짜의 자료가 중복됐어요.')
@@ -27,20 +30,24 @@ def detect(*, code, market, bars, sessions, through, mode, price_source):
     if any(day.isoformat() not in indexed for day in window):
         return dict(status='PRICE_MISSING',matched=False,hits=[])
     hits=[]
-    exact_sum=Decimal(0)
+    exact_sum=Fraction(0)
     for previous,day in zip(window,window[1:]):
         bar=indexed[day.isoformat()]
         close=indexed[previous.isoformat()].close
         values=(close,bar.open,bar.high,bar.low,bar.close,bar.trade_value_eok)
         if (not all(type(v) in (int,float) and isfinite(v) for v in values)
                 or min(values[:5])<=0 or bar.trade_value_eok<0
+                or not isinstance(bar.name,str) or not 1<=len(bar.name)<=100
                 or bar.high<max(bar.open,bar.close) or bar.low>min(bar.open,bar.close)):
             raise ValueError('종가·고가·거래대금 자료를 확인해 주세요.')
         # Value filter first; prices have already arrived in a daily bulk dataset.
         if bar.trade_value_eok<100:
             continue
-        exact_pct=(Decimal(str(bar.high))/Decimal(str(close))-1)*100
-        high_pct=float(exact_pct)
+        exact_pct=(Fraction(str(bar.high))/Fraction(str(close))-1)*100
+        try:
+            high_pct=float(exact_pct)
+        except OverflowError:
+            raise ValueError('고가 등락률 계산 범위를 벗어났어요.') from None
         if not isfinite(high_pct):
             raise ValueError('고가 등락률 계산 범위를 벗어났어요.')
         if exact_pct>=5:
@@ -50,9 +57,16 @@ def detect(*, code, market, bars, sessions, through, mode, price_source):
     cap=today.cap_eok
     if type(cap) not in (int,float) or not isfinite(cap) or cap<=0:
         cap=None
+    try:
+        high_sum=float(exact_sum)
+        value_sum=fsum(h['trade_value_eok'] for h in hits)
+        if not isfinite(high_sum) or not isfinite(value_sum):
+            raise ValueError()
+    except (ValueError,OverflowError):
+        raise ValueError('테마1 합계 계산 범위를 벗어났어요.') from None
     return dict(status='COMPLETE',matched=len(hits)>=3,code=code,name=today.name,market=market,
                 detected_on=through,window=[d.isoformat() for d in window[1:]],hits=hits,
-                high_sum=float(exact_sum),sum_band='ABOVE' if exact_sum>65 else 'EQUAL' if exact_sum==65 else 'BELOW',cap_eok=cap,
+                high_sum=high_sum,trade_value_sum_eok=value_sum,sum_band='ABOVE' if exact_sum>65 else 'EQUAL' if exact_sum==65 else 'BELOW',cap_eok=cap,
                 price_source=price_source,calendar_source=sessions.source)
 
 
