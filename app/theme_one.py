@@ -1,6 +1,7 @@
 """Theme 1 daily research detector. No network, notifications or orders."""
 from datetime import date
 from math import isfinite, fsum
+from decimal import Decimal
 
 
 def detect(*, code, market, bars, sessions, through, mode, price_source):
@@ -26,6 +27,7 @@ def detect(*, code, market, bars, sessions, through, mode, price_source):
     if any(day.isoformat() not in indexed for day in window):
         return dict(status='PRICE_MISSING',matched=False,hits=[])
     hits=[]
+    exact_sum=Decimal(0)
     for previous,day in zip(window,window[1:]):
         bar=indexed[day.isoformat()]
         close=indexed[previous.isoformat()].close
@@ -37,16 +39,45 @@ def detect(*, code, market, bars, sessions, through, mode, price_source):
         # Value filter first; prices have already arrived in a daily bulk dataset.
         if bar.trade_value_eok<100:
             continue
-        high_pct=(bar.high/close-1)*100
+        exact_pct=(Decimal(str(bar.high))/Decimal(str(close))-1)*100
+        high_pct=float(exact_pct)
         if not isfinite(high_pct):
             raise ValueError('고가 등락률 계산 범위를 벗어났어요.')
-        if bar.high>=close*1.05:
+        if exact_pct>=5:
             hits.append(dict(day=bar.date,high_pct=high_pct,trade_value_eok=bar.trade_value_eok))
+            exact_sum+=exact_pct
     today=indexed[through]
     cap=today.cap_eok
     if type(cap) not in (int,float) or not isfinite(cap) or cap<=0:
         cap=None
     return dict(status='COMPLETE',matched=len(hits)>=3,code=code,name=today.name,market=market,
                 detected_on=through,window=[d.isoformat() for d in window[1:]],hits=hits,
-                high_sum=fsum(h['high_pct'] for h in hits),cap_eok=cap,
+                high_sum=float(exact_sum),sum_band='ABOVE' if exact_sum>65 else 'EQUAL' if exact_sum==65 else 'BELOW',cap_eok=cap,
                 price_source=price_source,calendar_source=sessions.source)
+
+
+def alert_text(result, *, nxt_eligible=None, nxt_asof=None, nxt_source=None):
+    """One stock per message; unknown/stale eligibility never means KRX only."""
+    if result.get('status')!='COMPLETE' or not result.get('matched'):
+        raise ValueError('자료가 완전하고 테마1에 감지된 종목만 알림으로 만들 수 있어요.')
+    weekdays='월화수목금토일'
+    def day_label(value):
+        day=date.fromisoformat(value)
+        return f'{value}({weekdays[day.weekday()]})'
+    venue='NXT 거래 가능 여부 미확인'
+    if type(nxt_eligible) is bool and nxt_asof==result['detected_on'] and isinstance(nxt_source,str) and nxt_source.strip():
+        venue=('NXT 거래 가능' if nxt_eligible else 'KRX 전용 (NXT 대상 아님)')+f' · 근거: {nxt_source}'
+    cap=result['cap_eok']
+    lines=['[테마1 · 종목 감지]',f'{result["name"]} ({result["code"]}) · '+{'KOSPI':'코스피','KOSDAQ':'코스닥'}[result['market']],
+           '감지 기준일: '+day_label(result['detected_on']),
+           f'감지일 시가총액: {cap:,.2f}억 원' if cap is not None else '감지일 시가총액: 미확인',venue,
+           f'최근 6거래일: {result["window"][0]} ~ {result["window"][-1]}',
+           f'100억 원 이상 + 전일 종가 대비 고가 5% 이상: {len(result["hits"])}일']
+    for index,hit in enumerate(result['hits'],1):
+        lines.append(f'{index}. {day_label(hit["day"])} · 고가 +{hit["high_pct"]:.2f}% · 거래대금 {hit["trade_value_eok"]:,.2f}억 원')
+    band={'ABOVE':'65% 초과','EQUAL':'65%와 같음','BELOW':'65% 미만'}[result['sum_band']]
+    lines.extend([f'만족일 전체 고가 상승률 합계: {result["high_sum"]:.2f}% · {band}',
+                  f'만족일 거래대금 합계: {fsum(h["trade_value_eok"] for h in result["hits"]):,.2f}억 원',
+                  '고가 상승률 합계는 투자 수익률이 아닙니다. 주문은 보내지 않았어요.',
+                  f'가격 출처: {result["price_source"]} · 거래일 근거: {result["calendar_source"]}'])
+    return '\n'.join(lines)
