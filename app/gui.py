@@ -700,6 +700,9 @@ class MainWindow(QMainWindow):
         recommendation_import.setToolTip('직접 확인한 거래일·종가 자료 파일을 저장된 추천과 대조해요. 실제 수익률이나 공식 검증 완료로 처리하지 않아요.')
         recommendation_import.clicked.connect(self.import_recommendation_prices)
         v.addWidget(recommendation_import)
+        recommendation_cached = QPushButton('저장된 일별 시세로 추천 성적 계산하기 (고급)')
+        recommendation_cached.clicked.connect(self.evaluate_cached_recommendations)
+        v.addWidget(recommendation_cached)
         theme_prepare=QPushButton('테마1 · 저장 시세와 확인한 거래일로 판정하기 (고급)')
         theme_prepare.clicked.connect(self.prepare_theme_one)
         v.addWidget(theme_prepare)
@@ -847,6 +850,22 @@ class MainWindow(QMainWindow):
                 f"자료 확인 완료일 {result['available_through']}\n"
                 '텔레그램 /추천성적에서 확인할 수 있어요. 실제 거래 수익률이 아니에요.'),
             '추천 가격 자료 대조 완료')
+
+    def evaluate_cached_recommendations(self):
+        if self.work is not None and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 평가해 주세요.')
+            return
+        path,_ = QFileDialog.getOpenFileName(self,'저장 시세 출처·확인한 거래일 선택','','자료 선택 (*.json)')
+        if not path:
+            return
+        from app.recommendation_cache import evaluate_selection
+        db,history,mode = self.db,self.history,current_mode(self.cfg).key
+        self.run_task(lambda:evaluate_selection(db,history,path,mode),
+            lambda result:QMessageBox.information(self,'저장 시세로 추천 평가',
+                f"추천 {result['recommendations']}개 대조 · 새 평가 {result['added']}개\n"
+                f"자료 확인 완료일 {result['available_through']}\n"
+                '빠진 가격은 자료 없음으로 표시해요. /추천성적 에서 확인하세요.\n실제 거래 수익률이 아니에요.'),
+            '저장 시세 추천 평가 완료')
 
     def run_research(self):
         source=self.research_source.currentText()

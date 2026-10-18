@@ -203,6 +203,24 @@ class HistoryStore:
         with self.connect() as db:
             return db.execute('SELECT COUNT(*),COUNT(DISTINCT day),COUNT(DISTINCT code),MIN(day),MAX(day) FROM daily_bars WHERE source=?',(source,)).fetchone()
 
+    def recommendation_bars(self, source, begin, end):
+        if source != 'KRX':
+            return self.load_bars(source,begin,end)
+        # Reuse only snapshots fetched after their data day; same-day cache may
+        # still contain intraday values even when evaluation happens tomorrow.
+        with self.connect() as db:
+            rows = db.execute('''SELECT b.day,b.code,b.name,b.market,b.open,b.high,b.low,b.close,
+                b.volume,b.trade_value_eok,b.cap_eok FROM daily_bars b JOIN fetched_days f
+                ON f.source=b.source AND f.market=b.market AND f.day=b.day
+                WHERE b.source='KRX' AND b.day BETWEEN ? AND ? AND f.normalizer_version=1
+                AND f.count>0 AND date(f.checked_at,'+9 hours')>f.day
+                AND substr(f.checked_at,-6,1) IN ('+','-') AND substr(f.checked_at,-3,1)=':'
+                AND julianday(f.checked_at)<=julianday(?)
+                AND f.count=(SELECT COUNT(*) FROM daily_bars x WHERE x.source=f.source
+                    AND x.market=f.market AND x.day=f.day) ORDER BY b.day,b.code''',
+                (begin,end,datetime.now(KST).isoformat())).fetchall()
+            return [Bar(*tuple(row)) for row in rows]
+
     def load_evidence(self,source,begin,end,*,nxt_mode=None):
         """Prices and ingest observations from the same SQLite read snapshot."""
         with self.connect() as db:

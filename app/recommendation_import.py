@@ -64,7 +64,11 @@ def load_package(path, mode, *, today=None):
 
 def import_package(database, path, mode, *, today=None):
     data,sessions,prices = load_package(path,mode,today=today)
-    through = date.fromisoformat(data['available_through'])
+    return apply_prices(database,mode,sessions,prices,data['available_through'],data['price_source'])
+
+
+def apply_prices(database, mode, sessions, prices, available_through, price_source):
+    through = session_day(available_through)
     begin = date.fromisoformat(sessions.begin)
     indexed = {}
     for price in prices:
@@ -75,7 +79,7 @@ def import_package(database, path, mode, *, today=None):
         rows = db.execute('''SELECT b.scan_id,b.created_at,r.code,r.market FROM recommendation_batches b
             JOIN recommendations r ON r.scan_id=b.scan_id
             WHERE b.mode=? AND date(b.created_at,'+9 hours') BETWEEN ? AND ?''',
-            (mode,sessions.begin,data['available_through'])).fetchall()
+            (mode,sessions.begin,available_through)).fetchall()
         for row in rows:
             moment = datetime.fromisoformat(row['created_at'])
             if moment.tzinfo is None:
@@ -88,6 +92,6 @@ def import_package(database, path, mode, *, today=None):
         for row in eligible:
             review(db,scan_id=row['scan_id'],code=row['code'],mode=mode,
                    bars=indexed.get((row['code'],row['market']),[]),sessions=sessions,
-                   available_through=data['available_through'],price_source=data['price_source'])
+                   available_through=available_through,price_source=price_source)
         after = db.execute('SELECT COUNT(*) FROM recommendation_reviews').fetchone()[0]
-    return dict(recommendations=len(eligible),added=after-before,available_through=data['available_through'])
+    return dict(recommendations=len(eligible),added=after-before,available_through=available_through)
