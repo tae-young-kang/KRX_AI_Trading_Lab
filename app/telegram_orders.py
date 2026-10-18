@@ -26,7 +26,8 @@ ORDER_LABELS = {'OPEN':'접수·미체결', 'PARTIAL':'일부 체결', 'FILLED':
 
 
 class TelegramOrderService:
-    def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None):
+    def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
+                 conditions=None, orders_enabled=True):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -36,6 +37,7 @@ class TelegramOrderService:
             raise ValueError('텔레그램 기록은 주문·가짜 계좌 기록과 별도로 보관해야 합니다.')
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.engine, self.user_id, self.chat_id = engine, user_id, chat_id
+        self.conditions, self.orders_enabled = conditions, orders_enabled
         self.broker_identity = engine.broker.identity
         self.clock = clock or (lambda: datetime.now(KST))
         if self.clock().tzinfo is None:
@@ -64,6 +66,8 @@ class TelegramOrderService:
                        (self.scope, self.session))
 
     def stop(self):
+        if self.conditions is not None:
+            self.conditions.cancel_session(self.scope, self.session)
         with connect(self.path) as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute('UPDATE tg_sessions SET active=0 WHERE scope=? AND session=?', (self.scope, self.session))
@@ -135,8 +139,19 @@ class TelegramOrderService:
             previous = db.execute('SELECT reply FROM tg_updates WHERE scope=? AND uid=?', (self.scope, uid)).fetchone()
             if previous:
                 return previous['reply']
-            if text in ('/도움말', '/start', '/help'):
-                reply = HELP
+            if text.startswith('/조건') and self.conditions is not None:
+                reply = (self.conditions.handle(text, scope=self.scope, session=self.session, uid=uid, now=now)
+                         if owner['active'] or text in ('/조건','/조건도움말') else '조건 변경을 중지했어요. 프로그램에서 수신을 다시 시작해 주세요.')
+            elif not self.orders_enabled:
+                if text == '/중지':
+                    if self.conditions is not None:
+                        self.conditions.cancel_session(self.scope, self.session)
+                    db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
+                    reply = '조건 변경을 중지하고 대기 중인 변경을 철회했어요.'
+                else:
+                    reply = '추천 조건만 관리하는 연결이에요. 주문은 할 수 없어요.\n/조건 · /조건도움말'
+            elif text in ('/도움말', '/start', '/help'):
+                reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
             elif text == '/상태':
                 account = self.engine.account()
                 last = db.execute('SELECT * FROM tg_intents WHERE scope=? ORDER BY rowid DESC LIMIT 1', (self.scope,)).fetchone()
@@ -160,6 +175,8 @@ class TelegramOrderService:
                     order_safety.latch(db, self.broker_identity, 'USER_EMERGENCY')
                 reply = '안전 상태 확인 중 · 주문을 새로 보내지 않습니다.'
             elif text == '/중지':
+                if self.conditions is not None:
+                    self.conditions.cancel_session(self.scope, self.session)
                 db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
                 db.execute("UPDATE tg_intents SET state='CANCELED' WHERE scope=? AND state='WAITING'", (self.scope,))
                 reply = '새 주문을 중지하고 확인 대기를 철회했습니다. 이미 접수한 미체결 주문을 취소한 것은 아닙니다. 다시 시작하려면 프로그램에서 수신을 중지한 뒤 시작하세요.'

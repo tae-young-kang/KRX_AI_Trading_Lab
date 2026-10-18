@@ -1,5 +1,5 @@
 """Read-only dispatch lineage -> persistent fills. Never an order adapter."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 import json
 
@@ -22,6 +22,7 @@ class ChainExecutionView:
     net_cash_flow: int | None
     cost_source: str | None
     cancel_request_acknowledged: bool
+    account_tag: str = field(repr=False)
     # Neither absence of unfilled nor a cancellation ACK proves finality.
     state: str = 'CHAIN_OBSERVATIONS_ONLY'
     ready_for_orders: bool = False
@@ -130,4 +131,4 @@ def project_chain(journal, ledger, root_key):
         net = (total_gross if side == 'SELL' else -total_gross) - commission - tax
     return ChainExecutionView(day, root_key, tuple(order_number(active[key]['order_no']) for key in sequence),
         total_qty, total_gross, commission, tax, net, source,
-        any(active[key]['api_id'] == 'kt10003' for key in sequence))
+        any(active[key]['api_id'] == 'kt10003' for key in sequence), tag)

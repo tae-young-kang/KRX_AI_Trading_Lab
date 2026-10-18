@@ -17,11 +17,12 @@ class OfflinePracticeCalendar:
 class TelegramOrderWorker(QThread):
     status = Signal(str)
 
-    def __init__(self, root, token, user_id, chat_id, catalog):
+    def __init__(self, root, token, user_id, chat_id, catalog, conditions=None, orders_enabled=True):
         super().__init__()
         self.root, self.token = Path(root), token
         self.user_id, self.chat_id, self.catalog = user_id, chat_id, dict(catalog)
         self.service = None
+        self.conditions, self.orders_enabled = conditions, orders_enabled
 
     def stop(self):
         self.requestInterruption()
@@ -53,13 +54,14 @@ class TelegramOrderWorker(QThread):
             broker = SimulatedBroker(self.root/'fake_broker.db')
             engine = OrderEngine(self.root/'fake_orders.db', broker, OfflinePracticeCalendar())
             self.service = TelegramOrderService(self.root/'telegram_commands.db', engine,
-                                                self.user_id, self.chat_id, identity, self.catalog)
-            report = self.service.recovery_status(startup=True)
-            self.status.emit('수신 중 · 가짜 서버만 연결\n'+self.service.safety_text(report))
-            last_banner = self.service.safety_banner()
+                                                self.user_id, self.chat_id, identity, self.catalog,
+                                                conditions=self.conditions, orders_enabled=self.orders_enabled)
+            report = self.service.recovery_status(startup=True) if self.orders_enabled else None
+            self.status.emit('수신 중 · '+(self.service.safety_text(report) if self.orders_enabled else '추천 조건 관리 · 주문 불가'))
+            last_banner = self.service.safety_banner() if self.orders_enabled else ''
             while not self.isInterruptionRequested():
                 receive_once(self.service, transport, self.isInterruptionRequested)
-                banner = self.service.safety_banner()
+                banner = self.service.safety_banner() if self.orders_enabled else ''
                 if banner != last_banner and not self.isInterruptionRequested():
                     self.status.emit('수신 중 · 가짜 서버만 연결\n'+banner)
                     last_banner = banner

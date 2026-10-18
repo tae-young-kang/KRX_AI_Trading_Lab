@@ -27,6 +27,7 @@ from app.modes import MODES, current_mode, practice_db_name, credential_names
 from app.trading_clock import PRICE_BASIS_NOTICE
 from app.trade_review import outcome, condition_label, settings_snapshot
 from app.telegram_worker import TelegramOrderWorker
+from app.telegram_conditions import ConditionCommands
 
 STYLE = '''
 QMainWindow,QWidget {background:#0b1220;color:#e6edf7;font:10pt 'Malgun Gothic';}
@@ -112,6 +113,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = Settings()
         self.cfg = self.settings.values
+        self.condition_commands = ConditionCommands(data_dir()/'telegram_conditions.db', self.cfg)
         self.creds = Credentials()
         self.db = Database(data_dir() / practice_db_name(self.cfg))
         self.demo = DemoMarket()
@@ -136,6 +138,10 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.setInterval(max(10, int(self.cfg['scan_interval_sec'])) * 1000)
         self.timer.timeout.connect(self.scan)
+        self.condition_timer = QTimer(self)
+        self.condition_timer.setInterval(1000)
+        self.condition_timer.timeout.connect(self.sync_telegram_conditions)
+        self.condition_timer.start()
         self.refresh_stats()
         self.refresh_trades()
         self.refresh_proposals()
@@ -869,7 +875,7 @@ class MainWindow(QMainWindow):
         self.chat = QLineEdit(self.cfg['telegram_chat_id'])
         tf.addRow('알림 받을 방 번호 (Chat ID)',self.chat)
         self.telegram_user = QLineEdit(self.cfg['telegram_user_id'])
-        tf.addRow('주문 연습을 허용할 내 번호 (User ID)', self.telegram_user)
+        tf.addRow('명령을 보낼 내 사용자 번호 (User ID)', self.telegram_user)
         self.telegram_auto = QCheckBox('프로그램이 실행 중일 때 매일 16시 이후 첫 검색 결과를 자동 발송')
         self.telegram_auto.setChecked(bool(self.cfg['telegram_auto_send']))
         tf.addRow('자동 알림',self.telegram_auto)
@@ -899,8 +905,9 @@ class MainWindow(QMainWindow):
         self.order_demo_button = QPushButton('가짜 서버로 주문 흐름 시험 · 실제 돈 사용 안 함')
         self.order_demo_button.clicked.connect(self.test_order_flow)
         v.addWidget(self.order_demo_button)
-        v.addWidget(lbl('3. 텔레그램 주문 연습 · 가짜 서버만 연결', 'H2'))
-        help_text = lbl('연습 모드에서 저장한 사용자·개인 대화방만 허용합니다. 프로그램을 켜고 직접 시작해야 합니다.\n'
+        v.addWidget(lbl('3. 텔레그램으로 추천 조건 보기·바꾸기', 'H2'))
+        help_text = lbl('/조건 → 현재 기준 확인 · /조건변경 거래대금=100 → 내용 확인 → /조건확인 코드\n'
+                        '현재 저장한 모드의 추천 기준만 바꿉니다. 프로그램을 켜고 직접 시작해야 합니다.\n'
                         '/매수 900001 1 1000 → 내용 확인 → /확인 코드\n'
                         '수량·지정가 필수 · 2분 안에 확인 · 접수와 체결은 다릅니다. 키움 모의·실제 주문은 연결하지 않습니다.', 'Muted')
         help_text.setWordWrap(True)
@@ -909,9 +916,9 @@ class MainWindow(QMainWindow):
         self.telegram_order_status.setWordWrap(True)
         v.addWidget(self.telegram_order_status)
         tg_controls = QHBoxLayout()
-        self.telegram_order_start = QPushButton('텔레그램 주문 연습 시작')
+        self.telegram_order_start = QPushButton('텔레그램 명령 받기 시작')
         self.telegram_order_start.clicked.connect(self.start_telegram_orders)
-        self.telegram_order_stop = QPushButton('주문 연습 수신 중지')
+        self.telegram_order_stop = QPushButton('텔레그램 명령 받기 중지')
         self.telegram_order_stop.setEnabled(False)
         self.telegram_order_stop.clicked.connect(self.stop_telegram_orders)
         self.telegram_emergency = QPushButton('긴급 중지 · 미체결 취소 시도')
@@ -1010,8 +1017,8 @@ class MainWindow(QMainWindow):
     def start_telegram_orders(self):
         if self.telegram_order_worker and self.telegram_order_worker.isRunning():
             return
-        if self.cfg['data_mode'] != 'DEMO' or self.mode_select.currentData() != 'DEMO':
-            QMessageBox.information(self, '연습 모드 필요', '먼저 연습 모드로 바꾸고 연결 정보를 저장하세요. 실제·키움 모의 주문 연결은 아직 없습니다.')
+        if self.mode_select.currentData() != current_mode(self.cfg).key:
+            QMessageBox.information(self, '모드 저장 필요', '선택한 모드와 연결 정보를 먼저 저장해 주세요.')
             return
         try:
             user_id, chat_id = int(self.cfg['telegram_user_id']), int(self.cfg['telegram_chat_id'])
@@ -1023,15 +1030,20 @@ class MainWindow(QMainWindow):
         except (ValueError, TypeError):
             QMessageBox.information(self, '연결 정보 필요', '봇 연결 키·허용 User ID·개인 대화 Chat ID를 입력하고 저장하세요.')
             return
-        if QMessageBox.question(self, '텔레그램 주문 연습 시작',
-                '등록한 개인 대화에 주문 확인과 결과를 답장합니다.\n가짜 서버와 가짜 잔액만 사용하며 자동 체결하지 않습니다.\n시작할까요?') != QMessageBox.StandardButton.Yes:
+        orders_enabled = self.cfg['data_mode'] == 'DEMO'
+        if QMessageBox.question(self, '텔레그램 명령 받기',
+                '등록한 개인 대화에서 추천 조건을 확인하고 바꿀 수 있어요.\n'
+                + ('가상 연습 주문도 가능해요. 실제 돈은 사용하지 않아요.\n' if orders_enabled else '이 모드에서는 주문할 수 없어요.\n')
+                + '시작할까요?') != QMessageBox.StandardButton.Yes:
             return
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
-        worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog)
+        self.condition_commands.sync(self.cfg, self.settings.save, now=datetime.now().timestamp(), busy=True)
+        worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
+                                     conditions=self.condition_commands, orders_enabled=orders_enabled)
         self.telegram_order_worker = worker
         worker.status.connect(self.telegram_orders_status)
         worker.finished.connect(self.telegram_orders_finished)
-        self.telegram_order_status.setText('연결 확인 중 · 가짜 서버 연습')
+        self.telegram_order_status.setText('연결 확인 중 · '+current_mode(self.cfg).title)
         self.telegram_order_start.setEnabled(False)
         self.telegram_order_stop.setEnabled(True)
         worker.start()
@@ -1049,8 +1061,8 @@ class MainWindow(QMainWindow):
         worker = self.telegram_order_worker
         ready = bool(worker and worker.service is not None and worker.isRunning()
                      and not worker.isInterruptionRequested() and text.startswith('수신 중 ·'))
-        self.telegram_emergency.setEnabled(ready)
-        self.telegram_resume.setEnabled(ready)
+        self.telegram_emergency.setEnabled(ready and worker.orders_enabled)
+        self.telegram_resume.setEnabled(ready and worker.orders_enabled)
 
     def emergency_telegram_orders(self):
         worker = self.telegram_order_worker
@@ -1306,6 +1318,28 @@ class MainWindow(QMainWindow):
             text = '이전 기록의 조건을 확인할 수 없습니다.'
         QMessageBox.information(self, '매수 당시 조건 · 연습 기록', text)
 
+    def sync_telegram_conditions(self):
+        busy = self.scanning or bool(self.work and self.work.isRunning())
+        for key, widget in self.fields.items():
+            value = (widget.isChecked() if isinstance(widget,QCheckBox) else
+                     widget.currentData() if isinstance(widget,QComboBox) else widget.value())
+            busy = busy or value != self.cfg[key]
+        try:
+            changed = self.condition_commands.sync(self.cfg, self.settings.save,
+                now=datetime.now().timestamp(), busy=busy)
+            if changed:
+                self.stocks, self.results = [], []
+                self.fill_stock_tables()
+                self.refresh_strategy_fields()
+                self.count_info.setText('텔레그램에서 조건을 바꿨어요. 새 조건으로 다시 검색해 주세요.')
+                self.shadow.ensure_active_reference(dict(self.cfg),self.cfg['data_mode'])
+                self.refresh_shadow()
+        except Exception:
+            self.condition_timer.stop()
+            self.stocks, self.results = [], []
+            self.fill_stock_tables()
+            self.count_info.setText('추천 조건 저장을 확인해야 해요. 프로그램에서 조건을 다시 확인해 주세요.')
+
     def save_strategy(self):
         if self.scanning:
             QMessageBox.information(self, '조회 진행 중', '조회가 끝나거나 취소한 뒤 조건을 저장하세요.')
@@ -1395,7 +1429,7 @@ class MainWindow(QMainWindow):
 
     def save_integrations(self):
         if self.telegram_order_worker and self.telegram_order_worker.isRunning():
-            QMessageBox.information(self, '주문 연습 수신 중', '주문 연습 수신을 먼저 중지한 뒤 연결 정보·모드를 저장하세요.')
+            QMessageBox.information(self, '텔레그램 명령 받는 중', '텔레그램 명령 받기를 먼저 중지한 뒤 연결 정보·모드를 저장하세요.')
             return
         if self.scanning or (self.work and self.work.isRunning()):
             QMessageBox.information(self, '작업 진행 중', '현재 작업이 끝나거나 조회를 취소한 뒤 모드를 바꾸세요.')
