@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from copy import deepcopy
 
 from app.config import Settings
@@ -121,6 +122,34 @@ def test_same_day_and_unknown_costs_do_not_qualify(tmp_path):
     assert not review['eligible'] and review['state'] == '청산 비용 기록 미확인'
     rows[0]['strat_json'] = 'broken'
     assert review_conditions(rows)[0]['total']['count'] == 39
+
+
+def test_comparison_uses_korean_dates_and_actual_instants(tmp_path):
+    rows = records(Settings(tmp_path).values)
+    kst = timezone(timedelta(hours=9))
+    for row in rows:
+        for field in ('opened_at', 'closed_at'):
+            stamp = datetime.fromisoformat(row[field]).replace(tzinfo=kst)
+            # UTC represents the same instant, but its calendar day differs.
+            if field == 'opened_at':
+                stamp = stamp.replace(hour=1)
+            else:
+                stamp = stamp.replace(hour=2)
+            row[field] = stamp.astimezone(timezone.utc).isoformat()
+    review = review_conditions(rows)[0]
+    assert review['train']['count'] == 28 and review['test']['count'] == 12
+    # Lexical comparison would accept this closure, although it follows test entry.
+    rows[0]['closed_at'] = '2025-01-07T17:00:00+00:00'
+    assert review_conditions(rows)[0]['train']['count'] == 27
+
+
+def test_invalid_or_reversed_record_times_are_excluded(tmp_path):
+    rows = records(Settings(tmp_path).values)
+    rows[0]['opened_at'] = 'broken'
+    rows[1]['closed_at'] = '2024-12-31T10:00:00+09:00'
+    rows[2]['closed_at'] = '2025-01-01'
+    review = review_conditions(rows)[0]
+    assert review['total']['count'] == 37
 
 
 def test_proposals_use_only_tried_conditions_without_auto_apply(tmp_path):

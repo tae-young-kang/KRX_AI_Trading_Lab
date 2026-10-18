@@ -3,6 +3,16 @@ import hashlib
 import json
 import math
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+
+KST = timezone(timedelta(hours=9))
+
+
+def _record_time(value):
+    """Legacy offset-free records use PC local time, as in the daily ledger."""
+    if not isinstance(value, str) or 'T' not in value:
+        raise ValueError('invalid record time')
+    return datetime.fromisoformat(value).astimezone(KST)
 
 FILTER_KEYS = ('market', 'include_etf', 'recommend_count', 'on_price', 'min_price',
                'max_price', 'on_cap', 'min_cap_eok', 'max_cap_eok', 'on_value',
@@ -55,8 +65,13 @@ def summarize(trades):
 def review_conditions(trades, min_train=20):
     groups = defaultdict(list)
     metadata = {}
+    times = {}
     for trade in trades:
         try:
+            opened = _record_time(trade['opened_at'])
+            closed_at = _record_time(trade['closed_at']) if trade.get('closed_at') else None
+            if closed_at is not None and closed_at < opened:
+                continue
             cfg = settings_snapshot(json.loads(trade['strat_json']))
             # Unknown legacy provenance/partial settings stay outside comparisons.
             if any(k not in cfg for k in SNAPSHOT_KEYS if k != 'strategy_version'):
@@ -115,6 +130,7 @@ def review_conditions(trades, min_train=20):
             canonical['exit_cost_status']=cost_status
             key = hashlib.sha256(json.dumps(canonical, sort_keys=True, allow_nan=False).encode()).hexdigest()
             groups[key].append(trade)
+            times[id(trade)] = (opened, closed_at)
             metadata[key] = (cfg, canonical['exit_costs'],cost_status)
         except (ValueError, TypeError, KeyError):
             continue
@@ -122,16 +138,18 @@ def review_conditions(trades, min_train=20):
     for key, records in groups.items():
         cfg, exit_costs, cost_status = metadata[key]
         closed = sorted((t for t in records if outcome(t) in ('승', '패', '본전')),
-                        key=lambda t: (t['opened_at'], t['id']))
-        dates = sorted({t['opened_at'][:10] for t in closed})
+                        key=lambda t: (times[id(t)][0], t['id']))
+        day = lambda t: times[id(t)][0].date()
+        dates = sorted({day(t) for t in closed})
         cut = dates[max(0, int(len(dates)*.7)-1)] if dates else ''
-        test = [t for t in closed if t['opened_at'][:10] > cut]
-        first_test = min((t['opened_at'] for t in test), default='')
-        train = [t for t in closed if t['opened_at'][:10] <= cut and first_test and t['closed_at'] < first_test]
+        test = [t for t in closed if day(t) > cut]
+        first_test = min((times[id(t)][0] for t in test), default=None)
+        train = [t for t in closed if day(t) <= cut and first_test is not None
+                 and times[id(t)][1] < first_test]
         train_stats, test_stats = summarize(train), summarize(test)
         enough = (train_stats['count'] >= max(20, min_train) and test_stats['count'] >= 10
-                  and len({t['opened_at'][:10] for t in train}) >= 5
-                  and len({t['opened_at'][:10] for t in test}) >= 3)
+                  and len({day(t) for t in train}) >= 5
+                  and len({day(t) for t in test}) >= 3)
         positive = (enough and exit_costs is not None and train_stats['mean_pct'] > 0 and train_stats['pnl'] > 0
                     and test_stats['mean_pct'] > 0 and test_stats['pnl'] > 0)
         mode = '가상 시세로 연습' if cfg['data_mode'] == 'DEMO' else (
