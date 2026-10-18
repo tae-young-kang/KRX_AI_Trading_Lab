@@ -74,6 +74,21 @@ def test_empty_recommendations_record_complete_batch_without_inventing_entries(t
         assert record.execute('SELECT selected_count FROM recommendation_batches').fetchone()[0] == 0
 
 
+def test_latest_empty_search_is_visible_above_older_recommendations(tmp_path):
+    db = Database(tmp_path/'history.db')
+    rows = candidates()
+    first = save(db, rows, deepcopy(DEFAULTS))
+    for row in rows:
+        row.passed = False
+    latest = save(db, rows, {**DEFAULTS, 'min_value_eok': 777})
+    text = db.recommendation_summary('DEMO')
+    assert f'마지막 검색 #{latest}' in text and '추천 0개' in text
+    assert '거래대금 777억 이상' in text
+    assert '이전 검색 기록' in text and f'검색 #{first}' in text
+    assert '새로 검색한 결과는 아니에요' in text
+    assert '마지막 검색' not in db.recommendation_summary('MOCK')
+
+
 @pytest.mark.parametrize('damage',['missing','extra','different_price','duplicate_ranked','duplicate_population'])
 def test_rankings_cannot_be_saved_against_a_different_scan_population(tmp_path,damage):
     db=Database(tmp_path/'practice.db')

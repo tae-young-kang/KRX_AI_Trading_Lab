@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import asdict
 from datetime import datetime
 from app.modes import current_mode
-from app.trade_review import settings_snapshot
+from app.trade_review import settings_snapshot, condition_label
 from app.trading_clock import KST
 from app.recommendation_outcomes import evaluate
 from app.recommendation_overview import SOURCES, CALENDARS, change_label, price_label
@@ -122,8 +122,17 @@ def summary(db, mode, *, performance=False,page=1):
     label = {'DEMO':'가상 연습','MOCK':'키움 모의 시세','REAL_QUOTES':'실제 시세'}[mode]
     lines = [f'[{label} · '+('추천 이후 가격 관측' if performance else '추천 기록')+f' · {page}/{pages}]',
              '최근 순 5개씩 · 목록 생성 기록이며 텔레그램 발송·체결 증명이 아니에요.']
+    latest = db.execute('''SELECT * FROM recommendation_batches WHERE mode=?
+        ORDER BY scan_id DESC LIMIT 1''', (mode,)).fetchone()
+    if latest and not performance:
+        lines.extend([f"마지막 검색 #{latest['scan_id']} · {latest['created_at']} · 추천 {latest['selected_count']}개",
+                      '그때의 조건: '+condition_label(json.loads(latest['conditions_json'])),
+                      '저장된 결과예요. 현재 시세로 새로 검색한 결과는 아니에요.'])
+        if latest['selected_count'] == 0:
+            lines.append('마지막 검색에서는 조건에 맞는 추천이 없었어요. 아래 항목은 이전 검색 기록이에요.')
     if not rows:
-        return '\n'.join(lines+['저장된 추천이 없어요. 이 기능 추가 뒤 완료한 검색부터 기록해요.'])
+        return '\n'.join(lines+['저장된 추천 종목이 없어요.' if latest else
+                                '저장된 추천이 없어요. 이 기능 추가 뒤 완료한 검색부터 기록해요.'])
     labels = {'OBSERVED':'관측됨','NOT_DUE':'아직 날짜 전','PRICE_MISSING':'가격 자료 없음',
               'CALENDAR_MISSING':'거래일 자료 부족'}
     for row in rows:
