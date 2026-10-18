@@ -3,7 +3,9 @@ import json
 from app.budget_preview import equal_budget_preview
 
 
-def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps):
+def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps, take_bps=200, stop_bps=300):
+    if any(type(value) is not int or not 1<=value<10000 for value in (take_bps,stop_bps)):
+        raise ValueError('익절·손절은 0.01% 이상 100% 미만으로 입력해 주세요.')
     with history.connect() as db:
         db.execute('BEGIN')
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_runs'").fetchone():
@@ -26,7 +28,8 @@ def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps):
                                 reference_won=int(price) if price is not None else None))
         preview=equal_budget_preview(total_won=total_won,targets=targets,available_won=None,
                                      fee_bps=fee_bps,buffer_bps=buffer_bps)
-        return dict(preview,run_id=run['id'],price_asof=run['day'],source=run['source'],mode=mode)
+        return dict(preview,run_id=run['id'],price_asof=run['day'],source=run['source'],mode=mode,
+                    take_bps=take_bps,stop_bps=stop_bps)
 
 
 def preview_text(preview, *, page=None):
@@ -40,6 +43,9 @@ def preview_text(preview, *, page=None):
            f'가격 기준: {preview["price_asof"]} 저장 종가. 현재가·시초가가 아닙니다.',
            f'총예산 {preview["total_won"]:,}원 · 종목당 {preview["allocated_each_won"]:,}원',
            f'수수료 가정 {preview["fee_bps"]/100:.2f}% · 가격 여유 {preview["buffer_bps"]/100:.2f}%',
+           f'매수 후 계획: 체결가 대비 익절 +{preview.get("take_bps",200)/100:.2f}% · 손절 -{preview.get("stop_bps",300)/100:.2f}%',
+           '매도 감시·주문은 연결되지 않았어요. 실제 체결가 확인 전에는 매도 목표가를 정하지 않아요.',
+           'NXT 대상과 다음 첫 거래 가능 여부는 주문 전에 다시 확인해야 해요. 시장 자동 선택은 아직 연결되지 않았어요.',
            '증권사 주문 가능 금액은 조회하지 않았어요. 실제 매수 가능 여부는 미확인입니다.']
     rows=preview['targets'] if page is None else preview['targets'][(page-1)*5:page*5]
     if page is not None:
@@ -56,5 +62,7 @@ def preview_text(preview, *, page=None):
                   '주수는 소수점 아래를 버렸어요. 남은 돈은 다른 종목에 재배분하지 않습니다.',
                   '가격이 없는 종목의 예산도 남은 돈에 포함됩니다. 실제 주문·예수금 예약은 하지 않았어요.'])
     if page is not None and page<pages:
-        lines.append(f'다음: /테마1예산 {preview["total_won"]} {preview["fee_bps"]/100:.2f} {preview["buffer_bps"]/100:.2f} {page+1}')
+        policy=(f' 익절 {preview["take_bps"]/100:.2f} 손절 {preview["stop_bps"]/100:.2f}'
+                if preview.get('take_bps',200)!=200 or preview.get('stop_bps',300)!=300 else '')
+        lines.append(f'다음: /테마1예산 {preview["total_won"]} {preview["fee_bps"]/100:.2f} {preview["buffer_bps"]/100:.2f} {page+1}{policy}')
     return '\n'.join(lines)

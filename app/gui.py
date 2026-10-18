@@ -1421,7 +1421,7 @@ class MainWindow(QMainWindow):
                                      recommendation_report=lambda performance, page=1, scan_id=None, db=self.db, mode=current_mode(self.cfg).key:
                                          (db.recommendation_search_result(mode,scan_id,page=page) if scan_id is not None else
                                           db.recommendation_summary(mode,performance=performance,page=page)),
-                                     theme_budget=lambda total, fee, buffer, page, history=self.history, mode=current_mode(self.cfg).key: theme_budget_text(theme_budget_preview(history,mode=mode,total_won=total,fee_bps=fee,buffer_bps=buffer),page=page),
+                                     theme_budget=lambda total, fee, buffer, page, take_bps=200, stop_bps=300, history=self.history, mode=current_mode(self.cfg).key: theme_budget_text(theme_budget_preview(history,mode=mode,total_won=total,fee_bps=fee,buffer_bps=buffer,take_bps=take_bps,stop_bps=stop_bps),page=page),
                                      theme_status=lambda destination, history=self.history, mode=current_mode(self.cfg).key: theme_delivery_summary(history,mode=mode,destination=destination),
                                      theme_report=lambda page=1, history=self.history, mode=current_mode(self.cfg).key: theme_latest_report(history,mode=mode,page=page),
                                      practice_daily=lambda day, page=1, db=self.db: db.practice_daily_report(day,page=page),

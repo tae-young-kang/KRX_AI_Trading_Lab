@@ -249,6 +249,20 @@ def test_theme_budget_is_only_preview_and_parses_explicit_percentages(sandbox):
     assert seen[-1]==(1000,0,0,1) and broker.calls==[]
 
 
+def test_theme_budget_custom_exit_plan_is_not_an_order(sandbox):
+    service,broker,_,_=sandbox
+    seen=[]
+    def preview(total,fee,buffer,page,**policy):
+        seen.append((total,fee,buffer,page,policy))
+        return '계획만 확인'
+    service.theme_budget=preview
+    event=update(sandbox,1,'/테마1예산 1000000 0.02 2 익절 4.25 손절 1.75')
+    assert service.handle(event)==service.handle(event)=='계획만 확인'
+    assert seen==[(1000000,2,200,1,dict(take_bps=425,stop_bps=175))]
+    assert '사용법' in service.handle(update(sandbox,2,'/테마1예산 1000 0 0 익절 2'))
+    assert broker.calls==[]
+
+
 def test_practice_list_page_command_does_not_become_trade_number(sandbox):
     service,broker,_,_=sandbox;seen=[]
     service.practice_sales=lambda tid,page:seen.append((tid,page)) or '목록'

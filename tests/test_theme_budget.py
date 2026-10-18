@@ -1,4 +1,5 @@
 import json
+import pytest
 from app.backtest import Bar
 from app.krx_history import HistoryStore
 from app.recommendation_outcomes import SessionEvidence
@@ -17,6 +18,14 @@ def test_budget_uses_frozen_run_close_not_mutated_cache(tmp_path):
     assert result['executable'] is False and result['state']=='FUNDS_UNKNOWN'
     text=preview_text(result)
     assert '현재가·시초가가 아닙니다' in text and '주문 안 함' in text
+    assert '익절 +2.00% · 손절 -3.00%' in text
+    custom=preview_latest(history,mode='DEMO',total_won=1000,fee_bps=0,buffer_bps=0,take_bps=425,stop_bps=175)
+    assert custom['take_bps']==425 and custom['stop_bps']==175
+    assert '익절 +4.25% · 손절 -1.75%' in preview_text(custom)
+    assert custom['executable'] is False and custom['targets']==result['targets']
+    for invalid in (0,10000,True,1.5):
+        with pytest.raises(ValueError):
+            preview_latest(history,mode='DEMO',total_won=1000,fee_bps=0,buffer_bps=0,take_bps=invalid)
     with history.connect() as db:
         row=db.execute('SELECT id,result_json FROM theme_alerts').fetchone()
         payload=json.loads(row['result_json']);payload['result'].pop('reference_close')
@@ -34,3 +43,5 @@ def test_preview_paging_keeps_full_budget_totals():
     assert '1/2페이지' in first and '/테마1예산 6000 0.02 2.00 2' in first
     assert '900005' not in first and '900005' in second
     assert '예상 확보액 합계' in first and '예상 확보액 합계' in second
+    result.update(take_bps=425,stop_bps=175)
+    assert '/테마1예산 6000 0.02 2.00 2 익절 4.25 손절 1.75' in preview_text(result,page=1)

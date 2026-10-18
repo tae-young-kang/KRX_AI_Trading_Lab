@@ -187,17 +187,19 @@ class TelegramOrderService:
                     except (ValueError,TypeError,OverflowError):
                         reply='날짜와 연습 결산 기록을 확인해야 해요. 실제 계좌 결산은 아닙니다.'
             elif text.split(' ',1)[0] == '/테마1예산':
-                match=re.fullmatch(r'/테마1예산 ([1-9][0-9]{0,14}) ([0-9]{1,3}(?:\.[0-9]{1,2})?) ([0-9]{1,3}(?:\.[0-9]{1,2})?)(?: ([1-9][0-9]{0,5}))?',text)
+                match=re.fullmatch(r'/테마1예산 ([1-9][0-9]{0,14}) ([0-9]{1,3}(?:\.[0-9]{1,2})?) ([0-9]{1,3}(?:\.[0-9]{1,2})?)(?: ([1-9][0-9]{0,5}))?(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
                 if not match:
-                    reply='사용법: /테마1예산 총예산 수수료% 가격여유% [페이지]\n예: /테마1예산 1000000 0.02 2\n저장 종가로 예상 주수만 계산하며 주문하지 않아요.'
+                    reply='사용법: /테마1예산 총예산 수수료% 가격여유% [페이지] [익절 % 손절 %]\n예: /테마1예산 1000000 0.02 2 익절 4 손절 3\n기본 익절 2%·손절 3%. 예상 계획이며 주문하지 않아요.'
                 elif not self.theme_budget:
                     reply='테마1 예산 미리보기 연결이 없어요. 집 PC에서 확인해 주세요.'
                 else:
                     from decimal import Decimal
                     try:
-                        reply=self.theme_budget(int(match[1]),int(Decimal(match[2])*100),int(Decimal(match[3])*100),int(match[4] or 1))
+                        args=(int(match[1]),int(Decimal(match[2])*100),int(Decimal(match[3])*100),int(match[4] or 1))
+                        reply=(self.theme_budget(*args,take_bps=int(Decimal(match[5])*100),stop_bps=int(Decimal(match[6])*100))
+                               if match[5] else self.theme_budget(*args))
                     except ValueError:
-                        reply='테마1 판정과 총예산·수수료·가격 여유를 확인해 주세요. 주문하지 않았어요.'
+                        reply='테마1 판정과 총예산·수수료·가격 여유·익절/손절 비율을 확인해 주세요. 주문하지 않았어요.'
             elif text == '/테마1알림상태':
                 reply=self.theme_status(self.theme_destination) if self.theme_status else '테마1 알림 상태 연결이 없어요. 집 PC에서 확인해 주세요.'
             elif text.split(' ',1)[0] == '/테마1':
