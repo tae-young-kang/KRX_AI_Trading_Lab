@@ -27,3 +27,5 @@ venv/
 *.dispatch.lock
 paper_trades.csv
 practice_sales.csv
+krx-records-*/
+.krx-backup-*/

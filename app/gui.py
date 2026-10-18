@@ -514,6 +514,9 @@ class MainWindow(QMainWindow):
         exits_export = QPushButton('나눠 판 내역 CSV')
         exits_export.clicked.connect(self.export_practice_exits)
         row.addWidget(exits_export)
+        backup_button=QPushButton('현재 모드 기록 백업하기')
+        backup_button.clicked.connect(self.backup_current_records)
+        row.addWidget(backup_button)
         detail = QPushButton('선택 매매의 당시 조건 보기')
         detail.clicked.connect(self.show_trade_conditions)
         row.addWidget(detail)
@@ -2091,6 +2094,21 @@ class MainWindow(QMainWindow):
             self.timer.start()
             self.auto_button.setText('자동 검색 중지')
             self.scan()
+
+    def backup_current_records(self):
+        if self.work and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 백업해 주세요.')
+            return
+        mode=current_mode(self.cfg)
+        folder=QFileDialog.getExistingDirectory(self,mode.title+' · 기록 백업 폴더 선택')
+        if not folder: return
+        from app.record_backup import backup_records
+        path=self.db.path
+        self.run_task(lambda:backup_records(path,folder,mode=mode.key),
+            lambda result:QMessageBox.information(self,'기록 백업 완료',
+                f'{mode.title} 거래·추천 기록 사본을 검사해 저장했어요.\n{result}\n'
+                '연결 키·설정·연구 자료·증권사 주문 기록은 포함하지 않았어요. 자동 복원/주문은 하지 않아요.'),
+            '현재 모드 거래·추천 기록 백업 완료')
 
     def export_trades(self):
         path,_ = QFileDialog.getSaveFileName(self,'가상 매매기록 내보내기',
