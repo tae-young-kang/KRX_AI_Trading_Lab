@@ -3,6 +3,7 @@ import json
 from math import isfinite, fsum, isclose
 import re
 import uuid
+from datetime import datetime
 
 
 def initialize(db):
@@ -27,6 +28,17 @@ def _finite(value):
     return type(value) in (int,float) and isfinite(value)
 
 
+def _check_chronology(opened_at, previous, stamp):
+    try:
+        # Existing app timestamps are local; explicit offsets retain their instant.
+        times=[datetime.fromisoformat(value).astimezone() for value in
+               [opened_at]+[row['sold_at'] for row in previous]+[stamp]]
+        if any(later < earlier for earlier,later in zip(times,times[1:])):
+            raise ValueError('time moved backwards')
+    except (TypeError, ValueError, OverflowError, OSError):
+        raise ValueError('연습 매도 시각이 이전 기록보다 이르거나 잘못됐어요. PC 시각과 기록을 확인해 주세요.') from None
+
+
 def sell(db,trade_id,quantity,observed_price,reason,fee_pct,tax_pct,slip_pct,*,stamp,request_key=None):
     if (type(trade_id) is not int or trade_id<=0 or quantity is not None and (type(quantity) is not int or quantity<=0)
             or not _finite(observed_price) or observed_price<=0
@@ -47,6 +59,7 @@ def sell(db,trade_id,quantity,observed_price,reason,fee_pct,tax_pct,slip_pct,*,s
     if trade is None or trade['closed_at'] is not None:
         raise ValueError('청산 가능한 가상 포지션이 없습니다.')
     previous=db.execute('SELECT * FROM paper_exits WHERE trade_id=? ORDER BY id',(trade_id,)).fetchall()
+    _check_chronology(trade['opened_at'],previous,stamp)
     remaining=trade['remaining_qty']
     original=trade['qty']
     if (type(original) is not int or type(remaining) is not int or not 0<remaining<=original

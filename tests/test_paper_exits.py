@@ -3,6 +3,7 @@ from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import json
 import csv
+from datetime import datetime, timedelta, timezone
 import pytest
 from app.config import DEFAULTS
 from app.market import Stock
@@ -15,6 +16,32 @@ def position(tmp_path,quantity=10):
     stock=Stock('900001','연습종목','KOSPI',1000,3,200,150,4000)
     db.paper_open(stock,quantity,2,4,2,1,0,deepcopy(DEFAULTS),3)
     return db,db.open_trades()[0]['id']
+
+
+@pytest.mark.parametrize('bad_time', ['broken', None, '2000-01-01T00:00:00'])
+def test_sale_time_validation_is_atomic(tmp_path,monkeypatch,bad_time):
+    db,tid=position(tmp_path)
+    before=db.trades()[0]
+    monkeypatch.setattr('app.storage.now',lambda:bad_time)
+    with pytest.raises(ValueError,match='시각'):
+        db.paper_sell(tid,2,1100,'시각 검사',0,0,0)
+    assert db.trades()[0]==before and db.paper_exit_history(tid)==[]
+
+
+def test_clock_reversal_blocks_new_sale_but_replay_stays_idempotent(tmp_path,monkeypatch):
+    db,tid=position(tmp_path)
+    opened=datetime.fromisoformat(db.trades()[0]['opened_at']).astimezone()
+    monkeypatch.setattr('app.storage.now',lambda:(opened+timedelta(seconds=10)).isoformat())
+    first=db.paper_sell(tid,2,1100,'시각 검사',0,0,0,request_key='time-replay')
+    before=db.trades()[0]
+    monkeypatch.setattr('app.storage.now',lambda:(opened+timedelta(seconds=5)).isoformat())
+    assert db.paper_sell(tid,2,1100,'시각 검사',0,0,0,request_key='time-replay')==first
+    with pytest.raises(ValueError,match='시각'):
+        db.paper_sell(tid,2,1100,'새 매도',0,0,0)
+    assert db.trades()[0]==before and len(db.paper_exit_history(tid))==1
+    monkeypatch.setattr('app.storage.now',lambda:(opened+timedelta(seconds=10)).astimezone(timezone.utc).isoformat())
+    db.paper_close(tid,1100,'동일 순간 다른 offset',0,0,0)
+    assert db.trades()[0]['remaining_qty']==0
 
 
 def test_split_sales_allocate_entry_fee_once_and_count_one_final_outcome(tmp_path):
