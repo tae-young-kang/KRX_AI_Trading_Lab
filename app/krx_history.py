@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from app.backtest import Bar, load_ohlcv_csv
 from app.db import ClosingConnection
+from app.trading_clock import KST
 
 API_ROOT = 'https://data-dbg.krx.co.kr/svc/apis/sto/'
 ENDPOINTS = {'KOSPI': 'stk_bydd_trd', 'KOSDAQ': 'ksq_bydd_trd'}
@@ -150,13 +151,26 @@ class HistoryStore:
         self.insert_bars(rows,source)
         return len(rows)
 
-    def fetch_range(self,client,start,end,markets=('KOSPI','KOSDAQ'),limit_days=365):
+    def fetch_range(self,client,start,end,markets=('KOSPI','KOSDAQ'),limit_days=365,*,now=None):
+        moment=now or datetime.now(KST)
+        if not isinstance(moment,datetime) or moment.tzinfo is None:
+            raise ValueError('한국 날짜를 확인할 수 있는 시각이 필요합니다.')
+        today=moment.astimezone(KST).date()
         beg=date.fromisoformat(start);fin=date.fromisoformat(end)
-        if fin<beg or (fin-beg).days>limit_days or fin>date.today():
+        markets=tuple(markets)
+        if (fin<beg or (fin-beg).days>limit_days or fin>today or not markets
+                or len(set(markets))!=len(markets) or any(m not in ENDPOINTS for m in markets)):
             raise ValueError(f'날짜 범위가 올바르지 않습니다 (최대 {limit_days}일).')
         total=days=0
         with self.connect() as db:
-            done={(r['market'],r['day']) for r in db.execute('SELECT market,day FROM fetched_days WHERE source=?',('KRX',))}
+            # Same-day snapshots are provisional, even after app restart. Empty
+            # responses do not prove a holiday or a complete market download.
+            done={(r['market'],r['day']) for r in db.execute('''SELECT f.market,f.day
+                FROM fetched_days f WHERE f.source=? AND f.count>0 AND date(f.checked_at,'+9 hours')>f.day
+                AND substr(f.checked_at,-6,1) IN ('+','-') AND substr(f.checked_at,-3,1)=':'
+                AND julianday(f.checked_at)<=julianday(?)
+                AND f.day<? AND f.count=(SELECT COUNT(*) FROM daily_bars b
+                    WHERE b.source=f.source AND b.market=f.market AND b.day=f.day)''',('KRX',moment.isoformat(),today.isoformat()))}
         d=beg
         while d<=fin:
             if d.weekday()<5:
@@ -165,13 +179,20 @@ class HistoryStore:
                     if (market,key) in done:
                         continue
                     rows=client.fetch_day(market,key)
+                    if (not isinstance(rows,(list,tuple)) or any(b.date!=key or b.market!=market for b in rows)
+                            or len({b.code for b in rows})!=len(rows)):
+                        raise ValueError('KRX 응답의 날짜·시장·중복 종목을 확인해야 합니다.')
                     if rows:
-                        self.insert_bars(rows,'KRX')
-                    # Current-day empty response may be pending; retry next time.
-                    if rows or d<date.today():
+                        ts=moment.astimezone(KST).isoformat(timespec='seconds')
                         with self.connect() as db:
-                            db.execute('INSERT OR REPLACE INTO fetched_days VALUES(?,?,?,?,?)',
-                                       ('KRX',market,key,len(rows),datetime.now().isoformat(timespec='seconds')))
+                            db.execute('BEGIN IMMEDIATE')
+                            db.execute('DELETE FROM daily_bars WHERE source=? AND market=? AND day=?',('KRX',market,key))
+                            db.executemany('''INSERT INTO daily_bars
+                                (source,day,market,code,name,open,high,low,close,volume,trade_value_eok,cap_eok,fetched_at)
+                                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',[
+                                ('KRX',b.date,b.market,b.code,b.name,b.open,b.high,b.low,b.close,b.volume,
+                                 b.trade_value_eok,b.cap_eok,ts) for b in rows])
+                            db.execute('INSERT OR REPLACE INTO fetched_days VALUES(?,?,?,?,?)',('KRX',market,key,len(rows),ts))
                     total+=len(rows);days+=1
             d+=timedelta(days=1)
         return {'rows':total,'requests':days}
