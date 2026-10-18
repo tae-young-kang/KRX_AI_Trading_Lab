@@ -1162,7 +1162,8 @@ class MainWindow(QMainWindow):
                                      watch_status=self.mock_watch_status.summary,
                                      watch_refresh=self.mock_watch_status.request_refresh,
                                      watch_result=self.mock_watch_status.refresh_result,
-                                     watch_reconnect=self.mock_watch_status.request_reconnect)
+                                     watch_reconnect=self.mock_watch_status.request_reconnect,
+                                     watch_validation=self.mock_watch_status.validation_summary)
         self.telegram_order_worker = worker
         worker.status.connect(self.telegram_orders_status)
         worker.finished.connect(self.telegram_orders_finished)

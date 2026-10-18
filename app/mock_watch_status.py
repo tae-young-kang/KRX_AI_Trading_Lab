@@ -4,6 +4,7 @@ import threading
 import time
 
 from app.trading_clock import KST
+from app.mock_validation import MockValidationProgress
 
 
 class MockWatchStatus:
@@ -22,6 +23,11 @@ class MockWatchStatus:
         self._positions = ()
         self._reconnect_available = self._reconnect_pending = False
         self._last_reconnect = None
+        self._validation = MockValidationProgress(self._clock)
+
+    def validation_summary(self):
+        with self._lock:
+            return self._validation.summary()
 
     def offer_reconnect(self):
         with self._lock:
@@ -40,6 +46,7 @@ class MockWatchStatus:
                 return '재연결 요청 간격은 30초예요. /모의상태로 확인해 주세요.'
             self._last_reconnect = moment
             self._reconnect_pending = True
+            self._validation.record('RECOVERY')
             self._status = '모의 재연결 요청 대기 · 주문은 보내지 않아요.'
             return self._status
 
@@ -53,6 +60,8 @@ class MockWatchStatus:
 
     def enable_refresh(self):
         with self._lock:
+            if not self._refresh_enabled:
+                self._validation.record('STREAM')
             self._refresh_enabled = True
 
     def request_refresh(self):
@@ -80,6 +89,7 @@ class MockWatchStatus:
     def finish_refresh(self, report):
         with self._lock:
             self.verified(report)
+            self._validation.record('REFRESH')
             self._refresh_busy = False
             self._refresh_state = '모의 잔고 새 조회 완료 · 조회 시점의 값이에요.'
 
@@ -93,6 +103,7 @@ class MockWatchStatus:
 
     def reset(self):
         with self._lock:
+            self._validation.record('START')
             self._reconnect_available = self._reconnect_pending = False
             self._refresh_enabled = self._refresh_pending = self._refresh_busy = False
             self._last_request = None
@@ -103,6 +114,7 @@ class MockWatchStatus:
 
     def verified(self, report):
         with self._lock:
+            self._validation.record('ACCOUNT')
             # Whitelisted display fields only; no account/token/profile IDs.
             self._balance = {key:report[key] for key in ('checked_at','order_money','held','pending')}
             self._positions = tuple(report.get('positions',()))
@@ -110,10 +122,12 @@ class MockWatchStatus:
 
     def notice(self, text):
         with self._lock:
+            self._validation.record('NOTICE')
             self._notice, self._stale = text, True
 
     def stopped(self):
         with self._lock:
+            self._validation.record('STOP')
             self._reconnect_available = self._reconnect_pending = False
             if self._refresh_pending or self._refresh_busy:
                 self._refresh_state = '잔고 조회를 완료하지 못했어요. 연결을 다시 확인해 주세요.'
