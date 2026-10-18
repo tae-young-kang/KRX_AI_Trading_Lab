@@ -383,25 +383,30 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(page)
         row = QHBoxLayout()
         self.stats_line = lbl('거래내역 없음','H2')
-        row.addWidget(self.stats_line)
+        self.stats_line.setWordWrap(True)
+        v.addWidget(self.stats_line)
         row.addStretch()
-        close_btn = QPushButton('선택 가상 포지션 즉시 청산')
+        close_btn = QPushButton('선택한 연습 종목 팔기')
         close_btn.clicked.connect(self.paper_manual_close)
         row.addWidget(close_btn)
         exp = QPushButton('매매기록 CSV 내보내기')
         exp.clicked.connect(self.export_trades)
         row.addWidget(exp)
+        exits_export = QPushButton('나눠 판 내역 CSV')
+        exits_export.clicked.connect(self.export_practice_exits)
+        row.addWidget(exits_export)
         detail = QPushButton('선택 매매의 당시 조건 보기')
         detail.clicked.connect(self.show_trade_conditions)
         row.addWidget(detail)
         v.addLayout(row)
-        self.trade_table = make_table(['ID','종목','구분','수량','매수가','매도가','손익(원)',
+        self.trade_table = make_table(['ID','종목','구분','남은/처음 수량','매수가','평균 매도가','실현손익(원)',
                                        '손익률','매수일','청산일','사유','승패'])
         v.addWidget(self.trade_table)
-        v.addWidget(lbl('가상체결은 최신 조회가 기준의 단순 근사입니다. 미끄러짐/수수료/세금은 설정한 가정값으로 계산합니다.','Muted'))
+        v.addWidget(lbl('앱 안의 연습 계산입니다. 손익은 일부 매도를 포함하며, 손익률·승패는 남은 수량을 모두 판 뒤 정해요. 비용은 가정값입니다.','Muted'))
         v.addWidget(lbl('내가 쓴 조건의 성적표', 'H2'))
         note = lbl('매수 당시 조건을 보관하고 매도 후 비용을 뺀 결과로 승·패·본전을 나눕니다. '
-                   '보유 중인 종목은 승률에서 제외합니다. 조건 기록이 없는 이전 매매는 성적표에서 제외합니다. '
+                   '일부만 판 종목도 남은 수량을 모두 팔기 전에는 승률에서 제외합니다. 비용 가정이 다른 분할매도는 별도로 표시합니다. '
+                   '조건 기록이 없는 이전 매매는 성적표에서 제외합니다. '
                    '아래 기록은 모두 연습이며 실제 체결 기록이 아닙니다.', 'Muted')
         note.setWordWrap(True)
         v.addWidget(note)
@@ -1478,12 +1483,30 @@ class MainWindow(QMainWindow):
         if st is None or datetime.now() - datetime.fromisoformat(st.stamp) > timedelta(minutes=3):
             QMessageBox.warning(self,'가격 갱신 필요','최신 가격이 없습니다. 먼저 [지금 검색]을 눌러주세요.')
             return
-        if QMessageBox.question(self,'가상 즉시청산', f'{trade["name"]} 관측가 {st.price:,.0f}원에 가상청산할까요?') != QMessageBox.StandardButton.Yes:
+        remaining=trade['remaining_qty']
+        if type(remaining) is not int or remaining<=0:
+            QMessageBox.information(self,'연습 수량 확인','남은 수량 기록을 확인해야 해요. 매도를 기록하지 않았어요.')
             return
-        self.db.paper_close(trade_id,st.price,'가상 수동청산',self.cfg['paper_fee_pct'],
-                            self.cfg['paper_sell_tax_pct'],self.cfg['paper_slippage_pct'])
+        quantity,ok=QInputDialog.getInt(self,'연습 매도 수량',f'{trade["name"]} · 남은 {remaining}주 중 몇 주를 팔까요?',remaining,1,remaining,1)
+        if not ok:
+            return
+        if QMessageBox.question(self,'연습 매도 확인',f'{trade["name"]} {quantity}주 · 관측가 {st.price:,.0f}원\n'
+                f'매도 후 남은 수량 {remaining-quantity}주\n앱 안의 연습 기록이며 증권계좌에 주문하지 않아요. 진행할까요?') != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.db.paper_sell(trade_id,quantity,st.price,'가상 수동청산' if quantity==remaining else '가상 분할매도',
+                self.cfg['paper_fee_pct'],self.cfg['paper_sell_tax_pct'],self.cfg['paper_slippage_pct'],request_key=uuid.uuid4().hex)
+        except ValueError as error:
+            QMessageBox.information(self,'연습 매도 확인',str(error))
+            return
         self.refresh_trades()
         self.refresh_stats()
+
+    def export_practice_exits(self):
+        path,_=QFileDialog.getSaveFileName(self,'연습 분할매도 내역 CSV 저장','practice_sales.csv','CSV (*.csv)')
+        if path:
+            self.db.export_paper_exits(path)
+            QMessageBox.information(self,'연습 내역 저장','가정 비용을 포함한 연습 매도 내역을 저장했어요. 실제 증권사 체결 내역이 아니에요.')
 
     def refresh_stats(self):
         st = self.db.stats()
@@ -1491,16 +1514,19 @@ class MainWindow(QMainWindow):
         self.kpi_win.setText(f'{st["winrate"]:.1f}%')
         self.kpi_count.setText(f'{st["count"]}건')
         self.kpi_open.setText(f'{st["open_count"]}종목')
-        self.stats_line.setText(f'가상 실현손익 {st["pnl"]:+,.0f}원  |  총이익 +{st["gain"]:,.0f}원  |  총손실 -{st["loss"]:,.0f}원  |  승률 {st["winrate"]:.1f}%')
+        self.stats_line.setText(f'연습 실현손익 {st["pnl"]:+,.0f}원 (일부 매도 포함)  |  모두 판 거래 {st["count"]}건 · 승률 {st["winrate"]:.1f}%'
+                               +(f' · 금액 확인 필요 {st["unknown_count"]}건' if st['unknown_count'] else ''))
 
     def refresh_trades(self):
         trades = self.db.trades()
         self.trade_table.setRowCount(len(trades))
         for i,t in enumerate(trades):
-            pnl = t['pnl']
-            data = [t['id'],t['name'], '보유 중' if t['closed_at'] is None else '청산',
-                    t['qty'],f'{t["buy_fill"]:,.0f}',f'{t["close_fill"]:,.0f}' if t['close_fill'] is not None else '—',
-                    f'{pnl:+,.0f}' if pnl is not None else '미실현',
+            pnl = t['pnl'] if t['closed_at'] else t['realized_pnl']
+            partial=t['remaining_qty'] is not None and 0<t['remaining_qty']<t['qty']
+            data = [t['id'],t['name'], '일부 매도·보유 중' if partial else '보유 중' if t['closed_at'] is None else '모두 매도',
+                    f"{t['remaining_qty'] if t['remaining_qty'] is not None else '미확인'} / {t['qty']}",
+                    f'{t["buy_fill"]:,.0f}',f'{t["close_fill"]:,.0f}' if t['close_fill'] is not None else '—',
+                    f'{pnl:+,.0f}' if pnl is not None else '확인 필요',
                     f'{t["pnl_pct"]:+.2f}%' if t['pnl_pct'] is not None else '—',
                     t['opened_at'][:16],t['closed_at'][:16] if t['closed_at'] else '—', t['close_reason'] or '—', outcome(t)]
             for j,x in enumerate(data):

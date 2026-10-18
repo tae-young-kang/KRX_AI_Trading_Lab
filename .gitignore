@@ -25,3 +25,5 @@ venv/
 .pytest_cache/
 *.log
 *.dispatch.lock
+paper_trades.csv
+practice_sales.csv

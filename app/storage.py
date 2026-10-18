@@ -1,7 +1,7 @@
 import csv
 import json
 import sqlite3
-from math import isfinite
+from math import isfinite, fsum
 from datetime import datetime
 from pathlib import Path
 from app.db import ClosingConnection
@@ -182,17 +182,27 @@ class Database:
         return review_conditions(trades, min_train)
 
     def stats(self):
-        closed = self.closed_trades()
+        with self.connect() as db:
+            rows=[dict(row) for row in db.execute('SELECT * FROM paper_trades')]
+        closed = [t for t in rows if t['closed_at'] and outcome(t) in ('승','패','본전')]
+        open_rows=[t for t in rows if not t['closed_at']]
+        partial=[t['realized_pnl'] for t in open_rows
+                 if type(t['realized_pnl']) in (int,float) and isfinite(t['realized_pnl'])]
         wins = [t for t in closed if t['pnl'] > 0]
-        gross_win = sum(t['pnl'] for t in closed if t['pnl'] > 0)
-        gross_loss = -sum(t['pnl'] for t in closed if t['pnl'] < 0)
-        total = sum(t['pnl'] for t in closed)
+        closed_pnl = fsum(t['pnl'] for t in closed)
+        amounts=[t['pnl'] for t in closed]+partial
+        gross_win = fsum(value for value in amounts if value>0)
+        gross_loss = -fsum(value for value in amounts if value<0)
+        total = fsum(amounts)
+        closed_gain=fsum(t['pnl'] for t in closed if t['pnl']>0)
+        closed_loss=-fsum(t['pnl'] for t in closed if t['pnl']<0)
         return {
             'count': len(closed), 'wins': len(wins), 'winrate': len(wins) / len(closed) * 100 if closed else 0,
             'pnl': total, 'gain': gross_win, 'loss': gross_loss,
-            'profit_factor': gross_win / gross_loss if gross_loss else (float('inf') if gross_win else 0),
-            'expectancy': total / len(closed) if closed else 0,
-            'open_count': len(self.open_trades())
+            'profit_factor': closed_gain / closed_loss if closed_loss else (float('inf') if closed_gain else 0),
+            'expectancy': closed_pnl / len(closed) if closed else 0,
+            'open_count': len(open_rows), 'partial_pnl':fsum(partial),'closed_pnl':closed_pnl,
+            'unknown_count':len(rows)-len(closed)-len(partial)
         }
 
     def proposals(self):
@@ -229,11 +239,20 @@ class Database:
             row['outcome'] = outcome(row)
         columns = ['id','code','name','market','opened_at','closed_at','qty','buy_ref','buy_fill',
                    'buy_fee','stop_pct','take_pct','close_ref','close_fill','close_fee','close_tax',
-                   'close_reason','pnl','pnl_pct','source','strat_json','entry_json','exit_settings_json','outcome']
+                   'close_reason','pnl','pnl_pct','source','strat_json','entry_json','exit_settings_json',
+                   'remaining_qty','realized_pnl','outcome']
         with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.DictWriter(f, fieldnames=columns, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(rows)
+
+    def export_paper_exits(self,filename):
+        with self.connect() as db:
+            rows=[dict(row) for row in db.execute('SELECT * FROM paper_exits ORDER BY id')]
+        fields=['id','trade_id','sold_at','qty','reference','fill','sell_fee','sell_tax','allocated_cost','pnl','costs_json','reason']
+        with open(filename,'w',newline='',encoding='utf-8-sig') as stream:
+            writer=csv.DictWriter(stream,fieldnames=fields,extrasaction='ignore')
+            writer.writeheader();writer.writerows(rows)
 
     def export_snapshots(self, filename):
         with self.connect() as db:

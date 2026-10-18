@@ -98,15 +98,29 @@ def review_conditions(trades, min_train=20):
                 canonical[field] = float(trade[field])
             costs = (json.loads(trade['exit_settings_json']) if trade.get('exit_settings_json')
                      else ({k: cfg[k] for k in COST_KEYS} if not trade.get('closed_at') else None))
+            cost_status='MISSING' if costs is None else 'KNOWN'
+            if costs is not None:
+                if not isinstance(costs,dict): raise ValueError('invalid exit costs')
+                parts=costs.get('segments') if costs.get('mixed') is True else [costs]
+                if not isinstance(parts,list) or not parts:
+                    raise ValueError('invalid split exit costs')
+                if any(not isinstance(part,dict) or any(type(part.get(k)) not in (int,float)
+                    or not math.isfinite(part[k]) or not 0<=part[k]<100 for k in COST_KEYS)
+                    or part['paper_fee_pct']+part['paper_sell_tax_pct']>=100 for part in parts):
+                    raise ValueError('invalid exit costs')
+                if costs.get('mixed') is True:
+                    cost_status='MIXED'
+                    costs=None
             canonical['exit_costs'] = {k: float(costs[k]) for k in COST_KEYS} if costs is not None else None
+            canonical['exit_cost_status']=cost_status
             key = hashlib.sha256(json.dumps(canonical, sort_keys=True, allow_nan=False).encode()).hexdigest()
             groups[key].append(trade)
-            metadata[key] = (cfg, canonical['exit_costs'])
+            metadata[key] = (cfg, canonical['exit_costs'],cost_status)
         except (ValueError, TypeError, KeyError):
             continue
     reviews = []
     for key, records in groups.items():
-        cfg, exit_costs = metadata[key]
+        cfg, exit_costs, cost_status = metadata[key]
         closed = sorted((t for t in records if outcome(t) in ('승', '패', '본전')),
                         key=lambda t: (t['opened_at'], t['id']))
         dates = sorted({t['opened_at'][:10] for t in closed})
@@ -122,9 +136,10 @@ def review_conditions(trades, min_train=20):
                     and test_stats['mean_pct'] > 0 and test_stats['pnl'] > 0)
         mode = '가상 시세로 연습' if cfg['data_mode'] == 'DEMO' else (
             '모의 시세로 연습' if cfg['kiwoom_env'] == 'MOCK' else '실제 시세로 연습')
-        reviews.append(dict(key=key, settings=cfg, exit_costs=exit_costs, mode=mode, label=condition_label(cfg),
+        reviews.append(dict(key=key, settings=cfg, exit_costs=exit_costs, cost_status=cost_status, mode=mode, label=condition_label(cfg),
                             total=summarize(closed), open_count=sum(not t.get('closed_at') for t in records),
                             train=train_stats, test=test_stats, eligible=positive,
-                            state=('청산 비용 기록 미확인' if exit_costs is None and closed else
+                            state=('분할매도 비용 가정 다름' if cost_status=='MIXED' and closed else
+                                   '청산 비용 기록 미확인' if exit_costs is None and closed else
                                    '추가 검증 후보' if positive else ('수익 기준 미달' if enough else '기록 모으는 중'))))
     return sorted(reviews, key=lambda r: (r['eligible'], r['total']['count']), reverse=True)

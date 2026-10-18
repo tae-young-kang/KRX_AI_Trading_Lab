@@ -2,7 +2,7 @@
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import json
-import sqlite3
+import csv
 import pytest
 from app.config import DEFAULTS
 from app.market import Stock
@@ -97,3 +97,49 @@ def test_legacy_migration_preserves_rows_without_inventing_exit_events(tmp_path)
     trade=reopened.trades()[0]
     assert trade['pnl']==original['pnl'] and trade['remaining_qty']==0
     assert trade['realized_pnl']==original['pnl'] and reopened.paper_exit_history(tid)==[]
+
+
+def test_partial_realized_money_is_visible_but_winrate_waits_for_full_exit(tmp_path):
+    db,tid=position(tmp_path)
+    first=db.paper_sell(tid,3,1200,'일부',0,0,0)
+    stats=db.stats()
+    assert stats['pnl']==first and stats['partial_pnl']==first and stats['closed_pnl']==0
+    assert stats['count']==0 and stats['open_count']==1 and stats['wins']==0
+    db.paper_close(tid,900,'나머지',0,0,0)
+    stats=db.stats()
+    assert stats['partial_pnl']==0 and stats['closed_pnl']==stats['pnl']
+    assert stats['count']==1 and stats['open_count']==0
+
+
+def test_mixed_exit_cost_assumptions_preserve_final_outcome_but_never_qualify(tmp_path):
+    db,tid=position(tmp_path)
+    db.paper_sell(tid,4,1200,'일부',0,0,0)
+    db.paper_close(tid,1200,'나머지',1,1,0)
+    trade=db.trades()[0]
+    assert json.loads(trade['exit_settings_json'])['mixed'] is True
+    review=db.condition_reviews()[0]
+    assert review['total']['count']==1 and review['total']['wins']==1
+    assert review['cost_status']=='MIXED' and review['exit_costs'] is None
+    assert not review['eligible'] and review['state']=='분할매도 비용 가정 다름'
+
+
+def test_aggregate_and_segment_exports_keep_remaining_costs_and_hide_request_keys(tmp_path):
+    db,tid=position(tmp_path)
+    db.paper_sell(tid,2,1200,'일부',1,1,0,request_key='private-operation')
+    aggregate=tmp_path/'trades.csv';segments=tmp_path/'sales.csv'
+    db.export_trades(aggregate);db.export_paper_exits(segments)
+    with aggregate.open(encoding='utf-8-sig') as stream: row=list(csv.DictReader(stream))[0]
+    assert row['qty']=='10' and row['remaining_qty']=='8' and row['outcome']=='보유 중'
+    assert float(row['realized_pnl'])==pytest.approx(2400-24-24-2020)
+    with segments.open(encoding='utf-8-sig') as stream: sale=list(csv.DictReader(stream))[0]
+    assert sale['qty']=='2' and sale['trade_id']==str(tid)
+    assert 'request_key' not in sale and 'request_json' not in sale
+    assert 'private-operation' not in segments.read_text(encoding='utf-8-sig')
+
+
+def test_unknown_legacy_pnl_is_excluded_instead_of_counted_as_break_even(tmp_path):
+    db,tid=position(tmp_path)
+    with db.connect() as record:
+        record.execute("UPDATE paper_trades SET closed_at='2026-10-19T12:00:00',pnl=NULL,remaining_qty=0 WHERE id=?",(tid,))
+    stats=db.stats()
+    assert stats['unknown_count']==1 and stats['count']==0 and stats['wins']==0

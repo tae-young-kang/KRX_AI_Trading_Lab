@@ -59,6 +59,26 @@ def test_condition_identity_ignores_version_and_disabled_thresholds(tmp_path):
     assert len(review_conditions(rows)) == 2
 
 
+def test_large_positive_sample_with_mixed_exit_costs_stays_out_of_candidates(tmp_path):
+    cfg=Settings(tmp_path).values
+    rows=records(cfg)
+    first={k:cfg[k] for k in ('paper_fee_pct','paper_sell_tax_pct','paper_slippage_pct')}
+    second=dict(first,paper_fee_pct=first['paper_fee_pct']+.01)
+    for row in rows: row['exit_settings_json']=json.dumps(dict(mixed=True,segments=[first,second]))
+    review=review_conditions(rows)[0]
+    assert review['train']['count']>=20 and review['test']['count']>=10
+    assert not review['eligible'] and review['state']=='분할매도 비용 가정 다름'
+
+
+def test_invalid_recorded_exit_costs_do_not_become_positive_candidates(tmp_path):
+    cfg=Settings(tmp_path).values
+    rows=records(cfg)
+    for row in rows:
+        costs=json.loads(row['exit_settings_json']);costs['paper_fee_pct']=-1
+        row['exit_settings_json']=json.dumps(costs)
+    assert review_conditions(rows)==[]
+
+
 def test_sources_and_environments_are_not_mixed(tmp_path):
     cfg = Settings(tmp_path).values
     rows = records(cfg, 12)
