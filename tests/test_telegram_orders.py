@@ -265,3 +265,10 @@ def test_daily_report_uses_korean_date_and_never_sends_orders(sandbox):
     service.stop()
     assert service.handle(update(sandbox,2,'/연습결산 2026-10-16'))=='연습 결산'
     assert seen==['2026-10-19','2026-10-16'] and broker.calls==[]
+
+
+def test_daily_report_page_does_not_send_orders(sandbox):
+    service,broker,_,_=sandbox;seen=[]
+    service.practice_daily=lambda day,page=1:seen.append((day,page)) or '결산 페이지'
+    assert service.handle(update(sandbox,1,'/연습결산 2026-10-19 2'))=='결산 페이지'
+    assert seen==[('2026-10-19',2)] and broker.calls==[]

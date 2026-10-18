@@ -167,14 +167,16 @@ class TelegramOrderService:
                 reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                          if self.watch_orders and (owner['active'] or text.split(' ',1)[0] in ('/주문상태','/주문점검','/긴급중지','/주문목록','/미체결')) else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')
             elif text.split(' ',1)[0] == '/연습결산':
-                match=re.fullmatch(r'/연습결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2}))?',text)
+                match=re.fullmatch(r'/연습결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
                 if not match:
-                    reply='사용법: /연습결산 또는 /연습결산 YYYY-MM-DD'
+                    reply='사용법: /연습결산 또는 /연습결산 YYYY-MM-DD [페이지]'
                 elif not self.practice_daily:
                     reply='연습 결산 연결이 없어요. 집 PC에서 확인해 주세요.'
                 else:
                     try:
-                        reply=self.practice_daily(match[1] or self.clock().astimezone(KST).date().isoformat())
+                        day=match[1] or self.clock().astimezone(KST).date().isoformat()
+                        page=int(match[2] or 1)
+                        reply=self.practice_daily(day) if page==1 else self.practice_daily(day,page=page)
                     except (ValueError,TypeError,OverflowError):
                         reply='날짜와 연습 결산 기록을 확인해야 해요. 실제 계좌 결산은 아닙니다.'
             elif text.split(' ',1)[0] == '/테마1예산':

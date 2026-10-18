@@ -194,10 +194,10 @@ class Database:
             return (f'[연습 매도 내역 · {page}/{pages}페이지]\n'+sale_details(trade,sales,start=page)+
                     (f'\n다음: /연습내역 {trade_id} {page+1}' if page<pages else ''))
 
-    def practice_daily_report(self, day):
+    def practice_daily_report(self, day, page=1):
         from app.practice_daily import summarize,render
         with self.connect() as db:
-            return render(summarize(db,day))
+            return render(summarize(db,day),page=page)
 
     def open_trades(self):
         with self.connect() as db:
