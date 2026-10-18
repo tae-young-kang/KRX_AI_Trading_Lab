@@ -55,7 +55,7 @@ class MockTransport:
     environment = 'MOCK'
 
     def __init__(self, *, environment, profile_id, session=None, clock=None,
-                 monotonic=None, pause=None):
+                 monotonic=None, pause=None, cancelled=None):
         if environment != 'MOCK':
             raise ContractError('모의 서버 전용 연결입니다.')
         # Opaque local profile identity, never an account number.
@@ -63,6 +63,7 @@ class MockTransport:
             raise ContractError('모의 프로필 식별자가 필요합니다.')
         self.profile_id = profile_id
         self._clock = clock or (lambda: datetime.now(KST))
+        self.cancelled = cancelled or (lambda: False)
         self._monotonic = monotonic or time.monotonic
         self._pause = pause or time.sleep
         self._io_lock = threading.Lock()
@@ -78,11 +79,15 @@ class MockTransport:
     def _post(self, path, headers, body):
         try:
             with self._io_lock:
+                if self.cancelled():
+                    raise ValueError
                 if self._last_request is not None:
                     delay = 1.1 - (self._monotonic() - self._last_request)
                     if delay > 0:
                         self._pause(delay)
                 self._last_request = self._monotonic()
+                if self.cancelled():
+                    raise ValueError
                 response = self._session.post('https://mockapi.kiwoom.com' + path,
                     headers=headers, json=body, timeout=(3, 10), allow_redirects=False)
             if response.status_code != 200:
@@ -119,6 +124,8 @@ class MockTransport:
         self._token, self._expires = token, expires
 
     def ready(self):
+        if self.cancelled():
+            raise ContractError('사용자가 연결을 중지했습니다.')
         if not self._token or self._expires <= self._clock():
             raise ContractError('모의 인증이 필요하거나 만료됐습니다. 주문을 보내지 않았습니다.')
 

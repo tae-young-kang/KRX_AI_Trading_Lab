@@ -28,6 +28,9 @@ from app.trading_clock import PRICE_BASIS_NOTICE
 from app.trade_review import outcome, condition_label, settings_snapshot
 from app.telegram_worker import TelegramOrderWorker
 from app.telegram_conditions import ConditionCommands
+from app.kiwoom_mock_watch import require_mock_mode
+from app.kiwoom_mock_watch_worker import MockWatchWorker
+from app.mock_watch_status import MockWatchStatus
 
 STYLE = '''
 QMainWindow,QWidget {background:#0b1220;color:#e6edf7;font:10pt 'Malgun Gothic';}
@@ -129,6 +132,8 @@ class MainWindow(QMainWindow):
         self.stocks = []
         self.work = None
         self.telegram_order_worker = None
+        self.mock_watch_worker = None
+        self.mock_watch_status = MockWatchStatus()
         self.scanning = False
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
         self.resize(1390, 860)
@@ -938,6 +943,38 @@ class MainWindow(QMainWindow):
                           '매수·매도 모두 합산하며 미접수·취소도 사용한 한도를 돌려주지 않습니다.', 'Muted')
         limits_note.setWordWrap(True)
         v.addWidget(limits_note)
+        panel = QFrame(objectName='Panel')
+        watch = QVBoxLayout(panel)
+        watch.addWidget(lbl('4. 키움 모의 계좌 확인 · 알림만 받기', 'H2'))
+        note = lbl('키움 모의투자 모드에서만 사용해요. 실제 돈·모의 주문을 새로 보내지 않아요.\n'
+                   '처음 연결만 이 화면에서 해요. 이후 텔레그램 /프로그램상태로 확인할 수 있어요.\n'
+                   '1번으로 계좌를 확인한 뒤 2분 안에 2번을 눌러야 알림을 받기 시작해요.', 'Muted')
+        note.setWordWrap(True)
+        watch.addWidget(note)
+        self.mock_account = QLineEdit()
+        self.mock_account.setEchoMode(QLineEdit.EchoMode.Password)
+        self.mock_account.setMaxLength(10)
+        self.mock_account.setPlaceholderText('확인할 키움 모의 계좌번호 10자리 · 저장하지 않아요')
+        watch.addWidget(self.mock_account)
+        controls = QHBoxLayout()
+        self.mock_verify = QPushButton('1. 모의 계좌 확인',objectName='Primary')
+        self.mock_listen = QPushButton('2. 알림 받기 시작')
+        self.mock_listen.setEnabled(False)
+        self.mock_stop = QPushButton('알림 받기 중지')
+        self.mock_stop.setEnabled(False)
+        self.mock_verify.clicked.connect(self.verify_mock_account)
+        self.mock_listen.clicked.connect(self.start_mock_notices)
+        self.mock_stop.clicked.connect(self.stop_mock_notices)
+        for button in (self.mock_verify,self.mock_listen,self.mock_stop):
+            controls.addWidget(button)
+        watch.addLayout(controls)
+        self.mock_status = lbl('3. 상태 확인 · 아직 연결하지 않았어요. 주문 기능은 잠겨 있어요.', 'Muted')
+        self.mock_balance = lbl('잔고는 모의 계좌를 확인한 시점의 값이에요.', 'Muted')
+        self.mock_last_notice = lbl('아직 받은 알림이 없어요.', 'Muted')
+        for label in (self.mock_status,self.mock_balance,self.mock_last_notice):
+            label.setWordWrap(True)
+            watch.addWidget(label)
+        v.addWidget(panel)
         v.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -969,6 +1006,81 @@ class MainWindow(QMainWindow):
             '연결 키 보관함: ' + ('키움 모의 서버 전용' if mode.environment == 'MOCK' else '키움 실제 서버 전용'))
         if hasattr(self, 'test_ki_button'):
             self.test_ki_button.setEnabled(mode.key != 'DEMO')
+
+    def verify_mock_account(self):
+        if self.mock_watch_worker and self.mock_watch_worker.isRunning():
+            return
+        try:
+            require_mock_mode(self.cfg)
+            if self.mode_select.currentData() != 'MOCK':
+                raise ValueError('키움 모의투자 모드를 선택하고 저장해 주세요.')
+            account = self.mock_account.text().strip()
+            if not (len(account)==10 and account.isascii() and account.isdigit()):
+                raise ValueError('확인할 모의 계좌번호 10자리를 입력해 주세요.')
+            key_name, secret_name = credential_names('MOCK')
+            key, secret = self.creds.get(key_name), self.creds.get(secret_name)
+            if not key or not secret:
+                raise ValueError('모의 연결 키와 비밀 키를 먼저 저장해 주세요.')
+        except ValueError as error:
+            QMessageBox.information(self,'모의 계좌 확인',str(error))
+            return
+        self.mock_account.clear()
+        worker = MockWatchWorker(data_dir()/'kiwoom_mock_watch',key,secret,account,self.mock_watch_status)
+        self.mock_watch_worker = worker
+        worker.verified.connect(self.mock_account_verified)
+        worker.status.connect(self.mock_status.setText)
+        worker.notice.connect(self.mock_notice_received)
+        worker.finished.connect(self.mock_watch_finished)
+        self.mock_verify.setEnabled(False)
+        self.mock_account.setEnabled(False)
+        self.mock_listen.setEnabled(False)
+        self.mock_stop.setEnabled(True)
+        self.mode_select.setEnabled(False)
+        for name in ('kiwoom_appkey','kiwoom_secret'):
+            self.secrets[name].setEnabled(False)
+        self.mock_status.setText('모의 계좌와 잔고를 확인하고 있어요. 주문은 보내지 않아요.')
+        self.mock_balance.setText('확인 중이에요. 이전 잔고는 사용하지 않아요.')
+        self.mock_last_notice.setText('아직 알림 받기를 시작하지 않았어요.')
+        worker.start()
+
+    def mock_account_verified(self, report):
+        worker = self.mock_watch_worker
+        if not worker or worker.isInterruptionRequested() or not worker.isRunning():
+            return
+        money = '다시 확인 필요' if report['order_money'] is None else f"{report['order_money']:,}원"
+        self.mock_balance.setText(f"{report['checked_at']} 확인 · 주문에 쓸 수 있는 돈(조회값): {money}\n"
+                                  f"보유 {report['held']:,}주 · 조회된 남은 주문 {report['pending']:,}주\n"
+                                  '이 화면에서는 매수·매도 주문을 할 수 없어요.')
+        self.mock_listen.setEnabled(True)
+
+    def start_mock_notices(self):
+        worker = self.mock_watch_worker
+        if worker and worker.isRunning() and not worker.isInterruptionRequested():
+            self.mock_listen.setEnabled(False)
+            self.mock_status.setText('모의 주문 알림을 준비하고 있어요. 주문 기능은 잠겨 있어요.')
+            worker.start_listening()
+
+    def mock_notice_received(self, text):
+        self.mock_last_notice.setText(text)
+        self.mock_balance.setText('새 알림이 왔어요. 이전 잔고는 최신 값이 아니에요.\n'
+                                  '알림 받기를 중지한 뒤 1번으로 계좌·잔고를 다시 확인해 주세요.')
+
+    def stop_mock_notices(self):
+        if self.mock_watch_worker:
+            self.mock_watch_worker.stop()
+        self.mock_stop.setEnabled(False)
+        self.mock_listen.setEnabled(False)
+        self.mock_status.setText('모의 알림 연결을 닫고 있어요. 현재 요청이 끝나면 중지해요.')
+
+    def mock_watch_finished(self):
+        self.mock_listen.setEnabled(False)
+        self.mock_stop.setEnabled(False)
+        self.mock_verify.setEnabled(True)
+        self.mock_account.setEnabled(True)
+        self.mode_select.setEnabled(True)
+        for name in ('kiwoom_appkey','kiwoom_secret'):
+            self.secrets[name].setEnabled(self.mode_select.currentData()!='DEMO')
+        self.mock_balance.setText('연결이 끝났어요. 잔고는 1번으로 다시 확인해 주세요.')
 
     def show_legacy_trades(self):
         import sqlite3
@@ -1039,7 +1151,8 @@ class MainWindow(QMainWindow):
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
         self.condition_commands.sync(self.cfg, self.settings.save, now=datetime.now().timestamp(), busy=True)
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
-                                     conditions=self.condition_commands, orders_enabled=orders_enabled)
+                                     conditions=self.condition_commands, orders_enabled=orders_enabled,
+                                     watch_status=self.mock_watch_status.summary)
         self.telegram_order_worker = worker
         worker.status.connect(self.telegram_orders_status)
         worker.finished.connect(self.telegram_orders_finished)
@@ -1428,6 +1541,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self,'변경 실패',str(ex))
 
     def save_integrations(self):
+        if self.mock_watch_worker and self.mock_watch_worker.isRunning():
+            QMessageBox.information(self,'모의 알림 연결 중','모의 알림 받기를 먼저 중지한 뒤 모드·연결 정보를 저장해 주세요.')
+            return
         if self.telegram_order_worker and self.telegram_order_worker.isRunning():
             QMessageBox.information(self, '텔레그램 명령 받는 중', '텔레그램 명령 받기를 먼저 중지한 뒤 연결 정보·모드를 저장하세요.')
             return
@@ -1548,6 +1664,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self,event):
         self.timer.stop()
+        if self.mock_watch_worker and self.mock_watch_worker.isRunning():
+            self.stop_mock_notices()
+            QMessageBox.information(self,'모의 연결 종료 중','모의 알림 연결이 끝난 뒤 다시 닫아 주세요.')
+            event.ignore()
+            return
         if self.telegram_order_worker and self.telegram_order_worker.isRunning():
             self.stop_telegram_orders()
             QMessageBox.information(self, '수신 종료 중', '텔레그램 수신이 종료된 뒤 다시 닫아주세요. 확인 대기는 철회했습니다.')
