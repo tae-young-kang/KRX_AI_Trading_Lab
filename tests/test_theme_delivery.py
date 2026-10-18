@@ -82,3 +82,42 @@ def test_explicit_batch_binds_run_and_recipient_and_never_resends(tmp_path):
     with pytest.raises(ValueError,match='바뀌었어요'):
         deliver_run(history,mode='DEMO',run_id=snapshot['run_id'],transport=transport,chat_id=456)
     assert len(transport.calls)==1
+
+
+def test_multi_stock_interruption_and_explicit_continue_skip_unknown(tmp_path):
+    from app.theme_delivery import latest_snapshot,deliver_run
+    history,args=setup(tmp_path)
+    with history.connect() as db:
+        original=db.execute('SELECT * FROM daily_bars').fetchall()
+    for code in ('900002','900003'):
+        history.insert_bars([Bar(r['day'],code,'연습'+code,'KOSPI',100,110,99,100,1000,100,4000) for r in original],'DEMO')
+    prepare(history,**args)
+    run_id=latest_snapshot(history,'DEMO')['run_id']
+    class Transport:
+        def __init__(self): self.calls=[]
+        def identity(self): return 123
+        def send(self,chat,text):
+            self.calls.append(text)
+            if len(self.calls)==2: raise TimeoutError('fake response lost')
+            return len(self.calls)
+    transport=Transport()
+    kwargs=dict(mode='DEMO',run_id=run_id,transport=transport,chat_id=456)
+    first=deliver_run(history,**kwargs)
+    assert first==dict(SENT=1,UNKNOWN=1,remaining=1) and len(transport.calls)==2
+    reopened=HistoryStore(history.path)
+    assert deliver_run(reopened,**kwargs)==first and len(transport.calls)==2
+    final=deliver_run(reopened,continue_unattempted=True,**kwargs)
+    assert final==dict(SENT=2,UNKNOWN=1,remaining=0) and len(transport.calls)==3
+    assert '900003' in transport.calls[-1]
+    assert deliver_run(reopened,continue_unattempted=True,**kwargs)==final and len(transport.calls)==3
+
+
+def test_stop_before_next_alert_leaves_it_unattempted(tmp_path):
+    from app.theme_delivery import latest_snapshot,deliver_run
+    history,_=setup(tmp_path)
+    class Transport:
+        def identity(self): return 123
+        def send(self,*args): raise AssertionError('must not send')
+    result=deliver_run(history,mode='DEMO',run_id=latest_snapshot(history,'DEMO')['run_id'],
+                       transport=Transport(),chat_id=456,stopped=lambda:True)
+    assert result==dict(SENT=0,UNKNOWN=0,remaining=1)

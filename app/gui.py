@@ -337,12 +337,15 @@ class MainWindow(QMainWindow):
         send_button=QPushButton('저장된 최신 테마1 종목을 텔레그램으로 보내기')
         send_button.clicked.connect(self.send_theme_alerts)
         layout.addWidget(send_button)
+        continue_button=QPushButton('미시도 알림만 이어 보내기')
+        continue_button.clicked.connect(lambda:self.send_theme_alerts(continue_unattempted=True))
+        layout.addWidget(continue_button)
         close=QPushButton('닫기')
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)
         dialog.exec()
 
-    def send_theme_alerts(self):
+    def send_theme_alerts(self, checked=False, *, continue_unattempted=False):
         mode=current_mode(self.cfg).key
         try:
             snapshot=theme_snapshot(self.history,mode)
@@ -356,13 +359,15 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self,'테마1 알림 보내기',
                 f'{snapshot["day"]} · {snapshot["source"]} · {snapshot["count"]}종목\n'
                 '저장된 개인 대화방으로 종목별 알림을 보냅니다. 주문은 하지 않아요.\n'
-                '이미 시도한 알림은 다시 보내지 않으며 미확인 응답에서 중단합니다. 진행할까요?')!=QMessageBox.StandardButton.Yes:
+                +('기존 미확인 알림은 건너뛰고 미시도 알림만 보냅니다.\n' if continue_unattempted else '')+
+                '이미 시도한 알림은 다시 보내지 않으며 새 미확인 응답에서 중단합니다. 진행할까요?')!=QMessageBox.StandardButton.Yes:
             return
         def send():
             from app.telegram_receiver import TelegramTransport
             client=TelegramTransport(token)
             try:
-                return theme_deliver_run(self.history,mode=mode,run_id=snapshot['run_id'],transport=client,chat_id=chat_id)
+                return theme_deliver_run(self.history,mode=mode,run_id=snapshot['run_id'],transport=client,chat_id=chat_id,
+                                         continue_unattempted=continue_unattempted)
             finally:
                 client.close()
         self.run_task(send,lambda result:QMessageBox.information(self,'테마1 알림 결과',

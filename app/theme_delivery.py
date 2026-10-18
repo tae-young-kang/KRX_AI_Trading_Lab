@@ -60,6 +60,9 @@ def deliver_one(history, *, alert_id, mode, source, destination, send, expected_
         if (run is None or expected_run_id is not None and run['id']!=expected_run_id
                 or alert_id not in json.loads(run['alert_ids_json'])):
             raise ValueError('최신 테마1 감지 목록에 없는 알림이에요.')
+        if expected_run_id is not None and db.execute(
+                'SELECT MAX(id) FROM theme_runs WHERE mode=?',(mode,)).fetchone()[0]!=expected_run_id:
+            raise ValueError('테마1 판정이 바뀌었어요. 결과를 다시 확인해 주세요.')
         alert=db.execute('SELECT message FROM theme_alerts WHERE id=? AND mode=? AND source=?',
                          (alert_id,mode,source)).fetchone()
         if alert is None or len(alert['message'])>4000:
@@ -91,7 +94,7 @@ def latest_snapshot(history,mode):
         return dict(run_id=row['id'],source=row['source'],day=row['day'],count=len(json.loads(row['alert_ids_json'])))
 
 
-def deliver_run(history, *, mode, run_id, transport, chat_id):
+def deliver_run(history, *, mode, run_id, transport, chat_id, continue_unattempted=False, stopped=lambda:False):
     """Explicit caller action only; bind a captured run to one authenticated bot/chat."""
     if type(chat_id) is not int or chat_id<=0:
         raise ValueError('저장된 개인 대화방을 확인해 주세요.')
@@ -105,6 +108,16 @@ def deliver_run(history, *, mode, run_id, transport, chat_id):
     destination=destination_scope(transport.identity(),chat_id)
     counts={'SENT':0,'UNKNOWN':0}
     for alert_id in ids:
+        if stopped():
+            break
+        if continue_unattempted:
+            with history.connect() as db:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_deliveries'").fetchone():
+                    prior=db.execute('SELECT state FROM theme_deliveries WHERE alert_id=? AND destination=?',
+                                     (alert_id,destination)).fetchone()
+                    if prior:
+                        counts['SENT' if prior['state']=='SENT' else 'UNKNOWN']+=1
+                        continue
         state=deliver_one(history,alert_id=alert_id,mode=mode,source=source,destination=destination,
                           expected_run_id=run_id,send=lambda text:transport.send(chat_id,text))
         counts[state]+=1
