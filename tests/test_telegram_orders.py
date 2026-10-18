@@ -186,3 +186,20 @@ def test_practice_sales_command_is_authorized_read_only_and_replayed(sandbox):
     assert calls==[(None,1),(7,2)] and broker.calls==[]
     service.stop()
     assert service.handle(update(sandbox,5,'/연습내역'))=='연습 매도 내역'
+
+
+def test_theme_read_only_command_auth_replay_stop_and_no_orders(sandbox):
+    service,broker,_,_=sandbox
+    seen=[]
+    service.theme_report=lambda page: seen.append(page) or '테마1 저장 결과'
+    event=update(sandbox,1,'/테마1 2')
+    assert service.handle(event)=='테마1 저장 결과'
+    assert service.handle(event)=='테마1 저장 결과'
+    assert seen==[2]
+    bad=update(sandbox,2,'/테마1')
+    bad['message']['from']['id']=99
+    assert service.handle(bad) is None
+    assert '사용법' in service.handle(update(sandbox,3,'/테마1 0'))
+    service.stop()
+    assert service.handle(update(sandbox,4,'/테마1'))=='테마1 저장 결과'
+    assert seen==[2,1] and broker.calls==[]

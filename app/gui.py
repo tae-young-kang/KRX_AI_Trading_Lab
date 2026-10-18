@@ -21,6 +21,7 @@ from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
 from app.strategy import evaluate, auto_paper_exit, create_proposals
 from app.practice_quotes import fresh_practice_price
 from app.practice_details import sale_details
+from app.theme_store import latest_report as theme_latest_report
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
@@ -288,6 +289,9 @@ class MainWindow(QMainWindow):
         history_button = QPushButton('지난 추천 확인하기 · 기록과 이후 가격')
         history_button.clicked.connect(self.show_recommendation_history)
         v.addWidget(history_button)
+        theme_button=QPushButton('테마1 · 저장된 감지 종목 보기')
+        theme_button.clicked.connect(self.show_theme_history)
+        v.addWidget(theme_button)
         cards = QHBoxLayout()
         cards.addWidget(self.card('연습으로 번 돈 / 잃은 돈', 'kpi_pnl'))
         cards.addWidget(self.card('이익을 낸 연습 비율', 'kpi_win'))
@@ -302,6 +306,35 @@ class MainWindow(QMainWindow):
         b.addWidget(lbl('실험 메모  |  수익률·손절·승률은 가상체결 기준이며 실제 체결이나 미래 수익을 보장하지 않습니다.','Muted'))
         v.addWidget(bottom)
         return page
+
+    def show_theme_history(self):
+        mode=current_mode(self.cfg)
+        dialog=QDialog(self)
+        dialog.setWindowTitle(mode.title+' · 테마1 저장 결과')
+        dialog.resize(800,600)
+        layout=QVBoxLayout(dialog)
+        guide=lbl('저장된 결과만 봅니다. 새 검색·발송·주문은 실행하지 않아요. 텔레그램: /테마1','Muted')
+        guide.setWordWrap(True)
+        layout.addWidget(guide)
+        view=QTextEdit()
+        view.setReadOnly(True)
+        layout.addWidget(view)
+        page=QSpinBox()
+        page.setPrefix('페이지 ')
+        page.setRange(1,999999)
+        layout.addWidget(page)
+        def load(number):
+            try:
+                text=theme_latest_report(self.history,mode=mode.key,page=number)
+            except Exception:
+                text='테마1 기록을 읽지 못했어요. 저장 공간과 기록 파일을 확인해 주세요.'
+            view.setPlainText(text)
+        page.valueChanged.connect(load)
+        load(1)
+        close=QPushButton('닫기')
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
 
     def show_recommendation_history(self):
         mode = current_mode(self.cfg)
@@ -1275,6 +1308,7 @@ class MainWindow(QMainWindow):
                                      watch_funds=self.mock_watch_status.funds_summary,
                                      recommendation_report=lambda performance, page=1, db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_summary(mode,performance=performance,page=page),
+                                     theme_report=lambda page=1, history=self.history, mode=current_mode(self.cfg).key: theme_latest_report(history,mode=mode,page=page),
                                      practice_sales=lambda trade_id=None, page=1, db=self.db: db.practice_sale_report(trade_id,page),
                                      recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_overview(mode),

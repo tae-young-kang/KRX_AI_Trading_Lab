@@ -61,7 +61,7 @@ def prepare(history, *, sessions, through, mode, source):
     return dict(report,results=results)
 
 
-def latest_report(history, *, mode, source, page=1):
+def latest_report(history, *, mode, source=None, page=1):
     """Read only latest run membership, never resurrect old matches after corrections."""
     if type(page) is not int or not 1<=page<=999999:
         return '페이지 번호를 확인해 주세요.'
@@ -69,13 +69,14 @@ def latest_report(history, *, mode, source, page=1):
         db.execute('BEGIN')
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_runs'").fetchone():
             return '테마1 판정 기록이 없어요. 자료를 확인한 뒤 먼저 판정해 주세요.'
-        run=db.execute('SELECT * FROM theme_runs WHERE mode=? AND source=? ORDER BY id DESC LIMIT 1',
-                       (mode,source)).fetchone()
+        run=db.execute('SELECT * FROM theme_runs WHERE mode=?'+(' AND source=?' if source else '')+' ORDER BY id DESC LIMIT 1',
+                       (mode,source) if source else (mode,)).fetchone()
         if run is None:
             return '이 모드·자료 출처의 테마1 판정 기록이 없어요.'
+        source=run['source']
         report=json.loads(run['report_json'])
         ids=json.loads(run['alert_ids_json'])
-        header=(f'[테마1 · 저장된 판정] 기준일 {run["day"]}\n'
+        header=(f'[테마1 · 저장된 판정] 기준일 {run["day"]} · 자료 {source}\n'
                 f'저장된 종목 {report["symbols"]}개 · 감지 {report["matched"]}개\n'
                 f'자료 부족 종목 {report["states"].get("PRICE_MISSING",0)}개 · '
                 f'시장별 일별 자료가 없는 구간 {len(report["missing_market_days"])}개\n'
@@ -86,4 +87,4 @@ def latest_report(history, *, mode, source, page=1):
             return header+f'마지막 페이지는 {len(ids)}예요.'
         row=db.execute('SELECT message FROM theme_alerts WHERE id=? AND mode=? AND source=?',
                        (ids[page-1],mode,source)).fetchone()
-        return header+f'{page}/{len(ids)}페이지\n'+row['message']
+        return header+f'{page}/{len(ids)}페이지\n'+row['message']+(f'\n다음: /테마1 {page+1}' if page<len(ids) else '')
