@@ -4,26 +4,29 @@ import json
 import re
 import secrets
 import uuid
+import threading
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
 from app.order_engine import OrderEngine, OrderRequest, OrderError, connect
 from app.trading_clock import KST
+from app import order_safety
 
 HELP = ('[가짜 서버 주문 연습 · 실제 돈 사용 안 함]\n'
         '/매수 900001 1 1000 또는 /매도 900001 1 1000\n'
         '순서: 종목코드(또는 이름) 수량 지정가(원)\n'
         '예: 연습종목 1주 1000원 매수\n'
         '내용을 확인한 뒤 /확인 코드 · 철회하려면 /철회 코드\n'
-        '/상태: 가짜 잔액·최근 주문 /중지: 새 주문 중지\n'
+        '/상태: 가짜 잔액·한도 /중지: 새 주문 중지\n'
+        '/긴급중지: 새 주문 차단·미체결 취소 시도 /복구확인: 조회만\n'
         '접수와 체결은 다릅니다. 자동 체결·장 마감 예약은 하지 않습니다.')
 ORDER_LABELS = {'OPEN':'접수·미체결', 'PARTIAL':'일부 체결', 'FILLED':'체결 완료',
                 'UNKNOWN':'결과 미확인 · 재전송 안 함', 'REJECTED':'거절', 'CANCELED':'취소'}
 
 
 class TelegramOrderService:
-    def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None):
+    def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -35,6 +38,10 @@ class TelegramOrderService:
         self.engine, self.user_id, self.chat_id = engine, user_id, chat_id
         self.broker_identity = engine.broker.identity
         self.clock = clock or (lambda: datetime.now(KST))
+        if self.clock().tzinfo is None:
+            raise ValueError('시간대가 포함된 시각이 필요합니다.')
+        self.limits = limits or order_safety.PracticeLimits()
+        self._action_lock = threading.RLock()
         self.started = int(self.clock().timestamp())
         self.scope = hashlib.sha256(f'{bot_id}:{user_id}:{chat_id}'.encode()).hexdigest()
         self.session = uuid.uuid4().hex
@@ -47,6 +54,8 @@ class TelegramOrderService:
                 CREATE TABLE IF NOT EXISTS tg_intents(id TEXT PRIMARY KEY,scope TEXT,session TEXT,
                     token_hash TEXT,payload TEXT,name TEXT,expires REAL,state TEXT,order_id TEXT);
             ''')
+            order_safety.initialize(db, self.broker_identity)
+            db.commit()
             db.execute('BEGIN IMMEDIATE')
             db.execute("UPDATE tg_intents SET state='EXPIRED' WHERE scope=? AND state='WAITING'", (self.scope,))
             # Re-read queued updates on a new session, but accept only messages
@@ -105,6 +114,10 @@ class TelegramOrderService:
         return request
 
     def handle(self, update):
+        with self._action_lock:
+            return self._handle(update)
+
+    def _handle(self, update):
         now = self.clock().timestamp()
         if not self._authorized(update, now):
             return None
@@ -113,6 +126,7 @@ class TelegramOrderService:
             return '연습 서버 연결이 달라져 수신을 중지했습니다. 주문하지 않았습니다.'
         uid, text = update['update_id'], update['message']['text'].strip()
         action = None
+        operation = None
         with connect(self.path) as db:
             db.execute('BEGIN IMMEDIATE')
             owner = db.execute('SELECT * FROM tg_sessions WHERE scope=?', (self.scope,)).fetchone()
@@ -134,7 +148,17 @@ class TelegramOrderService:
                     if last['order_id']:
                         order = self.engine.get(last['order_id'])
                         detail = f"{ORDER_LABELS.get(order['state'], '확인 필요')} · 체결 {order['filled_qty']}/{order['quantity']}주"
-                reply = f"[가짜 서버만 연결]\n연습 잔액 {account['cash']:,}원 · 보유 {sum(account['positions'].values())}주\n최근 주문: {detail}\n실제 계좌·키움 모의 서버와 연결하지 않았습니다."
+                used = order_safety.usage(db, self.broker_identity, self.clock())
+                halted = db.execute('SELECT halted FROM tg_risk WHERE broker=?', (self.broker_identity,)).fetchone()[0]
+                reply = (f"[가짜 서버만 연결]\n연습 잔액 {account['cash']:,}원 · 보유 {sum(account['positions'].values())}주\n"
+                         f"최근 주문: {detail}\n오늘 확인 {used['count']}/{self.limits.daily_count}회 · "
+                         f"금액 {used['notional']:,}/{self.limits.daily_notional:,}원\n"
+                         f"긴급 중지: {'켜짐' if halted else '꺼짐'}\n실제 계좌·키움 모의 서버와 연결하지 않았습니다.")
+            elif text in ('/긴급중지', '/복구확인'):
+                operation = text
+                if text == '/긴급중지':
+                    order_safety.latch(db, self.broker_identity, 'USER_EMERGENCY')
+                reply = '안전 상태 확인 중 · 주문을 새로 보내지 않습니다.'
             elif text == '/중지':
                 db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
                 db.execute("UPDATE tg_intents SET state='CANCELED' WHERE scope=? AND state='WAITING'", (self.scope,))
@@ -158,10 +182,14 @@ class TelegramOrderService:
                             db.execute("UPDATE tg_intents SET state='CANCELED' WHERE id=?", (intent['id'],))
                             reply = '확인 대기를 철회했습니다. 주문은 보내지 않았습니다.'
                         else:
+                            request = OrderRequest(**json.loads(intent['payload']))
+                            order_safety.reserve(db, self.broker_identity, intent['id'], request, self.clock(), self.limits)
                             db.execute("UPDATE tg_intents SET state='CLAIMED' WHERE id=?", (intent['id'],))
-                            action = (intent['id'], OrderRequest(**json.loads(intent['payload'])))
+                            action = (intent['id'], request)
                             reply = '확인 처리 중입니다. 결과가 없으면 /상태로 확인하세요. 같은 주문을 다시 요청하지 마세요.'
                     else:
+                        if db.execute('SELECT halted FROM tg_risk WHERE broker=?', (self.broker_identity,)).fetchone()[0]:
+                            raise OrderError('긴급 중지 상태입니다. 프로그램에서 복구 확인 후 재개해야 합니다.')
                         request = self._order(text)
                         nonce = secrets.token_urlsafe(12)
                         db.execute("UPDATE tg_intents SET state='CANCELED' WHERE scope=? AND state='WAITING'", (self.scope,))
@@ -177,10 +205,18 @@ class TelegramOrderService:
                     # Only locally generated validation errors reach the user.
                     reply = str(exc)
             db.execute('INSERT INTO tg_updates VALUES(?,?,?)', (self.scope, uid, reply))
+        if operation:
+            report = self.emergency_stop() if operation == '/긴급중지' else self.recovery_status()
+            reply = self.safety_text(report)
+            with connect(self.path) as db:
+                db.execute('UPDATE tg_updates SET reply=? WHERE scope=? AND uid=?', (reply, self.scope, uid))
         if action:
             intent_id, request = action
             state, order_id = 'UNKNOWN', None
             try:
+                with connect(self.path) as db:
+                    if db.execute('SELECT halted FROM tg_risk WHERE broker=?', (self.broker_identity,)).fetchone()[0]:
+                        raise OrderError('긴급 중지 상태입니다.')
                 order = self.engine.submit('telegram:'+intent_id, request)
                 state, order_id = ('UNKNOWN' if order['state'] == 'UNKNOWN' else 'SENT'), order['id']
                 label = ORDER_LABELS.get(order['state'], '확인 필요')
@@ -195,3 +231,99 @@ class TelegramOrderService:
                 db.execute('UPDATE tg_intents SET state=?,order_id=? WHERE id=?', (state, order_id, intent_id))
                 db.execute('UPDATE tg_updates SET reply=? WHERE scope=? AND uid=?', (reply, self.scope, uid))
         return reply
+
+    def _engine_rows(self):
+        with connect(self.engine.path) as db:
+            return [dict(r) for r in db.execute("SELECT * FROM orders WHERE state IN ('SENDING','UNKNOWN','OPEN','PARTIAL')")]
+
+    def safety_banner(self):
+        with connect(self.path) as db:
+            halted = db.execute('SELECT halted FROM tg_risk WHERE broker=?', (self.broker_identity,)).fetchone()[0]
+            used = order_safety.usage(db, self.broker_identity, self.clock())
+        orders = self._engine_rows()
+        unknown = sum(r['state'] in ('SENDING','UNKNOWN') for r in orders)
+        opened = sum(r['state'] in ('OPEN','PARTIAL') for r in orders)
+        return (f"긴급 중지 {'유지' if halted else '꺼짐'} · 미확인 {unknown}건 · 미체결 {opened}건\n"
+                f"오늘 확인 {used['count']}/{self.limits.daily_count}회 · 누적 {used['notional']:,}/{self.limits.daily_notional:,}원")
+
+    def recovery_status(self, startup=False):
+        """Under the receiver owner: read existing broker references, never submit."""
+        with self._action_lock:
+            if self.engine.broker.environment != 'SIMULATED' or self.engine.broker.identity != self.broker_identity:
+                raise OrderError('다른 서버로 복구할 수 없습니다.')
+            interrupted = self._engine_rows()
+            with connect(self.path) as db:
+                claimed = db.execute("SELECT 1 FROM tg_intents WHERE state='CLAIMED'").fetchone()
+                if startup and (interrupted or claimed):
+                    order_safety.latch(db, self.broker_identity, 'RESTART_REVIEW')
+            self.engine.recover()
+            for order in self._engine_rows():
+                self.engine.reconcile(order['id'])
+            # Repair the UI linkage after a crash, without repeating the action.
+            with connect(self.path) as db:
+                intents = db.execute("SELECT * FROM tg_intents WHERE state IN ('CLAIMED','UNKNOWN')").fetchall()
+                for intent in intents:
+                    with connect(self.engine.path) as journal:
+                        action = journal.execute("SELECT order_id FROM actions WHERE key=?", ('telegram:'+intent['id'],)).fetchone()
+                    if action:
+                        order = self.engine.get(action['order_id'])
+                        state = 'UNKNOWN' if order['state'] in ('UNKNOWN','SENDING') else 'SENT'
+                        db.execute('UPDATE tg_intents SET state=?,order_id=? WHERE id=?', (state, order['id'], intent['id']))
+                    else:
+                        # Confirmed locally but not journaled: discard, do not replay.
+                        db.execute("UPDATE tg_intents SET state='CANCELED' WHERE id=?", (intent['id'],))
+            remaining = self._engine_rows()
+            with connect(self.engine.path) as db:
+                uncertain_actions = db.execute("SELECT COUNT(*) FROM actions WHERE state IN ('SENDING','UNKNOWN')").fetchone()[0]
+            agrees = self.engine.account() == self.engine.broker.account()
+            uncertain = sum(r['state'] in ('SENDING','UNKNOWN') for r in remaining)
+            known_refs = {r['id'] for r in remaining}
+            foreign = sum(o.client_ref not in known_refs for o in self.engine.broker.open_orders())
+            with connect(self.path) as db:
+                if uncertain or uncertain_actions or foreign or not agrees:
+                    order_safety.latch(db, self.broker_identity, 'UNRESOLVED')
+                halted = bool(db.execute('SELECT halted FROM tg_risk WHERE broker=?', (self.broker_identity,)).fetchone()[0])
+            return dict(halted=halted, unresolved=max(uncertain, uncertain_actions)+foreign,
+                        open_orders=sum(r['state'] in ('OPEN','PARTIAL') for r in remaining), account_matches=agrees)
+
+    def emergency_stop(self):
+        # Persist before waiting for a previously confirmed in-flight request.
+        with connect(self.path) as db:
+            db.execute('BEGIN IMMEDIATE')
+            generation = order_safety.latch(db, self.broker_identity, 'USER_EMERGENCY')
+        with self._action_lock:
+            self.recovery_status()
+            for order in self._engine_rows():
+                if order['state'] in ('OPEN','PARTIAL'):
+                    try:
+                        self.engine.cancel('emergency:'+generation+':'+order['id'], order['id'])
+                    except OrderError:
+                        break  # an unresolved action blocks further mutations
+            return self.recovery_status()
+
+    def resume_after_review(self):
+        with self._action_lock:
+            with connect(self.path) as db:
+                revision = db.execute('SELECT revision FROM tg_risk WHERE broker=?', (self.broker_identity,)).fetchone()[0]
+            report = self.recovery_status()
+            if report['unresolved'] or report['open_orders'] or not report['account_matches']:
+                raise OrderError('미확인·미체결 주문 또는 잔액 불일치가 남아 있습니다. 재개하지 않습니다.')
+            with connect(self.path) as db:
+                db.execute('BEGIN IMMEDIATE')
+                owner = db.execute('SELECT session FROM tg_sessions WHERE scope=?', (self.scope,)).fetchone()[0]
+                if owner != self.session:
+                    raise OrderError('다른 창에서 수신 중입니다. 재개하지 않습니다.')
+                current = db.execute('SELECT revision FROM tg_risk WHERE broker=?', (self.broker_identity,)).fetchone()[0]
+                if current != revision:
+                    raise OrderError('확인 중 새 중지 요청이 들어왔습니다. 중지를 유지합니다.')
+                db.execute('UPDATE tg_risk SET halted=0,reason=NULL WHERE broker=?', (self.broker_identity,))
+                db.execute('UPDATE tg_sessions SET active=1 WHERE scope=?', (self.scope,))
+            return '복구 확인 완료 · 새 연습 주문을 허용했습니다. 오늘 사용한 한도는 그대로 유지합니다.'
+
+    @staticmethod
+    def safety_text(report):
+        return (f"[가짜 서버 안전 확인]\n긴급 중지: {'유지' if report['halted'] else '꺼짐'}\n"
+                f"미확인 {report['unresolved']}건 · 미체결 {report['open_orders']}건\n"
+                f"잔액·보유 대조: {'일치' if report['account_matches'] else '불일치'}\n"
+                '보유 주식을 강제로 팔지 않습니다. 새 매수·매도 주문을 재전송하지 않았습니다.\n'
+                '미확인·미체결이 남으면 해소 후 프로그램에서 복구 확인·재개하세요.')

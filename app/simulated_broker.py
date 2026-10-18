@@ -45,6 +45,11 @@ class SimulatedBroker:
             return {'cash': int(db.execute("SELECT value FROM meta WHERE key='cash'").fetchone()[0]),
                     'positions': {r['code']: r['quantity'] for r in db.execute('SELECT * FROM positions WHERE quantity>0')}}
 
+    def open_orders(self):
+        """Read-only inventory; detect orders absent from the engine journal."""
+        with connect(self.path) as db:
+            return [self._snapshot(r) for r in db.execute("SELECT * FROM orders WHERE state IN ('OPEN','PARTIAL')")]
+
     def _reply(self, client_ref):
         if self.lose_next_response:
             self.lose_next_response = False

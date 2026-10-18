@@ -914,9 +914,23 @@ class MainWindow(QMainWindow):
         self.telegram_order_stop = QPushButton('주문 연습 수신 중지')
         self.telegram_order_stop.setEnabled(False)
         self.telegram_order_stop.clicked.connect(self.stop_telegram_orders)
+        self.telegram_emergency = QPushButton('긴급 중지 · 미체결 취소 시도')
+        self.telegram_emergency.setEnabled(False)
+        self.telegram_emergency.clicked.connect(self.emergency_telegram_orders)
+        self.telegram_resume = QPushButton('복구 확인 후 연습 재개')
+        self.telegram_resume.setEnabled(False)
+        self.telegram_resume.clicked.connect(self.resume_telegram_orders)
         tg_controls.addWidget(self.telegram_order_start)
         tg_controls.addWidget(self.telegram_order_stop)
         v.addLayout(tg_controls)
+        safety_controls = QHBoxLayout()
+        safety_controls.addWidget(self.telegram_emergency)
+        safety_controls.addWidget(self.telegram_resume)
+        v.addLayout(safety_controls)
+        limits_note = lbl('연습 한도: 한 주문 100주·100만원 / 한국 날짜 기준 하루 확인 20회·누적 200만원. '
+                          '매수·매도 모두 합산하며 미접수·취소도 사용한 한도를 돌려주지 않습니다.', 'Muted')
+        limits_note.setWordWrap(True)
+        v.addWidget(limits_note)
         v.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1015,7 +1029,7 @@ class MainWindow(QMainWindow):
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog)
         self.telegram_order_worker = worker
-        worker.status.connect(self.telegram_order_status.setText)
+        worker.status.connect(self.telegram_orders_status)
         worker.finished.connect(self.telegram_orders_finished)
         self.telegram_order_status.setText('연결 확인 중 · 가짜 서버 연습')
         self.telegram_order_start.setEnabled(False)
@@ -1026,12 +1040,51 @@ class MainWindow(QMainWindow):
         if self.telegram_order_worker:
             self.telegram_order_worker.stop()
         self.telegram_order_stop.setEnabled(False)
+        self.telegram_emergency.setEnabled(False)
+        self.telegram_resume.setEnabled(False)
         self.telegram_order_status.setText('수신 중지 요청 · 확인 대기 철회 · 이미 접수한 주문 취소는 별도입니다.')
+
+    def telegram_orders_status(self, text):
+        self.telegram_order_status.setText(text)
+        worker = self.telegram_order_worker
+        ready = bool(worker and worker.service is not None and worker.isRunning()
+                     and not worker.isInterruptionRequested() and text.startswith('수신 중 ·'))
+        self.telegram_emergency.setEnabled(ready)
+        self.telegram_resume.setEnabled(ready)
+
+    def emergency_telegram_orders(self):
+        worker = self.telegram_order_worker
+        if worker is None or not worker.isRunning():
+            return
+        try:
+            report = worker.emergency_stop()
+            self.telegram_order_status.setText(report)
+            QMessageBox.information(self, '긴급 중지 · 가짜 서버만 연결', report)
+        except Exception:
+            self.telegram_order_status.setText('긴급 중지 기록·주문 상태 확인이 필요합니다. 수신을 중지하고 재시작해 복구 확인하세요.')
+
+    def resume_telegram_orders(self):
+        worker = self.telegram_order_worker
+        if worker is None or not worker.isRunning():
+            return
+        if QMessageBox.question(self, '복구 확인 후 연습 재개',
+                '미확인·미체결 주문과 잔액을 대조하고 문제가 없을 때만 새 연습 주문을 허용합니다.\n'
+                '실제 계좌에 주문하지 않습니다. 계속할까요?') != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.telegram_order_status.setText(worker.resume_after_review())
+        except ValueError as exc:
+            QMessageBox.information(self, '재개하지 않음', str(exc))
+        except Exception:
+            QMessageBox.information(self, '재개하지 않음', '복구 기록을 확인하지 못했습니다. 수신을 중지하세요.')
 
     def telegram_orders_finished(self):
         self.telegram_order_start.setEnabled(True)
         self.telegram_order_stop.setEnabled(False)
-        if '확인하세요' not in self.telegram_order_status.text():
+        self.telegram_emergency.setEnabled(False)
+        self.telegram_resume.setEnabled(False)
+        if ('확인하세요' not in self.telegram_order_status.text()
+                and not self.telegram_order_status.text().startswith('수신 중지 ·')):
             self.telegram_order_status.setText('수신 중지 · 자동으로 다시 시작하지 않습니다.')
 
     def run_task(self, fn, ok, success_text='완료', with_progress=False):

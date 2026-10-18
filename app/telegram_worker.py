@@ -5,6 +5,7 @@ from app.order_engine import OrderEngine
 from app.simulated_broker import SimulatedBroker
 from app.telegram_orders import TelegramOrderService
 from app.telegram_receiver import TelegramTransport, receive_once
+from app.runtime_lock import ReceiverLock, ReceiverAlreadyRunning
 
 
 class OfflinePracticeCalendar:
@@ -27,10 +28,24 @@ class TelegramOrderWorker(QThread):
         if self.service is not None:
             self.service.stop()
 
+    def emergency_stop(self):
+        if self.service is None:
+            return '아직 수신 준비 중입니다. 수신 중지로 연결을 종료할 수 있습니다.'
+        return self.service.safety_text(self.service.emergency_stop())
+
+    def resume_after_review(self):
+        if self.service is None:
+            return '수신 준비가 끝난 뒤 복구 확인을 진행하세요.'
+        return self.service.resume_after_review()
+
     def run(self):
         transport = None
+        owner = ReceiverLock(self.root/'receiver.lock')
+        owned = False
         try:
             self.root.mkdir(parents=True, exist_ok=True)
+            owner.__enter__()  # before bot IO, engine recovery, or session takeover
+            owned = True
             transport = TelegramTransport(self.token)
             identity = transport.identity()
             if self.isInterruptionRequested():
@@ -39,15 +54,29 @@ class TelegramOrderWorker(QThread):
             engine = OrderEngine(self.root/'fake_orders.db', broker, OfflinePracticeCalendar())
             self.service = TelegramOrderService(self.root/'telegram_commands.db', engine,
                                                 self.user_id, self.chat_id, identity, self.catalog)
-            self.status.emit('수신 중 · 가짜 서버 주문 연습만 가능 · 실제 돈 사용 안 함')
+            report = self.service.recovery_status(startup=True)
+            self.status.emit('수신 중 · 가짜 서버만 연결\n'+self.service.safety_text(report))
+            last_banner = self.service.safety_banner()
             while not self.isInterruptionRequested():
                 receive_once(self.service, transport, self.isInterruptionRequested)
+                banner = self.service.safety_banner()
+                if banner != last_banner and not self.isInterruptionRequested():
+                    self.status.emit('수신 중 · 가짜 서버만 연결\n'+banner)
+                    last_banner = banner
                 self.msleep(100)
+        except ReceiverAlreadyRunning:
+            self.status.emit('수신 중지 · 다른 창이나 프로그램에서 주문 연습 수신 중입니다. 먼저 그 창의 수신을 종료하세요.')
         except Exception:
             self.status.emit('수신 중지 · 연결 정보·개인 대화방·다른 봇 수신 프로그램을 확인하세요. 자동 재시작하지 않습니다.')
         finally:
-            if self.service is not None:
-                self.service.stop()
-            if transport is not None:
-                transport.close()
-            self.token = ''
+            try:
+                if self.service is not None:
+                    self.service.stop()
+            finally:
+                try:
+                    if transport is not None:
+                        transport.close()
+                finally:
+                    self.token = ''
+                    if owned:
+                        owner.__exit__(None, None, None)
