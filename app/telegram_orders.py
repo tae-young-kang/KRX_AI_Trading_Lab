@@ -29,7 +29,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -50,7 +50,10 @@ class TelegramOrderService:
         self.recommendation_overview = recommendation_overview
         self.practice_sales = practice_sales
         self.theme_report = theme_report
+        self.theme_status = theme_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
+        from app.theme_delivery import destination_scope
+        self.theme_destination = destination_scope(bot_id,chat_id)
         self.broker_identity = engine.broker.identity
         self.clock = clock or (lambda: datetime.now(KST))
         if self.clock().tzinfo is None:
@@ -161,6 +164,8 @@ class TelegramOrderService:
             if not self.orders_enabled and mock_command:
                 reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                          if self.watch_orders and (owner['active'] or text.split(' ',1)[0] in ('/주문상태','/주문점검','/긴급중지','/주문목록','/미체결')) else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')
+            elif text == '/테마1알림상태':
+                reply=self.theme_status(self.theme_destination) if self.theme_status else '테마1 알림 상태 연결이 없어요. 집 PC에서 확인해 주세요.'
             elif text.split(' ',1)[0] == '/테마1':
                 match=re.fullmatch(r'/테마1(?: ([1-9][0-9]{0,5}))?',text)
                 if not match:
@@ -223,11 +228,11 @@ class TelegramOrderService:
                     reply = '실제 돈 주문은 잠겨 있어요. 키움 모의 주문은 PC의 당일 허용과 별도 확인이 필요해요.\n/프로그램상태 · /모의점검 · /모의기록 · /잔고 · /잔고결과 · /모의재연결 · /주문목록 · /미체결 · /주문상태 · /주문점검 · /긴급중지 · /모의재개 · /조건 · /조건도움말'
                     reply += '\n/모의자금: 예수금·주문 가능 금액·다음 결제일 예상값 구분'
                     reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
-                    reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/테마1: 저장된 감지 결과 조회'
+                    reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도'
             elif text in ('/도움말', '/start', '/help'):
                 reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
-                reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/테마1: 저장된 감지 결과 조회'
+                reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도'
             elif text == '/상태':
                 account = self.engine.account()
                 last = db.execute('SELECT * FROM tg_intents WHERE scope=? ORDER BY rowid DESC LIMIT 1', (self.scope,)).fetchone()

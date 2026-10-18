@@ -23,6 +23,7 @@ from app.practice_quotes import fresh_practice_price
 from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
 from app.theme_input import prepare_selection as prepare_theme_selection
+from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
 from app.krx_history import HistoryStore, KRXDailyClient
@@ -1324,6 +1325,7 @@ class MainWindow(QMainWindow):
                                      watch_funds=self.mock_watch_status.funds_summary,
                                      recommendation_report=lambda performance, page=1, db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_summary(mode,performance=performance,page=page),
+                                     theme_status=lambda destination, history=self.history, mode=current_mode(self.cfg).key: theme_delivery_summary(history,mode=mode,destination=destination),
                                      theme_report=lambda page=1, history=self.history, mode=current_mode(self.cfg).key: theme_latest_report(history,mode=mode,page=page),
                                      practice_sales=lambda trade_id=None, page=1, db=self.db: db.practice_sale_report(trade_id,page),
                                      recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:

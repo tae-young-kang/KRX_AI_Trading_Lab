@@ -218,3 +218,17 @@ def test_send_receipt_checks_message_and_destination(result):
         assert client.send(22,'가짜 응답 검사')==4
     else:
         with pytest.raises(RuntimeError): client.send(22,'가짜 응답 검사')
+
+
+def test_theme_delivery_status_is_scoped_read_only_after_stop(sandbox):
+    from app.theme_delivery import destination_scope
+    service,broker,_,_=sandbox
+    seen=[]
+    service.theme_status=lambda destination: seen.append(destination) or '미시도 1개'
+    service.stop()
+    event=update(sandbox,1,'/테마1알림상태')
+    assert service.handle(event)=='미시도 1개'
+    assert service.handle(event)=='미시도 1개'
+    bad=update(sandbox,2,'/테마1알림상태');bad['message']['chat']['id']=99
+    assert service.handle(bad) is None
+    assert seen==[destination_scope(33,22)] and broker.calls==[]
