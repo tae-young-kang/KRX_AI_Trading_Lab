@@ -10,6 +10,7 @@ from app.kiwoom_mock_stream import MockOrderStream
 from app.kiwoom_mock_transport import MockTransport
 from app.modes import current_mode
 from app.trading_clock import KST
+from app.mock_funds_view import FIELDS
 
 
 def require_mock_mode(config):
@@ -62,7 +63,8 @@ class MockWatchSession:
             # Unknown/unmapped existing orders never masquerade as zero exposure.
             return dict(title='모의 계좌와 잔고를 확인했어요',checked_at=capture.finished_at.strftime('%m/%d %H:%M:%S'),
                 order_money=funds.order_money,held=sum(row[1] for row in capture.observations.holdings),
-                pending=sum(row[3] for row in capture.observations.unfilled),ready_for_orders=False)
+                pending=sum(row[3] for row in capture.observations.unfilled),ready_for_orders=False,
+                captured_at=capture.finished_at, funds={key:getattr(funds,key) for key in FIELDS})
         except Exception:
             self.close()
             raise UncertainResponse('모의 계좌를 확인하지 못했어요. 연결 정보와 계좌번호를 다시 확인해 주세요.') from None
@@ -92,7 +94,8 @@ class MockWatchSession:
             return dict(checked_at=capture.finished_at.astimezone(KST).strftime('%m/%d %H:%M:%S'),
                 order_money=funds.order_money, held=sum(r[1] for r in capture.observations.holdings),
                 pending=sum(r[3] for r in capture.observations.unfilled),
-                positions=tuple((r[0],r[1]) for r in capture.observations.holdings), ready_for_orders=False)
+                positions=tuple((r[0],r[1]) for r in capture.observations.holdings), ready_for_orders=False,
+                captured_at=capture.finished_at, funds={key:getattr(funds,key) for key in FIELDS})
         except Exception:
             self.close()
             raise UncertainResponse('모의 잔고를 다시 확인하지 못했어요. 연결을 다시 확인해 주세요.') from None

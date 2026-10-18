@@ -6,6 +6,7 @@ import time
 from app.trading_clock import KST
 from app.mock_validation import MockValidationProgress
 from app.mock_observation_history import MockObservationHistory
+from app import mock_funds_view
 
 
 class MockWatchStatus:
@@ -26,11 +27,16 @@ class MockWatchStatus:
         self._last_reconnect = None
         self._validation = MockValidationProgress(self._clock)
         self._orders = None
+        self._funds = None
         self._history = MockObservationHistory(history_path)
 
     def history_summary(self):
         with self._lock:
             return self._history.summary()
+
+    def funds_summary(self):
+        with self._lock:
+            return mock_funds_view.render(self._funds, now=self._clock(), stale=self._stale)
 
     def _record(self, event):
         self._validation.record(event)
@@ -137,6 +143,7 @@ class MockWatchStatus:
     def reset(self):
         with self._lock:
             self._orders = None
+            self._funds = None
             self._record('START')
             self._reconnect_available = self._reconnect_pending = False
             self._refresh_enabled = self._refresh_pending = self._refresh_busy = False
@@ -152,6 +159,7 @@ class MockWatchStatus:
             # Whitelisted display fields only; no account/token/profile IDs.
             self._balance = {key:report[key] for key in ('checked_at','order_money','held','pending')}
             self._positions = tuple(report.get('positions',()))
+            self._funds = mock_funds_view.extract(report)
             self._stale = False
 
     def notice(self, text):
