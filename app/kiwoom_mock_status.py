@@ -68,7 +68,7 @@ def order_notice(message, *, expected_account, profile_id, session,
         event_time = datetime.combine(received.date(), clock, tzinfo=KST)
     except (TypeError, ValueError):
         raise UncertainResponse('알림 시간을 확인할 수 없습니다.') from None
-    if event_time < start or not -5 <= (received - event_time).total_seconds() <= 120:
+    if event_time < start.replace(microsecond=0) or not -5 <= (received - event_time).total_seconds() <= 120:
         raise UncertainResponse('현재 연결에서 받은 최근 알림이 아닙니다.')
     raw_kind = values.get('905')
     if not isinstance(raw_kind, str):

@@ -53,7 +53,7 @@ def validate_pair(chain, notice, capture, *, session, now, code, side):
 
 
 def review_after_notice(journal, ledger, reviewer, root_key, notice, *, expected_account,
-                        session, known_orders, expected_deposit=None):
+                        session, known_orders, expected_deposit=None, connection_guard=None):
     """Read-only coordinator. Caller owns the current verified MOCK session.
 
     Uses reviewer.capture rather than a cached snapshot. Sources remain separate:
@@ -61,6 +61,8 @@ def review_after_notice(journal, ledger, reviewer, root_key, notice, *, expected
     """
     if type(reviewer) is not MockAccountReviewer or type(notice) is not OrderNotice:
         raise ContractError('모의 조회 연결과 취소 알림이 필요합니다.')
+    if connection_guard is not None:
+        connection_guard()
     transport = reviewer.transport
     before = project_chain(journal, ledger, root_key)
     tag, rows = journal.read_chain(root_key)
@@ -84,6 +86,8 @@ def review_after_notice(journal, ledger, reviewer, root_key, notice, *, expected
     if capture.auth_generation != transport.auth_generation or capture.profile_id != transport.profile_id:
         raise UncertainResponse('조회 후 연결이 달라졌습니다. 다시 확인해 주세요.')
     validate_pair(before, notice, capture, session=session, now=now, code=code, side=side)
+    if connection_guard is not None:
+        connection_guard()
     # Store actual query evidence even if a later mapping comparison fails.
     ledger.ingest(capture.observations)
     after = project_chain(journal, ledger, root_key)
@@ -108,5 +112,7 @@ def review_after_notice(journal, ledger, reviewer, root_key, notice, *, expected
     transport.ready()
     if capture.auth_generation != transport.auth_generation or capture.profile_id != transport.profile_id:
         raise UncertainResponse('대조 중 연결이 달라졌습니다. 다시 확인해 주세요.')
+    if connection_guard is not None:
+        connection_guard()
     ledger.record_cancellation_review(root_key, result)
     return result
