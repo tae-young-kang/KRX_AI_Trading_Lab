@@ -91,3 +91,30 @@ class ProtectionWatch:
             raise ValueError('계획과 모의 체결 장부의 계좌가 달라요.')
         position=position_from_capture(ledger,capture,code=code,buy_orders=buy_orders,sell_orders=sell_orders,now=now)
         return self.observe(key,position,quote,now=now)
+
+    def summary(self,*,page=1):
+        if type(page) is not int or not 1<=page<=999999:
+            raise ValueError('페이지 번호를 확인해 주세요.')
+        with connect(self.path) as db:
+            db.execute('BEGIN')
+            count=db.execute('SELECT COUNT(*) FROM protection_plans').fetchone()[0]
+            pages=max(1,(count+4)//5)
+            if page>pages: return f'보호 기록은 {pages}페이지까지 있어요. /보호상태 {pages}'
+            plans=db.execute('SELECT * FROM protection_plans ORDER BY rowid DESC LIMIT 5 OFFSET ?',((page-1)*5,)).fetchall()
+            lines=[f'[{self.mode} · 보호 판단 기록 · {page}/{pages}]',
+                   '저장된 관측이에요. 자동 감시·매도 전송은 아직 연결되지 않았어요.']
+            for plan in plans:
+                cfg=json.loads(plan['payload'])
+                latest=db.execute('SELECT decision_json FROM protection_observations WHERE plan_key=? ORDER BY rowid DESC LIMIT 1',
+                                  (plan['plan_key'],)).fetchone()
+                decision=json.loads(plan['trigger_json'] or latest['decision_json']) if plan['trigger_json'] or latest else None
+                lines.append(f"{cfg['code']} · {cfg['venue']} · 익절 +{cfg['take_bps']/100:.2f}% / 손절 -{cfg['stop_bps']/100:.2f}%")
+                if decision:
+                    label=('조건 도달 기록 · 매도 접수/체결 아님' if plan['state']=='TRIGGERED' else '마지막 판단')
+                    lines.append(f"{label}: {decision['reason']} · 당시 수량 {decision['quantity']}주")
+                    lines.append('마지막 관측: '+plan['last_at'])
+                else:
+                    lines.append('아직 관측 기록이 없어요. 계획 등록만으로 보호가 작동하지 않아요.')
+            if not plans: lines.append('등록된 보호 계획이 없어요.')
+            if page<pages: lines.append(f'다음 기록: /보호상태 {page+1}')
+            return '\n'.join(lines)

@@ -13,6 +13,7 @@ from app.order_engine import OrderRequest, connect
 from app.kiwoom_mock_contract import ContractError, order_plan, amend_plan, cancel_plan
 from app.kiwoom_mock_journal import MockDispatchJournal
 from app.kiwoom_mock_ledger import MockFillLedger
+from app.protection_watch import ProtectionWatch
 from app.kiwoom_mock_chain import project_chain
 from app.kiwoom_mock_review import order_number
 from app.kiwoom_mock_status import money_view
@@ -39,6 +40,7 @@ class MockTelegramOrders:
         self.account_tag = None
         self._sending = None
         self.ledger = self._capture = None
+        self.protection = None
         self.path = self.root/'telegram_intents.db'
         with ReceiverLock(self.root/'setup.lock'):
             identity = self.root/'profile.id'
@@ -88,6 +90,7 @@ class MockTelegramOrders:
             self.generation = session.transport.auth_generation
             self.account_tag = session._account_tag
             self.ledger = MockFillLedger(self.root/'fills.db',account_tag=self.account_tag)
+            self.protection = ProtectionWatch(self.root/'protection.db',mode='MOCK',account_tag=self.account_tag)
             self._capture = None
             self.armed = not self._latched and not self.emergency.event.is_set()
             session.transport.mutation_allowed = self.can_dispatch
@@ -272,6 +275,10 @@ class MockTelegramOrders:
             self.lock.release()
 
     def _handle_ready(self,text,*,scope,session,uid,now):
+        if text.split(' ',1)[0]=='/보호상태':
+            match=re.fullmatch(r'/보호상태(?: ([1-9][0-9]{0,5}))?',text)
+            if not match: return '사용법: /보호상태 또는 /보호상태 2'
+            return self.protection.summary(page=int(match[1] or 1)) if self.protection else '모의 보호 기록 연결 전이에요. 자동 매도는 연결되지 않았어요.'
         if text.split(' ',1)[0] in ('/주문목록','/미체결'):
             from app.mock_order_views import render
             return render(self,text,scope,now)

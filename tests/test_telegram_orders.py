@@ -263,6 +263,17 @@ def test_theme_budget_custom_exit_plan_is_not_an_order(sandbox):
     assert broker.calls==[]
 
 
+def test_protection_status_is_read_only_after_stop(sandbox):
+    service,broker,_,_=sandbox
+    service.orders_enabled=False
+    seen=[]
+    service.watch_orders=lambda text,**context:seen.append(text) or '보호 판단 기록 · 매도 미연결'
+    service.handle(update(sandbox,1,'/중지'))
+    event=update(sandbox,2,'/보호상태 2')
+    assert service.handle(event)==service.handle(event)=='보호 판단 기록 · 매도 미연결'
+    assert seen==['/보호상태 2'] and broker.calls==[]
+
+
 def test_practice_list_page_command_does_not_become_trade_number(sandbox):
     service,broker,_,_=sandbox;seen=[]
     service.practice_sales=lambda tid,page:seen.append((tid,page)) or '목록'

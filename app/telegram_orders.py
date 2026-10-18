@@ -173,6 +173,9 @@ class TelegramOrderService:
             if not self.orders_enabled and mock_command:
                 reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                          if self.watch_orders and (owner['active'] or text.split(' ',1)[0] in ('/주문상태','/주문점검','/긴급중지','/주문목록','/미체결')) else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')
+            elif text.split(' ',1)[0] == '/보호상태':
+                reply=(self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
+                       if not self.orders_enabled and self.watch_orders else '모의 보호 기록 연결이 없어요. 자동 매도는 아직 연결되지 않았어요.')
             elif text.split(' ',1)[0] == '/연습결산':
                 match=re.fullmatch(r'/연습결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
                 if not match:
@@ -290,6 +293,7 @@ class TelegramOrderService:
                 reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
                 reply += '\n/추천검색: 새 검색 요청 · /검색상태: 진행 확인'
                 reply += '\n/검색취소: 대기·진행 중인 원격 검색 취소'
+                reply += '\n/보호상태: 모의 보호 판단 기록 (자동 매도 미연결)'
                 reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
                 reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'

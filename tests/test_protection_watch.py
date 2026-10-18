@@ -53,3 +53,18 @@ def test_current_mock_capture_bridge_observes_without_orders(tmp_path):
                                code='900001',buy_orders=('12',),now=NOW)
     assert result['new_trigger'] and result['decision']['quantity']==3
     assert result['executable'] is False
+
+
+def test_summary_distinguishes_unobserved_blocked_and_triggered(tmp_path):
+    store=watch(tmp_path/'watch.db')
+    assert '아직 관측 기록이 없어요' in store.summary()
+    store.observe('theme1-example',replace(POSITION,reconciled=False),QUOTE,now=NOW)
+    assert '체결과 보유 잔량을 먼저 대조' in store.summary()
+    store.observe('theme1-example',POSITION,replace(QUOTE,price_won=1020),now=NOW)
+    text=store.summary()
+    assert '매도 접수/체결 아님' in text and '당시 수량 10주' in text
+    assert 'a'*64 not in text and 'theme1-example' not in text
+    for i in range(5): store.register(f'other-{i}',code=f'90001{i}',venue='KRX')
+    assert '1/2' in store.summary() and '/보호상태 2' in store.summary()
+    assert '900001' not in store.summary() and '900001' in store.summary(page=2)
+    assert '2페이지까지' in store.summary(page=3)
