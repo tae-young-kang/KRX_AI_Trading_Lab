@@ -4,7 +4,7 @@ No HTTP or execution. ka10076 observations NEVER become confirmed costs.
 An external cost confirmation is bound to the exact fill set and evidence item.
 """
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, datetime
 import hashlib
 import json
 from pathlib import Path
@@ -59,7 +59,7 @@ class MockFillLedger:
         with connect(self.path) as db:
             db.execute('BEGIN IMMEDIATE')
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if tables - {'fill_meta', 'fill_events', 'fill_snapshots', 'fill_costs'}:
+            if tables - {'fill_meta', 'fill_events', 'fill_snapshots', 'fill_costs', 'cancel_review_events'}:
                 raise ContractError('체결 장부는 별도 모의 기록 파일이어야 합니다.')
             db.execute('CREATE TABLE IF NOT EXISTS fill_meta (account_tag TEXT PRIMARY KEY)')
             prior = db.execute('SELECT account_tag FROM fill_meta').fetchone()
@@ -76,6 +76,34 @@ class MockFillLedger:
                 day TEXT, order_no TEXT, fill_digest TEXT, commission INTEGER, tax INTEGER,
                 source TEXT, evidence_hash TEXT, evidence_item TEXT,
                 PRIMARY KEY(day,order_no,fill_digest), UNIQUE(evidence_hash,evidence_item))''')
+            db.execute('''CREATE TABLE IF NOT EXISTS cancel_review_events (
+                review_id TEXT PRIMARY KEY,root_key TEXT,day TEXT,checked_at TEXT,
+                remaining_quantity INTEGER,filled_quantity INTEGER,filled_value INTEGER)''')
+
+    def record_cancellation_review(self, root_key, review):
+        from app.kiwoom_mock_cancel_review import CancellationReview
+        if (type(review) is not CancellationReview or review.account_tag != self._account_tag
+                or not isinstance(root_key, str) or not 1 <= len(root_key) <= 128
+                or review.final_cancellation_proven or review.ready_for_orders):
+            raise ContractError('읽기 전용 모의 취소 대조 기록이 필요합니다.')
+        if not isinstance(review.review_id,str) or not re.fullmatch(r'[a-f0-9]{64}',review.review_id):
+            raise ContractError('대조 근거 식별자가 필요합니다.')
+        day = date.fromisoformat(review.day)
+        moment = datetime.fromisoformat(review.checked_at)
+        if moment.tzinfo is None or moment.date() != day:
+            raise ContractError('대조 날짜·시간을 확인하세요.')
+        for amount in (review.remaining_quantity,review.filled_quantity,review.filled_value):
+            _amount(amount)
+        values = (review.review_id,root_key,review.day,review.checked_at,review.remaining_quantity,
+                  review.filled_quantity,review.filled_value)
+        with connect(self.path) as db:
+            db.execute('BEGIN IMMEDIATE')
+            previous = db.execute('SELECT * FROM cancel_review_events WHERE review_id=?',(review.review_id,)).fetchone()
+            if previous:
+                if tuple(previous) != values:
+                    raise ContractError('같은 대조 근거의 기록이 다릅니다. 덮어쓰지 않습니다.')
+                return
+            db.execute('INSERT INTO cancel_review_events VALUES (?,?,?,?,?,?,?)', values)
 
     def ingest(self, snapshot):
         if type(snapshot) is not Observations or snapshot.account_tag != self._account_tag:

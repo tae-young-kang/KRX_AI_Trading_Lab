@@ -26,10 +26,12 @@ class OrderNotice:
     side: str
     action: str
     status: str
+    auth_generation: str | None = field(default=None, repr=False)
+    profile_id: str | None = field(default=None, repr=False)
 
 
 def order_notice(message, *, expected_account, profile_id, session,
-                 session_started_at, received_at):
+                 session_started_at, received_at, auth_generation=None):
     """Parse one REAL/00 item supplied by the current MOCK socket owner.
 
     This parser does not authenticate a socket. Caller must own a verified MOCK
@@ -39,6 +41,9 @@ def order_notice(message, *, expected_account, profile_id, session,
             or not isinstance(profile_id, str) or not re.fullmatch(r'[a-f0-9]{32}', profile_id)
             or not isinstance(session, str) or not re.fullmatch(r'[a-f0-9]{32}', session)):
         raise ContractError('모의 연결 확인 정보가 필요합니다.')
+    if auth_generation is not None and (not isinstance(auth_generation, str)
+            or not re.fullmatch(r'[a-f0-9]{32}', auth_generation)):
+        raise ContractError('인증 연결 확인 정보가 필요합니다.')
     for moment in (session_started_at, received_at):
         if not isinstance(moment, datetime) or moment.tzinfo is None or moment.utcoffset() is None:
             raise ContractError('알림을 받은 한국 시간을 확인하세요.')
@@ -80,7 +85,7 @@ def order_notice(message, *, expected_account, profile_id, session,
     tag = hashlib.sha256(('MOCK:' + profile_id + ':' + actual).encode()).hexdigest()
     return OrderNotice(tag, session, received, order_number(values.get('9203')),
         order_number(values.get('904'), root=True), stock_code(values.get('9001')),
-        side, action, values['913'])
+        side, action, values['913'], auth_generation, profile_id)
 
 
 @dataclass(frozen=True)

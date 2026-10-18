@@ -4,7 +4,7 @@ Repeated observations are not an atomic broker snapshot. Fees from ka10076
 are observations, not additive per-fill fees or proof of final settlement.
 """
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 import hashlib
 import hmac
 import re
@@ -71,6 +71,15 @@ class Observations:
     executions: tuple[Execution, ...]
     fees: tuple[FeeObservation, ...]
     unfilled: tuple[tuple[str, str, int, int], ...]  # order, code, quantity, remaining
+
+
+@dataclass(frozen=True)
+class CapturedObservations:
+    observations: Observations
+    profile_id: str = field(repr=False)
+    auth_generation: str = field(repr=False)
+    started_at: datetime
+    finished_at: datetime
 
 
 def executions(rows):
@@ -165,6 +174,30 @@ class MockAccountReviewer:
         observed = self.collect(expected_account=expected_account, trade_date=trade_date)
         ledger.ingest(observed)
         return observed
+
+    def capture(self, *, expected_account, trade_date):
+        """Fresh collection envelope; caller cannot reuse an earlier balance.
+
+        Same credentials generation and KST date must span the whole capture.
+        Timestamps are receipt times, not broker execution/settlement times.
+        """
+        from datetime import datetime
+        from app.trading_clock import KST
+        def timestamp():
+            moment = self.transport._clock()
+            if not isinstance(moment, datetime) or moment.tzinfo is None or moment.utcoffset() is None:
+                raise ContractError('조회 시간을 확인할 수 없습니다.')
+            return moment.astimezone(KST)
+        self.transport.ready()
+        start = timestamp()
+        generation, profile = self.transport.auth_generation, self.transport.profile_id
+        observed = self.collect(expected_account=expected_account, trade_date=trade_date)
+        end = timestamp()
+        self.transport.ready()
+        if (end < start or end.date() != start.date() or observed.day != end.date()
+                or generation != self.transport.auth_generation or profile != self.transport.profile_id):
+            raise UncertainResponse('조회 도중 연결이나 시간이 바뀌었습니다. 다시 확인해 주세요.')
+        return CapturedObservations(observed, profile, generation, start, end)
 
 
 @dataclass(frozen=True)
