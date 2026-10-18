@@ -24,3 +24,4 @@ settings.json
 venv/
 .pytest_cache/
 *.log
+*.dispatch.lock

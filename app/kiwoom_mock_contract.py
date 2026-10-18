@@ -119,6 +119,9 @@ def _success(payload):
 def acknowledgement(api_id, payload):
     if api_id not in ('kt10000', 'kt10001', 'kt10002', 'kt10003'):
         raise ContractError('주문 응답 종류를 확인하세요.')
+    if (isinstance(payload, dict) and type(payload.get('return_code')) is int
+            and payload['return_code'] != 0 and payload.get('ord_no')):
+        raise UncertainResponse('거절 응답에 주문번호가 있습니다. 주문 상태를 조회하세요.')
     _success(payload)
     try:
         order_no = _order_no(payload.get('ord_no'))
