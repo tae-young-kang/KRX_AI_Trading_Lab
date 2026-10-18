@@ -58,3 +58,23 @@ def test_telegram_inspection_authorization_replay_and_mode(sandbox):
     service.orders_enabled = True
     assert '점검이 없어요' in service.handle(update(sandbox,4,'/모의점검'))
     assert broker.calls == [] and not view.take_refresh() and not view.take_reconnect()
+
+
+def test_guided_next_step_handles_day_change_and_clock_reversal_without_actions():
+    from datetime import timedelta
+    current=[NOW]
+    view=MockWatchStatus(clock=lambda:current[0])
+    assert '다음 할 일: 집 PC' in view.validation_summary()
+    view.reset();view.verified(report())
+    assert '모의 알림 연결 상태' in view.validation_summary()
+    view.enable_refresh()
+    assert '다음 할 일: /잔고' in view.validation_summary()
+    view.finish_refresh(report())
+    assert '직접 비교하세요' in view.validation_summary()
+    current[0]=NOW+timedelta(seconds=31)
+    assert '다음 할 일: /잔고' in view.validation_summary()
+    current[0]=NOW+timedelta(days=1)
+    assert '오늘 재확인 필요' in view.validation_summary()
+    current[0]=NOW-timedelta(seconds=1)
+    assert '오늘 재확인 필요' in view.validation_summary()
+    assert not view.take_refresh() and not view.take_reconnect()
