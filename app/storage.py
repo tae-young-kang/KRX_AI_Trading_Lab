@@ -44,6 +44,7 @@ class Database:
                   score REAL, passed INTEGER NOT NULL, reason TEXT NOT NULL,
                   source TEXT NOT NULL, FOREIGN KEY(scan_id) REFERENCES scans(scan_id));
                 CREATE INDEX IF NOT EXISTS idx_snapshot_code_ts ON snapshots(code,ts);
+                CREATE INDEX IF NOT EXISTS idx_snapshot_scan ON snapshots(scan_id);
                 CREATE TABLE IF NOT EXISTS paper_trades(
                   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL,
                   name TEXT NOT NULL, market TEXT NOT NULL,

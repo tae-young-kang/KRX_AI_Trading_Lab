@@ -126,6 +126,7 @@ def search_result(db, mode, scan_id, *, page=1):
     lines = [f'[{label} · 검색 #{scan_id} · {page}/{pages}]',
              f"검색 시각 {batch['created_at']} · 추천 {batch['selected_count']}개",
              '그때의 조건: '+condition_label(json.loads(batch['conditions_json']))]
+    lines.extend(scan_scope(db,batch))
     rows = db.execute('''SELECT * FROM recommendations WHERE scan_id=?
         ORDER BY rank LIMIT 5 OFFSET ?''',(scan_id,(page-1)*5)).fetchall()
     for row in rows:
@@ -140,6 +141,23 @@ def search_result(db, mode, scan_id, *, page=1):
     if page > 1:
         lines.append(f'이전 종목: /추천결과 {scan_id} {page-1}')
     return '\n'.join(lines)
+
+
+def scan_scope(db, batch):
+    scan = db.execute('SELECT count,market FROM scans WHERE scan_id=?',(batch['scan_id'],)).fetchone()
+    counts = db.execute('''SELECT market,source,COUNT(*) AS count,
+        SUM(CASE WHEN passed=1 THEN 1 ELSE 0 END) AS passed
+        FROM snapshots WHERE scan_id=? GROUP BY market,source''',(batch['scan_id'],)).fetchall()
+    total = sum(row['count'] for row in counts)
+    if (scan is None or scan['count'] != total
+            or any(row['source'] != batch['source'] or row['market'] not in ('KOSPI','KOSDAQ') for row in counts)):
+        return ['조회 범위 기록 확인 필요 · 저장 목록과 검색 개수가 맞는지 PC에서 확인하세요.']
+    markets = ', '.join(f"{row['market']} {row['count']:,}개" for row in counts) or '0개'
+    passed = sum(row['passed'] for row in counts)
+    return [f"선택 시장 {scan['market']} · 저장 시세 {total:,}개 ({markets})",
+            f'조건 통과 {passed:,}개 중 추천 {batch["selected_count"]}개',
+            ('합성 예제 범위예요. 실제 전체 종목 자료가 아니에요.' if batch['mode']=='DEMO' else
+             '이 검색에 저장된 조회 범위예요. 당시 상장 전체 목록과의 독립 대조는 별도예요.')]
 
 
 def summary(db, mode, *, performance=False,page=1):

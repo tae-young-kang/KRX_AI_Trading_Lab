@@ -105,6 +105,25 @@ def test_exact_search_results_keep_old_symbols_prices_and_mode(tmp_path):
     assert '기록이 없어요' in db.recommendation_search_result('MOCK', first)
     assert '페이지까지' in db.recommendation_search_result('DEMO', first,page=2)
     assert len(frozen) < 3500
+    assert '저장 시세 4개 (KOSPI 4개)' in frozen
+    assert '조건 통과 3개 중 추천 3개' in frozen
+    assert '합성 예제 범위' in frozen
+
+
+@pytest.mark.parametrize('damage', ['missing', 'source', 'market'])
+def test_scope_mismatch_is_reported_without_claiming_complete_coverage(tmp_path, damage):
+    db = Database(tmp_path/'scope.db')
+    sid = save(db,candidates(),deepcopy(DEFAULTS))
+    with db.connect() as conn:
+        if damage == 'missing':
+            conn.execute('DELETE FROM snapshots WHERE scan_id=? AND code=?',(sid,'900001'))
+        elif damage == 'source':
+            conn.execute("UPDATE snapshots SET source='KIWOOM' WHERE scan_id=?",(sid,))
+        else:
+            conn.execute("UPDATE snapshots SET market='UNKNOWN' WHERE scan_id=?",(sid,))
+    text = db.recommendation_search_result('DEMO',sid)
+    assert '조회 범위 기록 확인 필요' in text
+    assert '저장 시세 4개' not in text
 
 
 def test_exact_search_pages_cover_all_selected_symbols(tmp_path):
