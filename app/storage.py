@@ -6,6 +6,7 @@ from pathlib import Path
 from app.db import ClosingConnection
 from app.trade_review import settings_snapshot, review_conditions, outcome
 from app import recommendations
+from app import recommendation_overview
 from app.trading_clock import KST
 
 
@@ -104,6 +105,11 @@ class Database:
         with self.connect() as db:
             db.execute('BEGIN')
             return recommendations.summary(db,mode,performance=performance)
+
+    def recommendation_overview(self, mode):
+        with self.connect() as db:
+            db.execute('BEGIN')
+            return recommendation_overview.summary(db,mode)
 
     def paper_open(self, stock, qty, stop, take, max_days, fee_pct, slippage_pct, settings, max_positions):
         if stock.price <= 0 or qty < 1:

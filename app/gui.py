@@ -1206,6 +1206,8 @@ class MainWindow(QMainWindow):
                                      watch_funds=self.mock_watch_status.funds_summary,
                                      recommendation_report=lambda performance, db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_summary(mode,performance=performance),
+                                     recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:
+                                         db.recommendation_overview(mode),
                                      watch_orders=self.mock_watch_status.handle_orders,
                                      watch_cancel_orders=self.mock_watch_status.cancel_orders)
         self.telegram_order_worker = worker

@@ -32,7 +32,7 @@ def test_reviews_are_idempotent_and_corrections_append_without_rewriting_recomme
         rows = record.execute('SELECT * FROM recommendation_reviews ORDER BY id').fetchall()
         assert len(rows)==2 and rows[0]['results_json'] != rows[1]['results_json']
     report = db.recommendation_summary('DEMO',performance=True)
-    assert '1거래일' in report and 'DEMO' in report and '실제 수익률·예측이 아니에요' in report
+    assert '1거래일' in report and '가상 자료' in report and '실제 수익률·예측이 아니에요' in report
     assert len(report)<4096
 
 

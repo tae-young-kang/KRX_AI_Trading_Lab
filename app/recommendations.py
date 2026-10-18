@@ -9,6 +9,7 @@ from app.modes import current_mode
 from app.trade_review import settings_snapshot
 from app.trading_clock import KST
 from app.recommendation_outcomes import evaluate
+from app.recommendation_overview import SOURCES, CALENDARS
 
 
 def initialize(db):
@@ -104,7 +105,7 @@ def summary(db, mode, *, performance=False):
         if not seen:
             lines.append('1·3·5거래일: 확인된 평가 자료 없음')
             continue
-        lines.append(f"가격 자료 {seen['price_source']} · 거래일 {seen['calendar_source']} · 확인 완료일 {seen['available_through']}")
+        lines.append(f"{SOURCES[seen['price_source']]} · {CALENDARS[seen['calendar_source']]} · 확인 완료일 {seen['available_through']}")
         for result in json.loads(seen['results_json']):
             detail = (f"{result['change_pct']:+.2f}%" if result['state']=='OBSERVED'
                       else labels[result['state']])
