@@ -203,3 +203,18 @@ def test_theme_read_only_command_auth_replay_stop_and_no_orders(sandbox):
     service.stop()
     assert service.handle(update(sandbox,4,'/테마1'))=='테마1 저장 결과'
     assert seen==[2,1] and broker.calls==[]
+
+
+@pytest.mark.parametrize('result',[{'message_id':4,'chat':{'id':22}}, {'message_id':True,'chat':{'id':22}},
+                                   {'message_id':4,'chat':{'id':99}},None])
+def test_send_receipt_checks_message_and_destination(result):
+    class Response:
+        status_code=200
+        def json(self): return dict(ok=True,result=result)
+    class Session:
+        def post(self,url,**kwargs): return Response()
+    client=TelegramTransport('12345:'+('x'*30),Session())
+    if result and type(result['message_id']) is int and result['chat']['id']==22:
+        assert client.send(22,'가짜 응답 검사')==4
+    else:
+        with pytest.raises(RuntimeError): client.send(22,'가짜 응답 검사')

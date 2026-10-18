@@ -50,3 +50,16 @@ def test_crash_leaves_unknown_and_stale_match_is_not_sent(tmp_path):
     with pytest.raises(ValueError,match='최신'):
         deliver_one(history,alert_id=1,mode='DEMO',source='DEMO',destination='b'*64,send=lambda t:calls.append(t))
     assert calls==[]
+
+
+def test_scope_and_status_hide_raw_recipient_and_separate_destinations(tmp_path):
+    from app.theme_delivery import destination_scope,delivery_summary
+    history,_=setup(tmp_path)
+    scope=destination_scope(123,456)
+    assert len(scope)==64 and scope!=destination_scope(123,457)
+    kwargs=dict(mode='DEMO',source='DEMO',destination=scope)
+    assert '미시도 1개' in delivery_summary(history,**kwargs)
+    deliver_one(history,alert_id=1,send=lambda text:9,**kwargs)
+    assert '발송 응답 확인 1개' in delivery_summary(history,**kwargs)
+    other=delivery_summary(history,mode='DEMO',source='DEMO',destination=destination_scope(123,457))
+    assert '미시도 1개' in other and '456' not in other

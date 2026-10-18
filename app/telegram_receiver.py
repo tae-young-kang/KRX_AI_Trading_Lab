@@ -44,7 +44,14 @@ class TelegramTransport:
         return sorted(result, key=lambda x:x['update_id'])
 
     def send(self, chat_id, text):
-        self._call('sendMessage', dict(chat_id=chat_id, text=text))
+        if type(chat_id) is not int or chat_id==0:
+            raise ValueError('텔레그램 대화방을 확인해 주세요.')
+        result=self._call('sendMessage', dict(chat_id=chat_id, text=text))
+        if (not isinstance(result,dict) or type(result.get('message_id')) is not int or result['message_id']<=0
+                or not isinstance(result.get('chat'),dict) or type(result['chat'].get('id')) is not int
+                or result['chat']['id']!=chat_id):
+            raise RuntimeError('텔레그램 발송 결과의 메시지 번호·대화방을 확인하지 못했습니다. 자동 재시도하지 않습니다.')
+        return result['message_id']
 
     def close(self):
         self.session.close()
