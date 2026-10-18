@@ -73,7 +73,9 @@ def import_package(database, path, mode, *, today=None):
     with database.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         rows = db.execute('''SELECT b.scan_id,b.created_at,r.code,r.market FROM recommendation_batches b
-            JOIN recommendations r ON r.scan_id=b.scan_id WHERE b.mode=?''',(mode,)).fetchall()
+            JOIN recommendations r ON r.scan_id=b.scan_id
+            WHERE b.mode=? AND date(b.created_at,'+9 hours') BETWEEN ? AND ?''',
+            (mode,sessions.begin,data['available_through'])).fetchall()
         for row in rows:
             moment = datetime.fromisoformat(row['created_at'])
             if moment.tzinfo is None:

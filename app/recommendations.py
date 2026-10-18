@@ -29,6 +29,9 @@ def initialize(db):
             available_through TEXT NOT NULL, evidence_hash TEXT NOT NULL,
             created_at TEXT NOT NULL, results_json TEXT NOT NULL,
             UNIQUE(scan_id,code,evidence_hash));
+        CREATE INDEX IF NOT EXISTS ix_recommendation_mode ON recommendation_batches(mode,scan_id);
+        CREATE INDEX IF NOT EXISTS ix_recommendation_day ON recommendation_batches(mode,date(created_at,'+9 hours'));
+        CREATE INDEX IF NOT EXISTS ix_recommendation_latest_review ON recommendation_reviews(scan_id,code,id DESC);
     ''')
 
 
@@ -75,7 +78,7 @@ def review(db, *, scan_id, code, mode, bars, sessions, available_through, price_
     results = evaluate(mode=mode,code=code,market=row['market'],entry_price=row['price'],
         recommended_at=datetime.fromisoformat(row['created_at']),bars=bars,sessions=sessions,
         available_through=available_through,price_source=price_source)
-    payload = json.dumps([asdict(r) for r in results],sort_keys=True)
+    payload = json.dumps([asdict(r) for r in results],sort_keys=True,allow_nan=False)
     proof = json.dumps(dict(results=payload,sessions=asdict(sessions),through=available_through,
                             source=price_source),sort_keys=True)
     fingerprint = hashlib.sha256(proof.encode()).hexdigest()

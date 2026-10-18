@@ -70,3 +70,9 @@ def test_conflicting_price_data_does_not_produce_observations(change):
 def test_other_symbol_or_market_never_fills_a_missing_price():
     bars = [replace(bar,market='KOSDAQ') for bar in prices()]
     assert all(r.state=='PRICE_MISSING' for r in run(bars=bars))
+
+
+def test_finite_input_prices_cannot_store_infinite_percentage():
+    bars=[replace(bar,close=1e308) for bar in prices()]
+    with pytest.raises(ValueError,match='계산 범위'):
+        run(entry_price=1e-308,bars=bars)

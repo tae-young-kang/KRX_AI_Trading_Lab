@@ -69,3 +69,37 @@ def test_unparseable_file_does_not_echo_private_content(tmp_path):
     path=tmp_path/'prices.json';path.write_text('PRIVATE invalid json',encoding='utf8')
     with pytest.raises(ValueError) as error: load_package(path,'DEMO',today=TODAY)
     assert 'PRIVATE' not in str(error.value)
+
+
+def test_failure_halfway_through_package_rolls_back_all_new_reviews(tmp_path,monkeypatch):
+    import app.recommendation_import as module
+    db,_=store(tmp_path)
+    path=write(tmp_path,package())
+    original=module.review
+    count=[]
+    def fail_second(*args,**kwargs):
+        count.append(1)
+        if len(count)==2: raise ValueError('시험 중단')
+        return original(*args,**kwargs)
+    monkeypatch.setattr(module,'review',fail_second)
+    with pytest.raises(ValueError,match='시험 중단'):
+        import_package(db,path,'DEMO',today=TODAY)
+    with db.connect() as record:
+        assert record.execute('SELECT COUNT(*) FROM recommendation_reviews').fetchone()[0]==0
+        assert record.execute('SELECT COUNT(*) FROM recommendations').fetchone()[0]==3
+
+
+def test_date_filter_uses_korean_date_even_for_timezone_offset_record(tmp_path):
+    db,_=store(tmp_path)
+    # 18th UTC is 19th in Korea; never drop it by comparing string prefixes.
+    with db.connect() as record:
+        record.execute('UPDATE recommendation_batches SET created_at=?',('2026-10-18T16:00:00+00:00',))
+    assert import_package(db,write(tmp_path,package()),'DEMO',today=TODAY)['recommendations']==3
+
+
+def test_out_of_range_or_naive_time_records_are_not_silently_repaired(tmp_path):
+    db,_=store(tmp_path)
+    with db.connect() as record:
+        record.execute('UPDATE recommendation_batches SET created_at=?',('2026-10-19T10:00:00',))
+    with pytest.raises(ValueError,match='추천이 없어요'):
+        import_package(db,write(tmp_path,package()),'DEMO',today=TODAY)

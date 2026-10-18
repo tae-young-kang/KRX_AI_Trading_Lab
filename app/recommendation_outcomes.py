@@ -44,6 +44,7 @@ def evaluate(*, mode, code, market, entry_price, recommended_at, bars,
         raise ValueError('추천 당시 가격과 한국 시각이 필요해요.')
     signal_day = recommended_at.astimezone(KST).date()
     begin,end,days = sessions.validate(mode)
+    day_set = set(days)
     through = date.fromisoformat(available_through)
     if not begin <= signal_day <= end or not begin <= through <= end or through < signal_day:
         raise ValueError('추천일과 자료 확인일을 포함하는 거래일 범위가 필요해요.')
@@ -55,7 +56,7 @@ def evaluate(*, mode, code, market, entry_price, recommended_at, bars,
         if day > through:  # Future data supplied by caller cannot leak into results.
             continue
         if (type(bar.close) not in (int,float) or not isfinite(bar.close) or bar.close <= 0
-                or day in prices or day not in days):
+                or day in prices or day not in day_set):
             raise ValueError('중복·비정상 가격 또는 거래일과 다른 가격 자료가 있어요.')
         prices[day] = float(bar.close)
     future = [day for day in days if day > signal_day]
@@ -71,5 +72,8 @@ def evaluate(*, mode, code, market, entry_price, recommended_at, bars,
             out.append(ForwardObservation(horizon,target.isoformat(),'PRICE_MISSING'))
         else:
             close = prices[target]
-            out.append(ForwardObservation(horizon,target.isoformat(),'OBSERVED',close,(close/entry_price-1)*100))
+            change = (close/entry_price-1)*100
+            if not isfinite(change):
+                raise ValueError('가격 변화 계산 범위를 벗어났어요. 입력 가격을 확인해 주세요.')
+            out.append(ForwardObservation(horizon,target.isoformat(),'OBSERVED',close,change))
     return tuple(out)
