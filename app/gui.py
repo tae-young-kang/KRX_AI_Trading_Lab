@@ -961,10 +961,10 @@ class MainWindow(QMainWindow):
         watch.addWidget(self.mock_recovery)
         self.mock_orders_allowed = QCheckBox('오늘 텔레그램 키움 모의 주문 허용 · 실제 돈 사용 안 함')
         self.mock_day_confirmed = QCheckBox('모의 HTS에서 오늘 거래 가능한 날임을 확인했어요')
-        self.mock_orders_allowed.setToolTip('모의 시험 한도: 한 주문 10주·10만원, 하루 매수·매도 합산 3회·20만원. 끊기면 허용이 해제돼요.')
+        self.mock_orders_allowed.setToolTip('모의 시험 한도: 한 주문 10주·10만원, 하루 매수·매도·정정 합산 3회·20만원. 취소는 별도 10회예요. 끊기면 허용이 해제돼요.')
         watch.addWidget(self.mock_orders_allowed)
         watch.addWidget(self.mock_day_confirmed)
-        trial_note = lbl('모의 주문 시험 한도: 한 주문 10주·10만원, 하루 매수·매도 합산 3회·20만원.\n'
+        trial_note = lbl('모의 주문 시험 한도: 한 주문 10주·10만원, 하루 매수·매도·정정 합산 3회·20만원. 취소는 별도 10회예요.\n'
                          '모의 주문은 텔레그램에서 내용을 읽고 별도로 확인해야 해요. 끊기면 주문 허용이 해제돼요.', 'Muted')
         trial_note.setWordWrap(True)
         watch.addWidget(trial_note)

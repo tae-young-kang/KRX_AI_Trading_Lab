@@ -149,7 +149,7 @@ class TelegramOrderService:
             previous = db.execute('SELECT reply FROM tg_updates WHERE scope=? AND uid=?', (self.scope, uid)).fetchone()
             if previous:
                 return previous['reply']
-            mock_command = text.split(' ',1)[0] in ('/매수','/매도','/모의확인','/모의철회','/주문상태')
+            mock_command = text.split(' ',1)[0] in ('/매수','/매도','/정정','/취소','/모의확인','/모의철회','/주문상태')
             if not self.orders_enabled and mock_command:
                 reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                          if self.watch_orders and (owner['active'] or text=='/주문상태') else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')

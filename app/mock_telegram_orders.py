@@ -9,8 +9,11 @@ import threading
 import uuid
 
 from app.order_engine import OrderRequest, connect
-from app.kiwoom_mock_contract import ContractError, order_plan
+from app.kiwoom_mock_contract import ContractError, order_plan, amend_plan, cancel_plan
 from app.kiwoom_mock_journal import MockDispatchJournal
+from app.kiwoom_mock_ledger import MockFillLedger
+from app.kiwoom_mock_chain import project_chain
+from app.kiwoom_mock_review import order_number
 from app.kiwoom_mock_status import money_view
 from app.runtime_lock import ReceiverLock
 from app.trading_clock import KST, TradingCalendar
@@ -32,6 +35,7 @@ class MockTelegramOrders:
         self.generation = None
         self.account_tag = None
         self._sending = None
+        self.ledger = self._capture = None
         self.path = self.root/'telegram_intents.db'
         with ReceiverLock(self.root/'setup.lock'):
             identity = self.root/'profile.id'
@@ -64,6 +68,8 @@ class MockTelegramOrders:
             self.journal.bind_account(session._account_tag)
             self.generation = session.transport.auth_generation
             self.account_tag = session._account_tag
+            self.ledger = MockFillLedger(self.root/'fills.db',account_tag=self.account_tag)
+            self._capture = None
             self.armed = True
             session.transport.mutation_allowed = self.can_dispatch
 
@@ -80,6 +86,7 @@ class MockTelegramOrders:
             self.generation = None
             self.account_tag = None
             self._sending = None
+            self.ledger = self._capture = None
             with connect(self.path) as db:
                 db.execute("UPDATE intents SET state='CANCELED' WHERE state IN ('WAITING','QUEUED')")
 
@@ -100,6 +107,124 @@ class MockTelegramOrders:
         with self._cancel_lock:
             return (scope,session) in self._canceled_sessions
 
+    @staticmethod
+    def _request(payload):
+        return OrderRequest(**{k:payload[k] for k in ('code','side','quantity','limit_price')})
+
+    def _target(self,db,scope,number):
+        if not self.journal: raise ContractError('모의 연결 확인 필요')
+        number=order_number(number)
+        for row in db.execute("SELECT * FROM intents WHERE scope=? AND day=? AND state='ACKNOWLEDGED'",(scope,self.day.isoformat())):
+            receipt=self.journal.get(row['id'])
+            if not receipt or receipt['order_no']!=number: continue
+            if receipt['api_id']=='kt10003': break
+            _,chain=self.journal.read_chain(receipt['root_key'])
+            if any(x['parent_key']==row['id'] and x['state']!='REJECTED' for x in chain): break
+            return row,receipt
+        raise ContractError('본인이 이 프로그램에서 접수한 오늘의 최신 주문번호를 확인해 주세요.')
+
+    def _target_view(self,capture,receipt,target_payload):
+        if (capture is None or capture.profile_id!=self.profile or capture.auth_generation!=self.generation
+                or capture.observations.account_tag!=self.account_tag or capture.observations.day!=self.day):
+            raise ContractError('같은 모의 계좌의 새 조회가 필요해요.')
+        self.ledger.ingest(capture.observations)
+        chain=project_chain(self.journal,self.ledger,receipt['root_key'])
+        rows=[x for x in capture.observations.unfilled if x[0] in chain.order_nos]
+        if len(rows)!=1 or rows[0][0]!=receipt['order_no']:
+            raise ContractError('최신 주문의 남은 수량을 확인할 수 없어요.')
+        parent=json.loads(receipt['payload'])
+        size=int(parent['ord_qty'] if receipt['api_id'] in ('kt10000','kt10001') else parent['mdfy_qty'])
+        if rows[0][2]!=size or rows[0][1]!=parent['stk_cd']:
+            raise ContractError('원주문 수량·종목을 다시 확인해 주세요.')
+        if chain.filled_qty+rows[0][3]!=target_payload.get('target_total',target_payload['quantity']):
+            raise ContractError('전체 체결량과 남은 수량이 맞지 않아요. 별도 대조가 필요해요.')
+        return chain,rows[0]
+
+    def _usage_block(self,db,payload):
+        usage=[json.loads(x[0]) for x in db.execute("SELECT payload FROM intents WHERE day=? AND state IN ('CLAIMED','UNKNOWN','ACKNOWLEDGED','REJECTED','FAILED')",(self.day.isoformat(),))]
+        if payload.get('action')=='CANCEL':
+            return '오늘 모의 취소 시험 한도 10회를 사용했어요.' if sum(x.get('action')=='CANCEL' for x in usage)>=10 else None
+        counted=[x for x in usage if x.get('action')!='CANCEL']
+        gross=payload['quantity']*payload['limit_price']
+        if len(counted)>=3 or sum(x['quantity']*x['limit_price'] for x in counted)+gross>200_000:
+            return '오늘 모의 시험 한도 3회·20만원을 사용했어요. 매수·매도·정정을 함께 계산해요.'
+
+    def _unresolved_cancel(self,db):
+        for row in db.execute("SELECT payload FROM intents WHERE day=? AND state='ACKNOWLEDGED'",(self.day.isoformat(),)):
+            if json.loads(row[0]).get('action')=='CANCEL':
+                return True
+        return False
+
+    def _preview_action(self,text,db,scope,session,uid,now):
+        match=re.fullmatch(r'/정정 ([0-9]{1,7}) ([1-9][0-9]?) ([1-9][0-9,]{0,9})',text)
+        cancel=re.fullmatch(r'/취소 ([0-9]{1,7})',text)
+        if not match and not cancel:
+            return '정정: /정정 주문번호 남길잔량 지정가\n취소: /취소 주문번호\n먼저 /잔고 조회 후 /주문상태에서 최신 주문번호를 확인해 주세요.'
+        if match and self._unresolved_cancel(db):
+            return '취소 접수 뒤 최종 상태 대조가 남아 있어 새 주문·정정을 차단했어요. 모의 HTS/MTS에서 확인해 주세요.'
+        if db.execute("SELECT 1 FROM intents WHERE state IN ('UNKNOWN','CLAIMED','WAITING','QUEUED')").fetchone():
+            return '미확인 또는 대기 중인 모의 요청이 있어요. /주문상태를 확인해 주세요.'
+        if db.execute('SELECT 1 FROM intents WHERE scope=? AND session=? AND uid=?',(scope,session,uid)).fetchone():
+            return '이미 처리한 모의 요청이에요. /주문상태로 확인해 주세요.'
+        try:
+            target,receipt=self._target(db,scope,(match or cancel)[1])
+            if self._capture is None or not 0<=now-self._capture.finished_at.timestamp()<=30:
+                raise ContractError('먼저 /잔고로 새 조회를 끝낸 뒤 30초 안에 요청해 주세요.')
+            previous=json.loads(target['payload'])
+            chain,pending=self._target_view(self._capture,receipt,previous)
+            quantity=int(match[2]) if match else pending[3]
+            if match and not re.fullmatch(r'(?:[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)',match[3]):
+                raise ContractError('가격의 쉼표 위치를 확인해 주세요.')
+            price=int(match[3].replace(',','')) if match else previous['limit_price']
+            if quantity>pending[3] or quantity>10 or (match and quantity*price>100_000):
+                raise ContractError('정정 잔량은 현재 남은 수량 이하·10주 이하, 정정 금액은 10만원 이하여야 해요.')
+            payload=dict(code=previous['code'],side=previous['side'],quantity=quantity,limit_price=price,
+                         action='AMEND' if match else 'CANCEL',parent_key=target['id'],root_key=receipt['root_key'],
+                         order_no=receipt['order_no'],expected_remaining=pending[3],expected_filled=chain.filled_qty,
+                         target_total=chain.filled_qty+quantity if match else previous.get('target_total',previous['quantity']))
+            blocked=self._usage_block(db,payload)
+            if blocked: return blocked
+            token=secrets.token_urlsafe(18)
+            db.execute('INSERT INTO intents VALUES (?,?,?,?,?,?,?,?,?)',
+                (uuid.uuid4().hex,scope,session,uid,hashlib.sha256(token.encode()).hexdigest(),json.dumps(payload),now+120,'WAITING',self.day.isoformat()))
+            change=f'남길 잔량 {quantity}주 · 지정가 {price:,}원' if match else f'조회된 남은 {quantity}주 전부 취소 요청'
+            return (f'[키움 모의투자 정정·취소 · 실제 돈 사용 안 함]\n주문번호 {receipt["order_no"]} · 종목 {previous["code"]}\n'
+                    f'지금까지 체결 {chain.filled_qty}주 · 남은 {pending[3]}주\n{change}\n'
+                    f'2분 안에 /모의확인 {token}\n철회: /모의철회 {token}\n추가 체결·잔량 변화가 생기면 전송을 차단해요. 취소 접수는 완료가 아니에요.')
+        except ContractError as error:
+            return str(error)
+
+    def _followup_plan(self,payload,capture,scope):
+        with connect(self.path) as db:
+            parent,receipt=self._target(db,scope,payload['order_no'])
+        if parent['id']!=payload['parent_key'] or receipt['root_key']!=payload['root_key']:
+            raise ContractError('원주문 연결 변경')
+        previous=json.loads(parent['payload'])
+        chain,pending=self._target_view(capture,receipt,previous)
+        if pending[3]!=payload['expected_remaining'] or chain.filled_qty!=payload['expected_filled']:
+            raise ContractError('내용 확인 후 추가 체결·잔량 변화가 생겼어요. 새 조회와 새 확인이 필요해요.')
+        if payload['code']!=previous['code'] or payload['side']!=previous['side']:
+            raise ContractError('원주문 종목·방향 변경')
+        quantity=payload['quantity']
+        if not 0<quantity<=pending[3]: raise ContractError('잔량 변경')
+        if payload['action']=='CANCEL':
+            if quantity!=pending[3]: raise ContractError('조회된 잔량 전부만 취소 요청할 수 있어요.')
+            return cancel_plan(payload['code'],receipt['order_no'],remaining_quantity=quantity)
+        observed=capture.observations
+        if any(x[0]!=receipt['order_no'] for x in observed.unfilled):
+            raise ContractError('다른 남은 주문의 예약 대조가 필요해요.')
+        if payload['side']=='BUY':
+            known={receipt['order_no']:OrderRequest(payload['code'],'BUY',pending[2],previous['limit_price'])}
+            available=money_view(observed,known).order_money
+            extra=max(0,quantity*payload['limit_price']-pending[3]*previous['limit_price'])
+            if available is None or available<(extra*101+99)//100:
+                raise ContractError('정정에 추가로 필요한 금액을 확인해 주세요.')
+        else:
+            holding=next((x for x in observed.holdings if x[0]==payload['code']),None)
+            if holding is None or holding[1]<pending[3] or holding[2]+pending[3]<quantity:
+                raise ContractError('정정 매도 가능 수량을 확인해 주세요.')
+        return amend_plan(payload['code'],receipt['order_no'],remaining_quantity=quantity,limit_price=payload['limit_price'])
+
     def handle(self,text,*,scope,session,uid,now):
         with self.lock, connect(self.path) as db:
             db.execute('BEGIN IMMEDIATE')
@@ -108,11 +233,19 @@ class MockTelegramOrders:
                 row=db.execute('SELECT * FROM intents WHERE scope=? ORDER BY rowid DESC LIMIT 1',(scope,)).fetchone()
                 labels={'WAITING':'내용 확인 대기','QUEUED':'전송 대기','CLAIMED':'처리 중 · 중복 주문 금지',
                         'UNKNOWN':'결과 미확인 · 재주문 금지','ACKNOWLEDGED':'접수 응답 확인 · 체결은 별도 조회',
-                        'REJECTED':'증권사 거절','FAILED':'전송 전 확인 실패','CANCELED':'확인 철회 또는 연결 중지','EXPIRED':'확인 시간 만료'}
+                        'REJECTED':'증권사 거절','FAILED':'전송 전 확인 실패 · 새 조회와 새 확인 필요','CANCELED':'확인 철회 또는 연결 중지','EXPIRED':'확인 시간 만료'}
                 detail=''
                 if row:
+                    payload=json.loads(row['payload'])
+                    action=payload.get('action','NEW')
+                    if action in ('AMEND','CANCEL'):
+                        detail+='\n정정·취소 대상(당시) '+payload['order_no']
+                        if row['state']=='ACKNOWLEDGED':
+                            labels['ACKNOWLEDGED']=('취소 접수 응답 확인 · 최종 취소 미확인' if action=='CANCEL' else '정정 접수 응답 확인 · 새 조회 필요')
+                    receipt=self.journal.get(row['id']) if self.journal else None
+                    if receipt and receipt['order_no']: detail+='\n모의 주문번호 '+receipt['order_no']
                     seen=db.execute('SELECT * FROM observations WHERE id=?',(row['id'],)).fetchone()
-                    if seen: detail=f"\n{seen['checked_at']} 조회: {seen['state']} · 체결 {seen['filled']}/{seen['quantity']}주"
+                    if seen: detail+=f"\n{seen['checked_at']} 조회: {seen['state']} · 체결 {seen['filled']}/{seen['quantity']}주"
                 gate='오늘 모의 주문 허용 중' if self.armed and self._open() else '새 모의 주문 잠금'
                 return '[키움 모의투자 · 실제 돈 사용 안 함]\n'+gate+'\n'+(labels[row['state']] if row else '주문 기록 없음')+detail+'\n/잔고: 잔고·주문 상태 재조회 · 접수는 체결 완료가 아니에요.'
             if not self.armed or not self._open() or self._canceled(scope,session):
@@ -126,6 +259,8 @@ class MockTelegramOrders:
                 state='QUEUED' if action=='모의확인' else 'CANCELED'
                 db.execute('UPDATE intents SET state=? WHERE id=?',(state,row['id']))
                 return '모의 주문 전송을 요청했어요. /주문상태로 확인해 주세요.' if state=='QUEUED' else '모의 주문 확인을 철회했어요.'
+            if text.split(' ',1)[0] in ('/정정','/취소'):
+                return self._preview_action(text,db,scope,session,uid,now)
             match=re.fullmatch(r'/(매수|매도) ([A-Za-z0-9]{6}) ([1-9][0-9]?) ([1-9][0-9,]{0,9})',text)
             if not match: return '모의 주문 예: /매수 900001 1 1000\n순서: 종목코드 수량 지정가(원) · 종목명 대신 6자리 코드를 써 주세요.'
             side,code,quantity,price=match.groups()
@@ -135,16 +270,18 @@ class MockTelegramOrders:
             request.validate()
             if request.quantity>10 or request.quantity*request.limit_price>100_000:
                 return '모의 시험 한도는 한 주문 10주·10만원이에요.'
+            if self._unresolved_cancel(db):
+                return '취소 접수 뒤 최종 상태 대조가 남아 있어 새 주문·정정을 차단했어요. 모의 HTS/MTS에서 확인해 주세요.'
             if db.execute("SELECT 1 FROM intents WHERE state IN ('UNKNOWN','CLAIMED')").fetchone():
                 return '미확인 주문이 있어 새 모의 주문을 차단했어요. 재주문하지 말고 확인해 주세요.'
             if db.execute("SELECT 1 FROM intents WHERE state IN ('WAITING','QUEUED')").fetchone():
                 return '이미 확인 또는 전송 대기 중인 모의 주문이 있어요. 먼저 확인하거나 철회해 주세요.'
             if db.execute('SELECT 1 FROM intents WHERE scope=? AND session=? AND uid=?',(scope,session,uid)).fetchone():
                 return '이미 처리한 모의 주문 요청이에요. /주문상태로 확인해 주세요.'
-            usage=db.execute("SELECT payload FROM intents WHERE day=? AND state IN ('CLAIMED','UNKNOWN','ACKNOWLEDGED','REJECTED','FAILED')",(self.day.isoformat(),)).fetchall()
             gross=request.quantity*request.limit_price
-            if len(usage)>=3 or sum(json.loads(x[0])['quantity']*json.loads(x[0])['limit_price'] for x in usage)+gross>200_000:
-                return '오늘 모의 시험 한도 3회·20만원을 사용했어요. 매수·매도를 함께 계산해요.'
+            request_payload=dict(code=request.code,side=request.side,quantity=request.quantity,limit_price=request.limit_price)
+            blocked=self._usage_block(db,request_payload)
+            if blocked: return blocked
             code_token=secrets.token_urlsafe(18)
             payload=json.dumps(dict(code=request.code,side=request.side,quantity=request.quantity,limit_price=request.limit_price))
             db.execute('INSERT INTO intents VALUES (?,?,?,?,?,?,?,?,?)',
@@ -171,15 +308,21 @@ class MockTelegramOrders:
                     raise ContractError('모의 연결 변경')
                 if session.poll(): raise ContractError('새 알림 뒤 잔고 확인 필요')
                 capture=session.capture_for_order()
-                request=OrderRequest(**json.loads(row['payload']))
+                payload=json.loads(row['payload'])
+                request=self._request(payload)
                 observed=capture.observations
-                if observed.unfilled: raise ContractError('남은 주문 확인 필요')
-                if request.side=='BUY':
+                action=payload.get('action','NEW')
+                if action!='NEW':
+                    plan=self._followup_plan(payload,capture,row['scope'])
+                elif observed.unfilled:
+                    raise ContractError('남은 주문 확인 필요')
+                elif request.side=='BUY':
                     available=money_view(observed,{}).order_money
                     if available is None or available < (request.quantity*request.limit_price*101+99)//100:
                         raise ContractError('주문 가능 금액 확인 필요')
                 elif dict((r[0],r[2]) for r in observed.holdings).get(request.code,0)<request.quantity:
                     raise ContractError('매도 가능 수량 확인 필요')
+                if action=='NEW': plan=order_plan(request)
                 session._guard()
                 if (not self._open() or self.clock().timestamp()>row['expires']
                         or self._canceled(row['scope'],row['session']) or session.poll()
@@ -188,7 +331,8 @@ class MockTelegramOrders:
                 sent=True  # Journal owns durable SENDING before the one HTTP attempt.
                 self._sending=(row['scope'],row['session'],row['expires'],capture.finished_at.timestamp())
                 try:
-                    result=self.journal.dispatch(row['id'],order_plan(request))
+                    result=(self.journal.dispatch(row['id'],plan) if action=='NEW' else
+                            self.journal.dispatch(row['id'],plan,parent_key=payload['parent_key']))
                 finally:
                     self._sending=None
                 state=result['state']
@@ -207,12 +351,32 @@ class MockTelegramOrders:
                     or capture.auth_generation!=self.generation or capture.observations.account_tag!=self.account_tag
                     or capture.observations.day!=self.day):
                 return
+            self.ledger.ingest(capture.observations)
+            self._capture=capture
             with connect(self.path) as db:
                 rows=db.execute("SELECT * FROM intents WHERE state='ACKNOWLEDGED' AND day=?",(self.day.isoformat(),)).fetchall()
                 for row in rows:
                     receipt=self.journal.get(row['id'])
                     if not receipt or receipt['state']!='ACKNOWLEDGED': continue
-                    req=OrderRequest(**json.loads(row['payload']))
+                    payload=json.loads(row['payload'])
+                    req=self._request(payload)
+                    if payload.get('action') in ('AMEND','CANCEL'):
+                        try:
+                            chain=project_chain(self.journal,self.ledger,payload['root_key'])
+                            pending=sum(x[3] for x in capture.observations.unfilled if x[0] in chain.order_nos)
+                            qty=chain.filled_qty
+                            if payload['action']=='CANCEL':
+                                state=f'취소 접수 응답 확인 · 조회된 남은 주문 {pending}주 · 최종 취소 미확인'
+                            elif qty==payload['target_total'] and not pending:
+                                state='정정 계보 체결 수량 조회 일치 · 비용/결제 별도 확인'
+                            else:
+                                state=f'정정 접수 응답 확인 · 조회된 남은 주문 {pending}주 · 최종 상태 별도 확인'
+                        except ContractError:
+                            qty=0
+                            state='정정·취소 계보 대조 필요 · 최종 상태 미확인'
+                        db.execute('INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?)',
+                            (row['id'],state,qty,payload['target_total'],capture.finished_at.astimezone(KST).strftime('%m/%d %H:%M:%S')))
+                        continue
                     fills=[x for x in capture.observations.executions if x.order_no==receipt['order_no']]
                     pending=[x for x in capture.observations.unfilled if x[0]==receipt['order_no']]
                     qty=sum(x.quantity for x in fills)
