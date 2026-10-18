@@ -13,7 +13,7 @@ from app.trading_clock import KST
 
 
 def now():
-    return datetime.now().isoformat(timespec='seconds')
+    return datetime.now(KST).isoformat(timespec='seconds')
 
 
 class Database:

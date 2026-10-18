@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from app.practice_quotes import fresh_practice_price
+from app.trading_clock import KST
 
 
 @dataclass
@@ -48,9 +49,8 @@ def auto_paper_exit(db, stocks, cfg):
         st = latest.get(trade['code'])
         if not st:
             continue  # Never sell on stale price.
-        from datetime import datetime
-        open_time = datetime.fromisoformat(trade['opened_at'])
-        age_days = (datetime.now().date() - open_time.date()).days
+        open_time = datetime.fromisoformat(trade['opened_at']).astimezone(KST)
+        age_days = (datetime.now(KST).date() - open_time.date()).days
         move = (st.price / trade['buy_fill'] - 1) * 100
         reason = None
         if move <= -trade['stop_pct']:
