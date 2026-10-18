@@ -95,6 +95,16 @@ class Database:
         with self.connect() as db:
             return recommendations.recent(db,mode,limit)
 
+    def review_recommendation(self, **evidence):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            return recommendations.review(db,**evidence)
+
+    def recommendation_summary(self, mode, *, performance=False):
+        with self.connect() as db:
+            db.execute('BEGIN')
+            return recommendations.summary(db,mode,performance=performance)
+
     def paper_open(self, stock, qty, stop, take, max_days, fee_pct, slippage_pct, settings, max_positions):
         if stock.price <= 0 or qty < 1:
             raise ValueError('종목 가격 또는 수량을 확인하세요.')

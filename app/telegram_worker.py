@@ -19,7 +19,8 @@ class TelegramOrderWorker(QThread):
 
     def __init__(self, root, token, user_id, chat_id, catalog, conditions=None, orders_enabled=True, watch_status=None,
                  watch_refresh=None, watch_result=None, watch_reconnect=None, watch_validation=None,
-                 watch_orders=None, watch_cancel_orders=None, watch_history=None, watch_funds=None):
+                 watch_orders=None, watch_cancel_orders=None, watch_history=None, watch_funds=None,
+                 recommendation_report=None):
         super().__init__()
         self.root, self.token = Path(root), token
         self.user_id, self.chat_id, self.catalog = user_id, chat_id, dict(catalog)
@@ -31,6 +32,7 @@ class TelegramOrderWorker(QThread):
         self.watch_validation = watch_validation
         self.watch_history = watch_history
         self.watch_funds = watch_funds
+        self.recommendation_report = recommendation_report
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
 
     def stop(self):
@@ -69,7 +71,8 @@ class TelegramOrderWorker(QThread):
                                                 watch_result=self.watch_result, watch_reconnect=self.watch_reconnect,
                                                 watch_validation=self.watch_validation, watch_orders=self.watch_orders,
                                                 watch_cancel_orders=self.watch_cancel_orders,
-                                                watch_history=self.watch_history, watch_funds=self.watch_funds)
+                                                watch_history=self.watch_history, watch_funds=self.watch_funds,
+                                                recommendation_report=self.recommendation_report)
             report = self.service.recovery_status(startup=True) if self.orders_enabled else None
             self.status.emit('수신 중 · '+(self.service.safety_text(report) if self.orders_enabled else '조건·조회 관리 · 키움 모의 주문은 PC의 별도 당일 허용 필요'))
             last_banner = self.service.safety_banner() if self.orders_enabled else ''

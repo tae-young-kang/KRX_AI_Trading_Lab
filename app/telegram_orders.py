@@ -29,7 +29,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -46,6 +46,7 @@ class TelegramOrderService:
         self.watch_validation = watch_validation
         self.watch_history = watch_history
         self.watch_funds = watch_funds
+        self.recommendation_report = recommendation_report
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
         self.broker_identity = engine.broker.identity
         self.clock = clock or (lambda: datetime.now(KST))
@@ -157,6 +158,9 @@ class TelegramOrderService:
             if not self.orders_enabled and mock_command:
                 reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                          if self.watch_orders and (owner['active'] or text.split(' ',1)[0] in ('/주문상태','/주문점검','/긴급중지','/주문목록','/미체결')) else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')
+            elif text in ('/추천기록','/추천성적'):
+                reply = (self.recommendation_report(text=='/추천성적') if self.recommendation_report
+                         else '추천 기록 연결이 없어요. 집 PC에서 확인해 주세요.')
             elif text == '/모의자금':
                 reply = (self.watch_funds() if not self.orders_enabled and self.watch_funds
                          else '모의 자금 조회가 없어요. 집 PC에서 키움 모의투자 모드를 확인해 주세요.')
@@ -191,8 +195,10 @@ class TelegramOrderService:
                 else:
                     reply = '실제 돈 주문은 잠겨 있어요. 키움 모의 주문은 PC의 당일 허용과 별도 확인이 필요해요.\n/프로그램상태 · /모의점검 · /모의기록 · /잔고 · /잔고결과 · /모의재연결 · /주문목록 · /미체결 · /주문상태 · /주문점검 · /긴급중지 · /모의재개 · /조건 · /조건도움말'
                     reply += '\n/모의자금: 예수금·주문 가능 금액·다음 결제일 예상값 구분'
+                    reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
             elif text in ('/도움말', '/start', '/help'):
                 reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
+                reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
             elif text == '/상태':
                 account = self.engine.account()
                 last = db.execute('SELECT * FROM tg_intents WHERE scope=? ORDER BY rowid DESC LIMIT 1', (self.scope,)).fetchone()
