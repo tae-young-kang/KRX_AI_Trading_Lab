@@ -55,6 +55,7 @@ def groups(db,mode):
         ORDER BY b.scan_id DESC,b.rank''',(mode,)).fetchall()
     seen = set()
     population_by_day = Counter()
+    selected_days_by_condition = {}
     grouped = {}
     for row in reversed(rows):
         stamp = datetime.fromisoformat(row['created_at'])
@@ -68,6 +69,7 @@ def groups(db,mode):
             continue
         seen.add(identity)
         population_by_day[(identity[0],condition_signature)] += 1
+        selected_days_by_condition.setdefault(condition_signature,set()).add(identity[0])
         source = row['price_source'] or 'NONE'
         calendar = row['calendar_source'] or 'NONE'
         key = (condition_signature,source,calendar)
@@ -95,6 +97,7 @@ def groups(db,mode):
                 bucket['missing'] += 1
     for (signature,source,calendar),group in grouped.items():
         for bucket in group['horizons'].values():
+            bucket['selected_days'] = len(selected_days_by_condition[signature])
             values = bucket.pop('values')
             bucket['mean'] = mean(values) if values else None
             by_day = bucket.pop('by_day')
@@ -135,13 +138,13 @@ def summary(db,mode):
                         '완전 관측일 평균 '+change_label(bucket['complete_daily_mean']))
             lines.append(f"대기 {bucket['waiting']} · 자료 부족 {bucket['missing']} · 미평가 {bucket['unreviewed']}")
             if bucket['observed_days']:
-                lines.append(f"집계 내 완전 관측일 {bucket['complete_days']}/{bucket['observed_days']}일 · {complete}")
+                lines.append(f"집계 내 완전 관측일 {bucket['complete_days']}/{bucket['selected_days']}일 · {complete}")
     if len(data)>3:
         lines.append(f'나머지 {len(data)-3}개 묶음은 표시를 생략했어요.')
     if unverified:
         lines.append(f'시각 확인이 필요한 {unverified}개 기록은 집계하지 않았어요.')
     lines.append('날짜별 균등 평균은 일부 종목만 관측된 날짜도 포함합니다. '
-                 '완전 관측일은 집계 내 선택된 종목의 관측 완료만 뜻하며 실제 시장 전체의 완전성은 아니에요. '
+                 '완전 관측일의 분모는 모든 선택된 추천일이며 집계 밖 전체 시장 완전성은 아니에요. '
                  '가격 변화는 비용·배당·분할 미반영이며 실제 순수익·기대수익률이 아니에요. '
                  '겹친 종목/보유 기간은 독립 표본이 아니며 조건을 자동 변경하지 않아요.')
     return '\n'.join(lines)
