@@ -1,4 +1,5 @@
 """Descriptive price observations only; no ranking, forecasts or auto promotion."""
+from collections import Counter
 from datetime import datetime
 import hashlib
 import json
@@ -53,6 +54,7 @@ def groups(db,mode):
           SELECT MAX(id) FROM recommendation_reviews WHERE scan_id=b.scan_id AND code=b.code)
         ORDER BY b.scan_id DESC,b.rank''',(mode,)).fetchall()
     seen = set()
+    population_by_day = Counter()
     grouped = {}
     for row in reversed(rows):
         stamp = datetime.fromisoformat(row['created_at'])
@@ -65,6 +67,7 @@ def groups(db,mode):
         if identity in seen:
             continue
         seen.add(identity)
+        population_by_day[(identity[0],condition_signature)] += 1
         source = row['price_source'] or 'NONE'
         calendar = row['calendar_source'] or 'NONE'
         key = (condition_signature,source,calendar)
@@ -90,7 +93,7 @@ def groups(db,mode):
                 bucket['waiting'] += 1
             else:
                 bucket['missing'] += 1
-    for group in grouped.values():
+    for (signature,source,calendar),group in grouped.items():
         for bucket in group['horizons'].values():
             values = bucket.pop('values')
             bucket['mean'] = mean(values) if values else None
@@ -99,6 +102,13 @@ def groups(db,mode):
             # Each recommendation date gets equal weight, regardless of how
             # many stocks were recommended on that date.
             bucket['daily_mean'] = mean(mean(changes) for changes in by_day.values()) if by_day else None
+            # Complete means every selected pick for this condition/day was
+            # observed, even if another pick sits in a different source group.
+            # Completeness is limited to the recent 3,000 selected records.
+            complete = [mean(changes) for day,changes in by_day.items()
+                        if len(changes) == population_by_day[(day,signature)]]
+            bucket['complete_days'] = len(complete)
+            bucket['complete_daily_mean'] = mean(complete) if complete else None
     return sorted(grouped.values(),key=lambda g:g['last_scan'],reverse=True),unverified_time
 
 
@@ -121,12 +131,17 @@ def summary(db,mode):
             if bucket['observed'] and bucket['observed_days']<10:
                 short += ' · 평가일 10일 미만'
             lines.append(f"{horizon}거래일: 관측 {bucket['observed']}건/{bucket['observed_days']}일 · 상승 {bucket['up']}/하락 {bucket['down']}/동일 {bucket['flat']} · {mean_label} · {daily}{short}")
+            complete = ('완전 관측일 평균 미확인' if bucket['complete_daily_mean'] is None else
+                        '완전 관측일 평균 '+change_label(bucket['complete_daily_mean']))
             lines.append(f"대기 {bucket['waiting']} · 자료 부족 {bucket['missing']} · 미평가 {bucket['unreviewed']}")
+            if bucket['observed_days']:
+                lines.append(f"집계 내 완전 관측일 {bucket['complete_days']}/{bucket['observed_days']}일 · {complete}")
     if len(data)>3:
         lines.append(f'나머지 {len(data)-3}개 묶음은 표시를 생략했어요.')
     if unverified:
         lines.append(f'시각 확인이 필요한 {unverified}개 기록은 집계하지 않았어요.')
-    lines.append('날짜별 균등 평균은 같은 추천일 종목을 먼저 평균해 날짜마다 같은 비중으로 계산합니다. '
-                 '가격 변화는 비용·배당·분할 미반영이며 실제 순수익·기대수익률이 아니에요. '
+    lines.append('날짜별 균등 평균은 일부 종목만 관측된 날짜도 포함합니다. '
+                 '완전 관측일은 집계 내 선택된 종목의 관측 완료만 뜻하며 실제 시장 전체의 완전성은 아니에요. '
+                 '비용·배당·분할 미반영이며 실제 순수익·기대수익률이 아니에요. '
                  '겹친 종목/보유 기간은 독립 표본이 아니며 조건을 자동 변경하지 않아요.')
     return '\n'.join(lines)
