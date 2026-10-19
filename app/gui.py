@@ -29,6 +29,7 @@ from app.theme_input import prepare_selection as prepare_theme_selection
 from app.theme_input import selection_from_days, prepare_days as prepare_theme_days
 from app.theme_input import prepare_confirmed
 from app.theme_request import ThemeRequest
+from app.theme_collection import collect_and_prepare
 from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
 from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text
@@ -338,7 +339,7 @@ class MainWindow(QMainWindow):
         guide=lbl('저장된 감지 결과예요. 새 판정과 알림 발송은 아래 버튼에서 각각 선택하세요. 텔레그램 조회: /테마1','Muted')
         guide.setWordWrap(True)
         layout.addWidget(guide)
-        prepare_button=QPushButton('새 테마1 판정 만들기 · 저장 시세 사용')
+        prepare_button=QPushButton('새 테마1 판정 만들기 · 자료 선택')
         prepare_button.clicked.connect(self.prepare_theme_guided)
         layout.addWidget(prepare_button)
         view=QTextEdit()
@@ -917,10 +918,12 @@ class MainWindow(QMainWindow):
 
     def prepare_theme_guided(self):
         mode=current_mode(self.cfg).key
-        sources=['DEMO'] if mode=='DEMO' else ['KRX','CSV_USER']
-        source,ok=QInputDialog.getItem(self,'1/2 · 테마1 자료 선택',
-            '이미 저장한 일봉 자료를 골라 주세요. 자료가 없으면 고급 연구에서 먼저 수집하거나 CSV를 넣으세요.',sources,0,False)
+        sources=['DEMO'] if mode=='DEMO' else ['KRX 저장 자료','KRX 수집 후 판정','CSV_USER']
+        choice,ok=QInputDialog.getItem(self,'1/2 · 테마1 자료 선택',
+            '저장 자료로 판정하거나, KRX 일봉을 수집한 뒤 판정할 수 있어요. KRX 수집은 별도 인증키와 서비스 승인이 필요해요.',sources,0,False)
         if not ok:return
+        collect=choice=='KRX 수집 후 판정'
+        source='KRX' if choice.startswith('KRX') else choice
         dates,ok=QInputDialog.getMultiLineText(self,'2/2 · 확인한 거래일',
             '휴장일을 뺀 실제 거래일을 오래된 순서대로 한 줄에 하나씩 입력하세요 (YYYY-MM-DD).\n'
             '마지막 날짜가 감지 기준일이에요. 최근 6거래일과 전일 종가용 1일, 총 7거래일 이상이 필요해요.\n'
@@ -930,16 +933,33 @@ class MainWindow(QMainWindow):
             data,_=selection_from_days(dates,mode,source)
         except ValueError as error:
             QMessageBox.information(self,'거래일 확인',str(error));return
+        key=None
+        if collect:
+            key=self.secrets['krx_api_key'].text().strip() or self.creds.get('krx_api_key')
+            if not key:
+                QMessageBox.information(self,'KRX 인증키 필요','API · 텔레그램에서 별도의 KRX OPEN API 인증키를 등록해 주세요.');return
+        action=('최근 7거래일의 코스피·코스닥 일봉을 KRX에 요청합니다.\n'
+                '두 시장의 서비스 이용 승인과 데이터 사용 약관을 확인했나요?\n'
+                '오늘 자료는 잠정치이며 다음 날 다시 확인해야 해요.\n' if collect else '저장 시세로만 판정합니다.\n')
         if QMessageBox.question(self,'테마1 판정 시작',
             f'자료 {source} · 확인한 거래일 {len(data["calendar"]["days"])}일 · 기준일 {data["through"]}\n'
             '입력 범위의 모든 거래일을 빠짐없이 확인했나요?\n'
-            '저장 시세로만 판정합니다. 전체 시장 수집 완료를 보증하지 않아요.\n'
+            +action+'전체 시장 수집 완료를 보증하지 않아요.\n'
             '완료 후 이 창을 닫고 테마1 결과를 다시 열어 주세요.') != QMessageBox.StandardButton.Yes:return
-        self.run_task(lambda:prepare_theme_days(self.history,dates,mode,source),
-                      self.theme_prepared,'테마1 저장 시세 판정')
+        if collect:
+            self.run_task(lambda progress,cancelled:collect_and_prepare(self.history,KRXDailyClient(key),data,mode,
+                          progress=progress,cancelled=cancelled),self.theme_prepared,
+                          '테마1 수집 및 판정 완료',with_progress=True)
+        else:
+            self.run_task(lambda:prepare_theme_days(self.history,dates,mode,source),
+                          self.theme_prepared,'테마1 저장 시세 판정')
 
     def theme_prepared(self,result):
+        collection=result.get('collection')
+        collected=(f'KRX 신규 응답 {collection["requests"]}회 · 저장 {collection["rows"]:,}행\n'
+                   +('오늘 자료 포함 · 잠정치예요.\n' if collection['provisional'] else '') if collection else '')
         QMessageBox.information(self,'테마1 판정 완료',
+            collected+
             f'저장된 종목 {result["symbols"]}개 · 감지 {result["matched"]}개\n'
             f'자료 부족 종목 {result["states"].get("PRICE_MISSING",0)}개\n'
             f'시장별 일별 자료가 없는 구간 {len(result["missing_market_days"])}개\n'
