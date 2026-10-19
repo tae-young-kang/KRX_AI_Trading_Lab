@@ -71,7 +71,7 @@ def groups(db,mode):
         if key not in grouped:
             grouped[key] = dict(condition_id=hashlib.sha256(condition_signature.encode()).hexdigest()[:8],
                 label=condition_label(cfg),source=source,calendar=calendar,count=0,last_scan=0,
-                horizons={h:dict(observed=0,up=0,down=0,flat=0,waiting=0,missing=0,unreviewed=0,values=[]) for h in (1,3,5)})
+                horizons={h:dict(observed=0,up=0,down=0,flat=0,waiting=0,missing=0,unreviewed=0,values=[],by_day={}) for h in (1,3,5)})
         group = grouped[key]
         group['count'] += 1
         group['last_scan'] = max(group['last_scan'],row['scan_id'])
@@ -85,6 +85,7 @@ def groups(db,mode):
                 bucket['observed'] += 1
                 bucket['up' if change>1e-9 else 'down' if change< -1e-9 else 'flat'] += 1
                 bucket['values'].append(change)
+                bucket['by_day'].setdefault(identity[0],[]).append(change)
             elif result['state']=='NOT_DUE':
                 bucket['waiting'] += 1
             else:
@@ -93,6 +94,11 @@ def groups(db,mode):
         for bucket in group['horizons'].values():
             values = bucket.pop('values')
             bucket['mean'] = mean(values) if values else None
+            by_day = bucket.pop('by_day')
+            bucket['observed_days'] = len(by_day)
+            # Each recommendation date gets equal weight, regardless of how
+            # many stocks were recommended on that date.
+            bucket['daily_mean'] = mean(mean(changes) for changes in by_day.values()) if by_day else None
     return sorted(grouped.values(),key=lambda g:g['last_scan'],reverse=True),unverified_time
 
 
@@ -110,11 +116,17 @@ def summary(db,mode):
         for horizon,bucket in group['horizons'].items():
             mean_label = '평균 미확인' if bucket['mean'] is None else '평균 변화 '+change_label(bucket['mean'])
             short = ' · 관측 20개 미만' if bucket['observed']<20 else ''
-            lines.append(f"{horizon}거래일: 관측 {bucket['observed']} · 상승 {bucket['up']}/하락 {bucket['down']}/동일 {bucket['flat']} · {mean_label}{short}")
+            daily = ('날짜별 평균 미확인' if bucket['daily_mean'] is None else
+                     '날짜별 균등 평균 '+change_label(bucket['daily_mean']))
+            if bucket['observed'] and bucket['observed_days']<10:
+                short += ' · 평가일 10일 미만'
+            lines.append(f"{horizon}거래일: 관측 {bucket['observed']}건/{bucket['observed_days']}일 · 상승 {bucket['up']}/하락 {bucket['down']}/동일 {bucket['flat']} · {mean_label} · {daily}{short}")
             lines.append(f"대기 {bucket['waiting']} · 자료 부족 {bucket['missing']} · 미평가 {bucket['unreviewed']}")
     if len(data)>3:
         lines.append(f'나머지 {len(data)-3}개 묶음은 표시를 생략했어요.')
     if unverified:
         lines.append(f'시각 확인이 필요한 {unverified}개 기록은 집계하지 않았어요.')
-    lines.append('가격 변화는 비용·배당·분할 미반영이며 실제 승패/순수익·기대수익률이 아니에요. 겹친 종목/기간도 독립 표본이 아니며 조건을 자동 변경하지 않아요.')
+    lines.append('날짜별 균등 평균은 같은 추천일 종목을 먼저 평균해 날짜마다 같은 비중으로 계산합니다. '
+                 '가격 변화는 비용·배당·분할 미반영이며 실제 순수익·기대수익률이 아니에요. '
+                 '겹친 종목/보유 기간은 독립 표본이 아니며 조건을 자동 변경하지 않아요.')
     return '\n'.join(lines)
