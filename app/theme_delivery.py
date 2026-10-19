@@ -69,7 +69,11 @@ def deliver_one(history, *, alert_id, mode, source, destination, send, expected_
                          (alert_id,mode,source)).fetchone()
         if alert is None or len(alert['message'])>4000:
             raise ValueError('알림 내용을 확인해 주세요.')
-        message=alert['message']
+        ids=json.loads(run['alert_ids_json'])
+        first,separator,rest=alert['message'].partition('\n')
+        message=first+f'\n전체 감지 {len(ids)}종목 · 목록 {ids.index(alert_id)+1}번째'+separator+rest
+        if len(message)>4000:
+            raise ValueError('종목 수 안내를 포함한 알림이 너무 길어요. 내용을 확인해 주세요.')
         db.execute('INSERT INTO theme_deliveries VALUES(?,?,?,NULL)',(alert_id,destination,'SENDING'))
     # Commit before crossing IO boundary. A crash at either side blocks retry.
     try:
