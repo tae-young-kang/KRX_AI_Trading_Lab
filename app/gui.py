@@ -762,7 +762,8 @@ class MainWindow(QMainWindow):
         self.research_result=lbl('학습 구간에서만 선정한 후보 전략을 검증 구간에서 확인합니다.','H2')
         self.research_result.setWordWrap(True);v.addWidget(self.research_result)
         self.research_table=make_table(['실험 조건','시장','학습 거래일','학습 초과수익 3일','검증 거래일',
-                                        '검증 초과수익 3일','검증 Rank IC','결과'])
+                                        '검증 초과수익 3일','검증 Rank IC','학습→검증 차이(%p)',
+                                        '자료/결과 해석','승인 상태'])
         self.research_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         self.research_table.itemSelectionChanged.connect(self.research_detail)
         v.addWidget(self.research_table,4)
@@ -985,21 +986,25 @@ class MainWindow(QMainWindow):
         self.run_task(run,done,'종목 선정 조건 검증 완료')
 
     def show_research(self,report,show_message=True):
+        from app.research_comparison import compare_variants, comparison_notice
         self.research_report=report
+        self.research_comparisons=compare_variants(report)
         self.research_table.setRowCount(0)
         states=self.history.research_states(self.research_source.currentText())
-        for r in report['variants']:
+        for r in self.research_comparisons:
             i=self.research_table.rowCount();self.research_table.insertRow(i)
             def fmt(x):return '—' if x is None else f'{x:+.3f}'
             values=[r['name'],r['market'],str(r['train_days']),fmt(r['train_excess3']),
                     str(r['test_days']),fmt(r['test_excess3']),fmt(r['test_ic']),
+                    fmt(r['holdout_gap3']),r['data_quality_label']+' · '+r['comparison_note'],
                     states.get(r['id'], ('표본 부족' if r['train_days']<12 or r['test_days']<5 else '관찰 중'))]
             for j,t in enumerate(values):self.research_table.setItem(i,j,cell(t))
         chosen=next((x for x in report['variants'] if x['id']==report['chosen_on_train_only']),None)
         from app.research_preflight import preflight_notice
         self.research_result.setText(
             '학습 구간 우선 후보: '+(chosen['name'] if chosen else '표본 부족으로 선정하지 않음')
-            +'\n'+preflight_notice(report.get('coverage_quality')))
+            +'\n'+preflight_notice(report.get('coverage_quality'))
+            +'\n'+comparison_notice(report))
         self.research_status.setText(f'{report["data_begin"]} ~ {report["data_end"]} | '
                      f'{report["symbols"]}종목, {report["data_rows"]:,}행, {len(report["variants"])}개 조건 | '
                      'TRAIN으로 조건 순위 선정 / TEST는 미사용 기간 평가')
@@ -1012,13 +1017,19 @@ class MainWindow(QMainWindow):
     def research_detail(self):
         i=self.research_table.currentRow()
         if not self.research_report or i<0 or i>=len(self.research_report['variants']):return
-        r=self.research_report['variants'][i]
+        from app.research_comparison import compare_variants
+        rows=getattr(self,'research_comparisons',None)
+        if rows is None or len(rows)!=len(self.research_report['variants']):
+            rows=compare_variants(self.research_report)
+        r=rows[i]
         def f(k):return '자료 없음' if r.get(k) is None else f'{r[k]:+.3f}'
         self.research_detail_label.setText(
             f'학습(이전 기간): {r["train_days"]}일 / {r["train_signals"]}추천 · 평균 순수익 {f("train_return3")}% · '
             f'초과수익 {f("train_excess3")}%p  |  '
             f'검증(미사용 기간): {r["test_days"]}일 / {r["test_signals"]}추천 · '
             f'평균 순수익 {f("test_return3")}% · 초과수익 {f("test_excess3")}%p · Rank IC {f("test_ic")} · 종목별 수익 비율 {f("test_signal_win_pct")}%\n'
+            f'학습→검증 초과수익 차이 {f("holdout_gap3")}%p · '
+            f'자료 품질 {r["data_quality_label"]} · 해석 {r["comparison_note"]}\n'
             '성과는 날짜별 추천 종목의 동일 가중 평균이며 실계좌 투자수익률이 아닙니다.')
 
     def review_research(self,approve):
