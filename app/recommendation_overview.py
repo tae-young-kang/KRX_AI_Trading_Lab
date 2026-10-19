@@ -111,6 +111,8 @@ def groups(db,mode):
             complete = [mean(changes) for day,changes in by_day.items()
                         if len(changes) == population_by_day[(day,signature)]]
             bucket['complete_days'] = len(complete)
+            bucket['partial_days'] = bucket['observed_days'] - bucket['complete_days']
+            bucket['unobserved_days'] = bucket['selected_days'] - bucket['observed_days']
             bucket['complete_daily_mean'] = mean(complete) if complete else None
     return sorted(grouped.values(),key=lambda g:g['last_scan'],reverse=True),unverified_time
 
@@ -137,14 +139,18 @@ def summary(db,mode):
             complete = ('완전 관측일 평균 미확인' if bucket['complete_daily_mean'] is None else
                         '완전 관측일 평균 '+change_label(bucket['complete_daily_mean']))
             lines.append(f"대기 {bucket['waiting']} · 자료 부족 {bucket['missing']} · 미평가 {bucket['unreviewed']}")
-            if bucket['observed_days']:
-                lines.append(f"집계 내 완전 관측일 {bucket['complete_days']}/{bucket['selected_days']}일 · {complete}")
+            # Show the denominator even when there is no observed return at all.
+            # These day counts are relative to this price/calendar provenance.
+            lines.append(
+                f"집계 내 완전 관측일 {bucket['complete_days']}/{bucket['selected_days']}일"
+                f" · 부분 관측 {bucket['partial_days']}일"
+                f" · 이 출처에서 미관측 {bucket['unobserved_days']}일 · {complete}")
     if len(data)>3:
         lines.append(f'나머지 {len(data)-3}개 묶음은 표시를 생략했어요.')
     if unverified:
         lines.append(f'시각 확인이 필요한 {unverified}개 기록은 집계하지 않았어요.')
     lines.append('날짜별 균등 평균은 일부 종목만 관측된 날짜도 포함합니다. '
-                 '완전 관측일의 분모는 모든 선택된 추천일이며 집계 밖 전체 시장 완전성은 아니에요. '
+                 '완전 관측일은 이 자료 출처에서 종목이 모두 확인된 날짜예요. 분모는 선택된 추천일 전체이며 시장 전체 완전성은 아니에요. '
                  '가격 변화는 비용·배당·분할 미반영이며 실제 순수익·기대수익률이 아니에요. '
                  '겹친 종목/보유 기간은 독립 표본이 아니며 조건을 자동 변경하지 않아요.')
     return '\n'.join(lines)
