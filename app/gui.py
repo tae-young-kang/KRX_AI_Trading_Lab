@@ -763,7 +763,7 @@ class MainWindow(QMainWindow):
         self.research_result.setWordWrap(True);v.addWidget(self.research_result)
         self.research_table=make_table(['실험 조건','시장','학습 거래일','학습 초과수익 3일','검증 거래일',
                                         '검증 초과수익 3일','검증 Rank IC','학습→검증 차이(%p)',
-                                        '자료/결과 해석','승인 상태'])
+                                        'TEST 초반→후반','자료/결과 해석','승인 상태'])
         self.research_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         self.research_table.itemSelectionChanged.connect(self.research_detail)
         v.addWidget(self.research_table,4)
@@ -996,7 +996,9 @@ class MainWindow(QMainWindow):
             def fmt(x):return '—' if x is None else f'{x:+.3f}'
             values=[r['name'],r['market'],str(r['train_days']),fmt(r['train_excess3']),
                     str(r['test_days']),fmt(r['test_excess3']),fmt(r['test_ic']),
-                    fmt(r['holdout_gap3']),r['data_quality_label']+' · '+r['comparison_note'],
+                    fmt(r['holdout_gap3']),
+                    fmt(r.get('test_early_excess3'))+' → '+fmt(r.get('test_late_excess3')),
+                    r['data_quality_label']+' · '+r['comparison_note'],
                     states.get(r['id'], ('표본 부족' if r['train_days']<12 or r['test_days']<5 else '관찰 중'))]
             for j,t in enumerate(values):self.research_table.setItem(i,j,cell(t))
         chosen=next((x for x in report['variants'] if x['id']==report['chosen_on_train_only']),None)
@@ -1030,7 +1032,11 @@ class MainWindow(QMainWindow):
             f'평균 순수익 {f("test_return3")}% · 초과수익 {f("test_excess3")}%p · Rank IC {f("test_ic")} · 종목별 수익 비율 {f("test_signal_win_pct")}%\n'
             f'학습→검증 초과수익 차이 {f("holdout_gap3")}%p · '
             f'자료 품질 {r["data_quality_label"]} · 해석 {r["comparison_note"]}\n'
-            '성과는 날짜별 추천 종목의 동일 가중 평균이며 실계좌 투자수익률이 아닙니다.')
+            f'TEST 초반 시장대비 초과수익 {f("test_early_excess3")}%p'
+            f' ({r.get("test_early_days",0)}일) → 후반 {f("test_late_excess3")}%p'
+            f' ({r.get("test_late_days",0)}일) · 후반 변화 {f("test_late_gap3")}%p'
+            f' · {r.get("test_stability_note","구간 분리 기록 없음")}\n'
+            '같은 검증 구간을 앞/뒤로 나눈 진단으로 독립적인 추가 검증이나 실제 투자수익은 아닙니다.')
 
     def review_research(self,approve):
         ix=self.research_table.currentRow()
