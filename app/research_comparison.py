@@ -42,7 +42,9 @@ def compare_variants(report, *, min_train_days=12, min_test_days=5):
         test_days = row.get('test_days')
         enough_train = type(train_days) is int and train_days >= min_train_days
         enough_test = type(test_days) is int and test_days >= min_test_days
-        gap = round(test-train, 4) if train is not None and test is not None else None
+        # Two individually finite extremes can still overflow on subtraction.
+        delta = test-train if train is not None and test is not None else None
+        gap = round(delta, 4) if delta is not None and isfinite(delta) else None
 
         if status == 'ALERT':
             interpretation = '자료 부족·이상 경고'
@@ -52,7 +54,7 @@ def compare_variants(report, *, min_train_days=12, min_test_days=5):
             interpretation = '학습 표본 부족'
         elif not enough_test:
             interpretation = '검증 표본 부족'
-        elif train is None or test is None:
+        elif train is None or test is None or gap is None:
             interpretation = '비교 불가'
         elif train > 0 and test <= 0:
             interpretation = '학습 양수→검증 비양수'
