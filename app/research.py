@@ -78,7 +78,15 @@ def build_features(bars, window=20):
         arr.sort(key=lambda b:b.date)
         for i in range(window,len(arr)):
             b=arr[i];prev=arr[i-window:i]
-            # Missing day bars / corporate actions: no synthetic interpolation.
+            session_index=market_dayindex[market][b.date]
+            # Require the IMMEDIATELY preceding market sessions. A suspended
+            # stock's last 20 recorded bars may span months and otherwise make
+            # volume spikes/MA look comparable to continuously traded stocks.
+            # Never bridge an absent day or manufacture an interpolated bar.
+            if (session_index < window or
+                    [bar.date for bar in prev] != market_dates[market][session_index-window:session_index]):
+                invalid+=1
+                continue
             if min(x.volume for x in prev)<=0:invalid+=1;continue
             vr=b.volume/(sum(x.volume for x in prev)/window)*100
             change=pct(b.close,arr[i-1].close)
@@ -91,7 +99,6 @@ def build_features(bars, window=20):
             pscore=clamp(1-abs(change-3)/8)
             score=round(45*vscore+30*lscore+25*pscore,4)
             future={}
-            session_index=market_dayindex[market][b.date]
             for horizon in HORIZONS:
                 # The next h-th session is defined by the MARKET calendar.
                 # If a stock stopped trading, never shift its entry/exit later.
