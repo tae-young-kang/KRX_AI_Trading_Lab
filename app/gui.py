@@ -26,6 +26,7 @@ from app.recommendation_schedule import summary as recommendation_schedule_summa
 from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
 from app.theme_input import prepare_selection as prepare_theme_selection
+from app.theme_input import selection_from_days, prepare_days as prepare_theme_days
 from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
 from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text
@@ -330,9 +331,12 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(mode.title+' · 테마1 저장 결과')
         dialog.resize(800,600)
         layout=QVBoxLayout(dialog)
-        guide=lbl('저장된 결과만 봅니다. 새 검색·발송·주문은 실행하지 않아요. 텔레그램: /테마1','Muted')
+        guide=lbl('저장된 감지 결과예요. 새 판정과 알림 발송은 아래 버튼에서 각각 선택하세요. 텔레그램 조회: /테마1','Muted')
         guide.setWordWrap(True)
         layout.addWidget(guide)
+        prepare_button=QPushButton('새 테마1 판정 만들기 · 저장 시세 사용')
+        prepare_button.clicked.connect(self.prepare_theme_guided)
+        layout.addWidget(prepare_button)
         view=QTextEdit()
         view.setReadOnly(True)
         layout.addWidget(view)
@@ -907,17 +911,44 @@ class MainWindow(QMainWindow):
                                 QMessageBox.information(self,'KRX 저장',f'신규 응답 {r["requests"]}회 / {r["rows"]:,}행 저장')),
                       'KRX 수집 완료')
 
+    def prepare_theme_guided(self):
+        mode=current_mode(self.cfg).key
+        sources=['DEMO'] if mode=='DEMO' else ['KRX','CSV_USER']
+        source,ok=QInputDialog.getItem(self,'1/2 · 테마1 자료 선택',
+            '이미 저장한 일봉 자료를 골라 주세요. 자료가 없으면 고급 연구에서 먼저 수집하거나 CSV를 넣으세요.',sources,0,False)
+        if not ok:return
+        dates,ok=QInputDialog.getMultiLineText(self,'2/2 · 확인한 거래일',
+            '휴장일을 뺀 실제 거래일을 오래된 순서대로 한 줄에 하나씩 입력하세요 (YYYY-MM-DD).\n'
+            '마지막 날짜가 감지 기준일이에요. 최근 6거래일과 전일 종가용 1일, 총 7거래일 이상이 필요해요.\n'
+            '저장된 날짜를 거래일로 자동 간주하지 않아요. 거래소 달력에서 빠진 거래일이 없는지 확인하세요.')
+        if not ok:return
+        try:
+            data,_=selection_from_days(dates,mode,source)
+        except ValueError as error:
+            QMessageBox.information(self,'거래일 확인',str(error));return
+        if QMessageBox.question(self,'테마1 판정 시작',
+            f'자료 {source} · 확인한 거래일 {len(data["calendar"]["days"])}일 · 기준일 {data["through"]}\n'
+            '입력 범위의 모든 거래일을 빠짐없이 확인했나요?\n'
+            '저장 시세로만 판정합니다. 전체 시장 수집 완료를 보증하지 않아요.\n'
+            '완료 후 이 창을 닫고 테마1 결과를 다시 열어 주세요.') != QMessageBox.StandardButton.Yes:return
+        self.run_task(lambda:prepare_theme_days(self.history,dates,mode,source),
+                      self.theme_prepared,'테마1 저장 시세 판정')
+
+    def theme_prepared(self,result):
+        QMessageBox.information(self,'테마1 판정 완료',
+            f'저장된 종목 {result["symbols"]}개 · 감지 {result["matched"]}개\n'
+            f'자료 부족 종목 {result["states"].get("PRICE_MISSING",0)}개\n'
+            f'시장별 일별 자료가 없는 구간 {len(result["missing_market_days"])}개\n'
+            '전체 시장 자료 완료는 미확인입니다. 홈의 테마1 결과 또는 /테마1에서 확인하세요.\n'
+            '실제 발송·주문은 하지 않았어요.')
+
     def prepare_theme_one(self):
         mode=current_mode(self.cfg).key
         path,_=QFileDialog.getOpenFileName(self,'테마1 거래일·자료 출처 선택','','테마1 자료 선택 (*.json)')
         if not path:
             return
         self.run_task(lambda:prepare_theme_selection(self.history,path,mode),
-                      lambda result:QMessageBox.information(self,'테마1 판정 완료',
-                          f'저장된 종목 {result["symbols"]}개 · 감지 {result["matched"]}개\n'
-                          f'자료 부족 종목 {result["states"].get("PRICE_MISSING",0)}개\n'
-                          '전체 시장 자료 완료는 미확인입니다. 홈의 테마1 결과 또는 /테마1에서 확인하세요.\n'
-                          '실제 발송·주문은 하지 않았어요.'),'테마1 저장 시세 판정')
+                      self.theme_prepared,'테마1 저장 시세 판정')
 
     def import_recommendation_prices(self):
         if self.work is not None and self.work.isRunning():

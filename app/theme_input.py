@@ -1,6 +1,7 @@
 """Explicit local calendar selection for cached daily theme research."""
 from datetime import date, datetime
 import json
+import re
 from app.recommendation_outcomes import SessionEvidence, session_day
 from app.theme_store import prepare
 from app.trading_clock import KST
@@ -43,4 +44,23 @@ def parse_selection(raw, mode, *, today=None, minimum_sessions=7):
 
 def prepare_selection(history,path,mode,*,today=None):
     data,sessions=load_selection(path,mode,today=today)
+    return prepare(history,sessions=sessions,through=data['through'],mode=mode,source=data['source'])
+
+
+def selection_from_days(text, mode, source, *, today=None):
+    """Build the same validated selection from explicitly confirmed dates, not DB guesses."""
+    if not isinstance(text,str) or len(text)>100000:
+        raise ValueError('확인한 거래일을 날짜로 입력해 주세요.')
+    days=[part for part in re.split(r'[\s,]+',text.strip()) if part]
+    if not days:
+        raise ValueError('전일 종가를 포함한 7거래일 이상을 입력해 주세요.')
+    # Retain the input order: duplicates and reversed dates must not be silently fixed.
+    data=dict(version=1,mode=mode,source=source,through=days[-1],
+              calendar=dict(days=days,begin=days[0],end=days[-1],
+                            source='DEMO' if mode=='DEMO' else 'USER_CONFIRMED'))
+    return parse_selection(json.dumps(data).encode('utf-8'),mode,today=today)
+
+
+def prepare_days(history,text,mode,source,*,today=None):
+    data,sessions=selection_from_days(text,mode,source,today=today)
     return prepare(history,sessions=sessions,through=data['through'],mode=mode,source=data['source'])
