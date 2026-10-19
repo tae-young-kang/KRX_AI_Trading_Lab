@@ -120,3 +120,9 @@ def test_research_export_includes_quality_and_gap_without_reordering(tmp_path):
     assert rows[0]['data_quality_label']=='자료 품질 경고'
     assert rows[1]['comparison_note']=='자료 부족·이상 경고'
     assert raw['chosen_on_train_only']=='A'
+
+
+def test_extreme_finite_values_cannot_overflow_to_inf_display():
+    row=compare_variants(report(experiment(train=-1e308,test=1e308)))[0]
+    assert row['holdout_gap3'] is None
+    assert row['comparison_note']=='비교 불가'
