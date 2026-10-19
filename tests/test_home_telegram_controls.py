@@ -44,3 +44,20 @@ def test_home_stop_uses_same_receiver_stop_and_waits_for_finished():
     gui_method('telegram_orders_finished')(fake)
     assert fake.home_telegram_start.enabled
     assert fake.home_telegram_status.text()==fake.telegram_order_status.text()
+
+
+def test_startup_receiver_uses_saved_settings_without_duplicate_start():
+    fake=widgets();calls=[]
+    fake.cfg={'telegram_user_id':'22','telegram_chat_id':'22'}
+    fake.creds=SimpleNamespace(get=lambda name:'synthetic-token')
+    fake.telegram_order_worker=None
+    fake.start_telegram_orders=lambda **kwargs:calls.append(kwargs)
+    auto=gui_method('start_telegram_recommendations_automatically')
+    auto(fake)
+    assert calls==[{'automatic':True}]
+    fake.telegram_order_worker=SimpleNamespace(isRunning=lambda:True)
+    auto(fake)
+    assert len(calls)==1
+    fake.telegram_order_worker=None;fake.cfg['telegram_chat_id']=''
+    auto(fake)
+    assert len(calls)==1 and '자동 수신 대기' in fake.home_telegram_status.text()

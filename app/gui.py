@@ -188,6 +188,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(25000,self.maybe_daily_research)
         QTimer.singleShot(30000,self.maybe_daily_recommendation_evaluation)
         self.db.log('START', 'GUI 실행 - 실계좌 주문 기능 없음')
+        QTimer.singleShot(2000,self.start_telegram_recommendations_automatically)
 
     def build(self):
         main = QWidget()
@@ -1616,7 +1617,19 @@ class MainWindow(QMainWindow):
                                     '\n\n'.join(report['steps']) + '\n\n' + report['notice'])
         self.run_task(run_order_demo, done, '오프라인 가짜 주문 흐름 확인 완료')
 
-    def start_telegram_orders(self):
+    def start_telegram_recommendations_automatically(self):
+        """One startup attempt using saved credentials; never enables orders."""
+        if self.telegram_order_worker and self.telegram_order_worker.isRunning():return
+        try:
+            if min(int(self.cfg['telegram_user_id']),int(self.cfg['telegram_chat_id']))<=0:
+                raise ValueError()
+            if not self.creds.get('telegram_token'):raise ValueError()
+        except (ValueError,TypeError):
+            self.set_telegram_status('자동 수신 대기 · 연결 설정에서 텔레그램 정보를 저장해 주세요.')
+            return
+        self.start_telegram_orders(automatic=True)
+
+    def start_telegram_orders(self,checked=False,*,automatic=False):
         if self.telegram_order_worker and self.telegram_order_worker.isRunning():
             return
         if self.mode_select.currentData() != current_mode(self.cfg).key:
@@ -1632,8 +1645,8 @@ class MainWindow(QMainWindow):
         except (ValueError, TypeError):
             QMessageBox.information(self, '연결 정보 필요', '봇 연결 키·허용 User ID·개인 대화 Chat ID를 입력하고 저장하세요.')
             return
-        orders_enabled = self.cfg['data_mode'] == 'DEMO'
-        if QMessageBox.question(self, '텔레그램 명령 받기',
+        orders_enabled = not automatic and self.cfg['data_mode'] == 'DEMO'
+        if not automatic and QMessageBox.question(self, '텔레그램 명령 받기',
                 telegram_start_guidance(self.cfg) + '\n텔레그램 명령 받기를 시작할까요?') != QMessageBox.StandardButton.Yes:
             return
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
