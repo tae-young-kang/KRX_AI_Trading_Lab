@@ -716,3 +716,13 @@ b90f606에서는 계좌 패턴 검사의 산술식 오탐을 확인하기 전에
 - 분리된 소규모 테스트 **10개 통과**, 소규모 검사 모듈 compileall 통과.
 - CI는 GUI 조작/실제 텔레그램/장중 키움 모의 체결/HTS 잔고 일치/실계좌 주문/실제 데이터 수익률을 검증하지 않았습니다. 단계5 실제 검증 및 단계7~9 독립 실데이터 검증은 아직 미완료.
 - Draft PR #1 별도 분기 유지. 병합 전 보안 diff·전체 CI·사용자 작업 충돌 확인. 후속 단계에서 기록/자료 품질 개선과 단계5 모의 실증 준비를 원래 우선순위대로 계속하세요.
+
+## 2026-10-19 다음 개발 묶음: 자료 확보 상태 세 단계/CI 759 통과
+
+- 전체 로드맵 단계 7/8: 같은 조건·동일 추천일 기준 모든 관측 완료/일부 완료/관측 없음 3가지 날짜 상태를 1/3/5거래일별 분리.
+- `observed_days`는 1개 이상 가격 관측된 날짜, `complete_days`는 모든 선택 추천 종목의 가격이 해당 자료 출처 그룹에서 관측된 날짜. `partial_days=observed_days-complete_days`, `unobserved_days=selected_days-observed_days`.
+- 가격 자료가 없는 날짜도 분모에 포함. 0/N 완전 관측일 및 미관측 N일을 표기하며, 미관측을 0% 손익으로 치환하지 않습니다.
+- 핵심 코드: `app/recommendation_overview.py`; 회귀 테스트: `tests/test_recommendation_day_average.py` 2개 추가.
+- GitHub Actions **759 passed in 15.52s** (Python 3.11, test_scan_ui 제외): https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39225714845, 코드 SHA `86a108a3525ffe3e3657ffabef0753f62f932a90`.
+- 이 기능은 통계/자료 확보 설명이며 예측 성능 학습/검증을 자동 완료한 것이 아닙니다. 비밀정보·실계좌 주문 사용 없음.
+- 아직 남은 것: Windows PySide6 화면 실제 동작/문구 길이 검증, 실제 자료·시간대·기업행동/비용 대조, 키움 모의 체결/취소·장부 운영 실증, 단계 8~9의 외부 데이터 기반 검증. PR #1 별도 브랜치 유지.

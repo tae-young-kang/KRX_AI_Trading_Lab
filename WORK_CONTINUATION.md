@@ -92,3 +92,14 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - **성공한 검증된 코드 SHA:** `3bf1b166bf2489242dada48fad9f03da79ef4d80`. 문서만 수정한 SHA `de23c00da8a67be965cf2aa041ed82efc2fddd58`의 CI도 success. 검증 링크: https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39223146708
 - CI는 `tests/test_scan_ui.py`를 제외한 Python 3.11 오프라인 검증이며, **Windows 실 GUI 동선·실 키움 모의서버/체결·HTS 대조·복구 실증·실계좌는 여전히 미검증**.
 - 최종 PR 검토 시 현재 원격 SHA, 열린 PR #1, AGENTS.md, DEVELOPMENT_ROADMAP.md, DEVELOPMENT_HANDOFF.md와 이 파일을 함께 읽고, 최신 전체 CI 상태를 다시 확인하세요.
+
+## 2026-10-19 추가 개발: 추천 성과의 데이터 확보 상태 3단계
+
+- 현재 PR #1에서 `app/recommendation_overview.py`의 1/3/5거래일 요약에 **완전 관측일 / 부분 관측일 / 이 출처 기준 미관측일**을 모두 표시하도록 개선했습니다.
+- 정의: `complete_days + partial_days + unobserved_days == selected_days`. 일부라도 관측했지만 해당 조건·일자의 모든 선택 종목이 관측되지 않으면 부분 관측. 어떤 종목도 관측되지 않으면 미관측. **종목이 하나도 평가되지 않은 경우에도 0/N일을 보여줍니다.**
+- 이 상태는 선택된 최근 3,000개의 최초 추천·조건 범위 안에서의 자료 보유 상태이며, 실제 전체시장 완전성/실제 계좌 수익을 증명하지 않습니다. 자료 출처별 그룹을 섞지 않습니다.
+- `tests/test_recommendation_day_average.py`에 부분/미관측/0건·요약 표시 확인 검사 2개 추가. 기존 텔레그램 안내 문구 유지.
+- 실제 GitHub Actions Python 3.11 전체 오프라인 테스트 `759 passed in 15.52s`, **success**: https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39225714845
+- 성공 코드 SHA: `86a108a3525ffe3e3657ffabef0753f62f932a90`. 집 PC Work는 현재 브랜치의 실제 SHA, PR #1 diff, CI 로그를 다시 대조하세요.
+- 검사 범위: `tests/test_scan_ui.py` 제외. Windows GUI·실 텔레그램·실제 키움 모의 체결/장부 대조·모든 실계좌 주문·개인 DB 검증은 여전히 미완료.
+- 다음 단계는 조건별 관측 대상과 자료 출처/거래일 대조를 실데이터로 검증하되, 검증되지 않은 자료를 0% 수익률로 대체하거나 자동 매매 조건으로 적용하지 마세요.
