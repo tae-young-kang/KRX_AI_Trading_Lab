@@ -9,7 +9,8 @@ from app.trading_clock import KST
 
 
 SOURCES = {'DEMO':'가상 자료','KRX':'KRX 자료','CSV_USER':'사용자 제공','NONE':'자료 없음'}
-CALENDARS = {'DEMO':'가상 거래일','USER_CONFIRMED':'사용자 확인 거래일','OFFICIAL':'공식 거래일','NONE':'거래일 미확인'}
+CALENDARS = {'DEMO':'가상 거래일','USER_CONFIRMED':'사용자 확인 거래일','OFFICIAL':'공식 거래일','NONE':'거래일 미확인',
+             'EXCHANGE_CALENDARS_XKRX':'거래일 달력(XKRX)'}
 
 
 def change_label(value):

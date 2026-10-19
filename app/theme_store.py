@@ -8,6 +8,15 @@ from app.recommendation_outcomes import session_day
 from app.nxt_evidence import latest_for_day
 
 
+def missing_data_notice(report):
+    missing=report.get('missing_market_days',[])
+    if not missing:return ''
+    dates=', '.join(sorted({day for _,day in missing}))
+    return ('[자료 부족 · 판정 확인 필요]\n시세가 없는 날짜: '+dates+'\n'
+            '조건에 맞는 종목이 없다는 뜻이 아니에요. 해당 날짜 자료가 제공된 뒤 다시 검색해 주세요.\n'
+            'KRX 일봉은 당일 자료 제공이 늦을 수 있어요. 자료가 있는 날짜로 임의 변경하지 않았어요.')
+
+
 def prepare(history, *, sessions, through, mode, source):
     """Use one bounded cache read; retain evidence corrections as new revisions."""
     if (mode not in ('DEMO','MOCK','REAL_QUOTES') or source not in ('DEMO','KRX','CSV_USER')
@@ -112,6 +121,10 @@ def latest_report(history, *, mode, source=None, page=1):
                 f'자료 부족 종목 {report["states"].get("PRICE_MISSING",0)}개 · '
                 f'시장별 일별 자료가 없는 구간 {len(report["missing_market_days"])}개\n'
                 '전체 시장 수집 완료는 미확인입니다. 발송·주문 완료 기록이 아닙니다.\n')
+        notice=missing_data_notice(report)
+        if notice and not ids:
+            return notice+f'\n기준일 {run["day"]} · 저장된 종목 {report["symbols"]}개\n보낼 감지 알림은 아직 없어요.'
+        if notice:header=notice+'\n\n'+header
         if not ids:
             return header+'이 판정에서 감지된 종목이 없어요. 자료 부족 여부를 함께 확인하세요.'
         if page>len(ids):

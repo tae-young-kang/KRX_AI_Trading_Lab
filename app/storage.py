@@ -128,10 +128,10 @@ class Database:
             db.execute('BEGIN')
             return recommendation_overview.summary(db,mode)
 
-    def recommendation_search_result(self, mode, scan_id, *, page=1):
+    def recommendation_search_result(self, mode, scan_id, *, page=1, details=False):
         with self.connect() as db:
             db.execute('BEGIN')
-            return recommendations.search_result(db,mode,scan_id,page=page)
+            return recommendations.search_result(db,mode,scan_id,page=page,details=details)
 
     def recommendation_page_count(self, mode):
         with self.connect() as db:

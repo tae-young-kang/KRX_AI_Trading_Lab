@@ -255,14 +255,16 @@ class TelegramOrderService:
                     reply = '새 검색 요청을 중지했어요. 집 PC에서 수신을 다시 시작해 주세요.'
                 else:
                     reply = self.recommendation_request.request()
-            elif text.split(' ',1)[0] == '/추천결과':
-                match = re.fullmatch(r'/추천결과 ([1-9][0-9]{0,11})(?: ([1-9][0-9]{0,5}))?', text)
+            elif text.split(' ',1)[0] in ('/추천결과','/추천상세'):
+                detail=text.startswith('/추천상세 ')
+                match = re.fullmatch(r'/(?:추천결과|추천상세) ([1-9][0-9]{0,11})(?: ([1-9][0-9]{0,5}))?', text)
                 if not match:
-                    reply = '사용법: /추천결과 검색번호 [페이지] · 예: /추천결과 12 2'
+                    reply = '사용법: /추천결과 검색번호 [페이지] · 예: /추천결과 12 2\n자세히: /추천상세 12 2'
                 elif not self.recommendation_report:
                     reply = '추천 기록 연결이 없어요. 집 PC에서 확인해 주세요.'
                 else:
-                    reply = self.recommendation_report(False,scan_id=int(match[1]),page=int(match[2] or 1))
+                    args=dict(scan_id=int(match[1]),page=int(match[2] or 1))
+                    reply = self.recommendation_report(False,**args,details=True) if detail else self.recommendation_report(False,**args)
             elif text == '/평가상태':
                 reply=self.recommendation_status() if self.recommendation_status else '추천 성적 상태 연결이 없어요. 집 PC에서 수신을 다시 시작해 주세요.'
             elif text == '/추천요약':

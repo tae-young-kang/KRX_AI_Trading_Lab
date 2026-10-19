@@ -35,8 +35,8 @@ def test_selection_survives_restart_and_request_freezes_confirmed_dates(tmp_path
     result=prepare_confirmed(history,frozen,'REAL_QUOTES',remember=False)
     assert saved_selection(history,'REAL_QUOTES')==newer
     request.finish(success=True,result=result)
-    assert '감지 0개' in request.summary() and data['through'] in request.summary()
-    assert '전체 시장 수집 완료는 미확인' in request.summary()
+    assert '자료 부족' in request.summary() and data['through'] in request.summary()
+    assert request.state=='NEEDS_DATA' and '없다는 뜻이 아니에요' in request.summary()
 
 
 def test_missing_settings_expiry_mode_and_stop_fail_without_execution(tmp_path):
@@ -90,4 +90,4 @@ def test_gui_timer_hands_theme_to_cached_engine_without_market_scan(tmp_path):
     gui_method('poll_remote_scan',current_mode=lambda cfg:SimpleNamespace(key='REAL_QUOTES'),
                prepare_confirmed=prepare_confirmed)(fake)
     assert calls==['cached task'] and not fake.remote_theme_active
-    assert '감지 0개' in request.summary()
+    assert '자료 부족' in request.summary() and request.state=='NEEDS_DATA'

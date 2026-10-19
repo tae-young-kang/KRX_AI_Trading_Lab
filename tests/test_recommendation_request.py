@@ -220,3 +220,20 @@ def test_completion_failure_stop_and_old_receipt_do_not_change_new_request():
         return 9
     request.send_notice(next_request, active=True)
     assert '요청했어요' in request.summary() and '발송 응답 확인' not in request.summary()
+
+
+def test_detailed_recommendation_command_auth_replay_and_scope(sandbox):
+    service,broker,_,_=sandbox
+    calls=[]
+    def report(performance,*,scan_id,page,details=False):
+        calls.append((scan_id,page,details))
+        return '고정된 상세 정보'
+    service.recommendation_report=report
+    event=update(sandbox,1,'/추천상세 12 2')
+    assert service.handle(event)==service.handle(event)=='고정된 상세 정보'
+    assert calls==[(12,2,True)]
+    bad=update(sandbox,2,'/추천상세 12');bad['message']['from']['id']=99
+    assert service.handle(bad) is None and calls==[(12,2,True)]
+    service.handle(update(sandbox,3,'/중지'))
+    assert service.handle(update(sandbox,4,'/추천상세 12'))=='고정된 상세 정보'
+    assert calls[-1]==(12,1,True) and broker.calls==[]

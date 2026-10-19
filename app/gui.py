@@ -25,6 +25,7 @@ from app.quote_batch_profile import QuoteBatchProfile
 from app.recommendation_schedule import summary as recommendation_schedule_summary
 from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
+from app.theme_store import missing_data_notice
 from app.theme_input import prepare_selection as prepare_theme_selection
 from app.theme_input import prepare_confirmed
 from app.theme_request import ThemeRequest
@@ -349,7 +350,7 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(mode.title+' · 테마1 종목 찾기')
         dialog.resize(800,600)
         layout=QVBoxLayout(dialog)
-        guide=lbl('저장된 감지 결과예요. 새 판정과 알림 발송은 아래 버튼에서 각각 선택하세요. 텔레그램 조회: /테마1','Muted')
+        guide=lbl('① 오늘 기준 검색 → ② 아래 결과 확인 → ③ 종목이 있으면 텔레그램으로 보내기','Muted')
         guide.setWordWrap(True)
         layout.addWidget(guide)
         prepare_button=QPushButton('테마1 검색 시작 · 오늘 기준',objectName='Primary')
@@ -370,7 +371,8 @@ class MainWindow(QMainWindow):
                 text=theme_latest_report(self.history,mode=mode.key,page=number)
             except Exception:
                 text='테마1 기록을 읽지 못했어요. 저장 공간과 기록 파일을 확인해 주세요.'
-            view.setPlainText(text)
+            if view.toPlainText()!=text:
+                view.setPlainText(text)
         page.valueChanged.connect(load)
         load(1)
         send_button=QPushButton('저장된 최신 테마1 종목을 텔레그램으로 보내기')
@@ -385,7 +387,14 @@ class MainWindow(QMainWindow):
         close=QPushButton('닫기')
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)
-        dialog.exec()
+        refresh=QTimer(dialog)
+        refresh.setInterval(2000)
+        refresh.timeout.connect(lambda:load(page.value()))
+        refresh.start()
+        try:
+            dialog.exec()
+        finally:
+            refresh.stop()
 
     def show_theme_budget(self):
         total,ok=QInputDialog.getInt(self,'1/3 · 총예산','전체 종목에 나눌 총예산 (원)',1000000,1,2000000000,10000)
@@ -411,10 +420,13 @@ class MainWindow(QMainWindow):
         mode=current_mode(self.cfg).key
         try:
             snapshot=theme_snapshot(self.history,mode)
+            if snapshot['count']==0:
+                notice=missing_data_notice(snapshot['report'])
+                raise ValueError(notice or '이번 검색에서 조건에 맞는 종목이 없어 보낼 알림이 없어요. 연결 오류가 아닙니다.')
             chat_id=int(self.cfg['telegram_chat_id'])
             token=self.creds.get('telegram_token')
-            if chat_id<=0 or not token or snapshot['count']==0:
-                raise ValueError('감지 종목과 저장된 텔레그램 연결 정보를 확인해 주세요.')
+            if chat_id<=0 or not token:
+                raise ValueError('알림 받을 방 번호와 봇 연결 키를 연결 설정에 저장해 주세요.')
         except (ValueError,TypeError) as error:
             QMessageBox.information(self,'테마1 알림 확인',str(error))
             return
@@ -953,7 +965,7 @@ class MainWindow(QMainWindow):
             f'자료 {source} · 요청일 {requested_at.date().isoformat()}\n'
             '요청일 기준 최근 6거래일과 전일 종가용 1일을 자동 계산해요. 휴장일이면 직전 거래일까지 봅니다.\n'
             +action+'전체 시장 수집 완료를 보증하지 않아요.\n'
-            '완료 후 이 창을 닫고 테마1 결과를 다시 열어 주세요.') != QMessageBox.StandardButton.Yes:return
+            '완료되면 테마1 결과창이 자동으로 바뀝니다.') != QMessageBox.StandardButton.Yes:return
         if collect:
             self.run_task(lambda progress,cancelled:collect_and_prepare(self.history,KRXDailyClient(key),
                           request_selection(mode,source,now=requested_at),mode,
@@ -964,6 +976,10 @@ class MainWindow(QMainWindow):
                           self.theme_prepared,'테마1 저장 시세 판정')
 
     def theme_prepared(self,result):
+        notice=missing_data_notice(result)
+        if notice:
+            QMessageBox.information(self,'테마1 · 자료 부족',notice)
+            return
         collection=result.get('collection')
         collected=(f'KRX 신규 응답 {collection["requests"]}회 · 저장 {collection["rows"]:,}행\n'
                    +('오늘 자료 포함 · 잠정치예요.\n' if collection['provisional'] else '') if collection else '')
@@ -1613,8 +1629,8 @@ class MainWindow(QMainWindow):
                                      watch_validation=self.mock_watch_status.validation_summary,
                                      watch_history=self.mock_watch_status.history_summary,
                                      watch_funds=self.mock_watch_status.funds_summary,
-                                     recommendation_report=lambda performance, page=1, scan_id=None, db=self.db, mode=current_mode(self.cfg).key:
-                                         (db.recommendation_search_result(mode,scan_id,page=page) if scan_id is not None else
+                                     recommendation_report=lambda performance, page=1, scan_id=None, details=False, db=self.db, mode=current_mode(self.cfg).key:
+                                         (db.recommendation_search_result(mode,scan_id,page=page,details=details) if scan_id is not None else
                                           db.recommendation_summary(mode,performance=performance,page=page)),
                                      theme_budget=lambda total, fee, buffer, page, take_bps=200, stop_bps=300, history=self.history, mode=current_mode(self.cfg).key: theme_budget_text(theme_budget_preview(history,mode=mode,total_won=total,fee_bps=fee,buffer_bps=buffer,take_bps=take_bps,stop_bps=stop_bps),page=page),
                                      theme_status=lambda destination, history=self.history, mode=current_mode(self.cfg).key: theme_delivery_summary(history,mode=mode,destination=destination),

@@ -4,6 +4,7 @@ from time import monotonic
 
 from app.theme_input import saved_selection
 from app.theme_calendar import request_selection
+from app.theme_store import missing_data_notice
 from app.trading_clock import KST
 from datetime import datetime
 
@@ -60,6 +61,10 @@ class ThemeRequest:
         with self.lock:
             if self.state!='RUNNING':return
             self.state='DONE' if success else 'FAILED'
+            if success and missing_data_notice(result):
+                self.state='NEEDS_DATA'
+                self.message=missing_data_notice(result)
+                return
             self.message=(f'기준일 {self.data["through"]} · 감지 {result["matched"]}개 · 자료 부족 '
                           f'{result["states"].get("PRICE_MISSING",0)}개\n/테마1에서 결과를 보세요. 전체 시장 수집 완료는 미확인이에요.'
                           if success else '테마1 판정을 완료하지 못했어요. PC에서 저장 시세·거래일 설정을 확인하세요.')
