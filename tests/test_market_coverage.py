@@ -66,7 +66,7 @@ def test_ingest_omissions_counted_but_not_hidden_behind_minimum_floor(tmp_path):
     'market,day,min_symbols\nKOSPI,2026-10-13,1\nKOSPI,2026-10-13,2\n',
     'market,day,min_symbols\nWRONG,2026-10-13,1\n',
     'market,day,min_symbols\nKOSPI,2026-10-13,1,extra\n',
-    'market,day,min_symbols\\nKOSPI,2999-01-01,1\\n',
+    'market,day,min_symbols\nKOSPI,2999-01-01,1\n',
 ])
 def test_bad_external_reference_is_rejected(tmp_path,data):
     path=tmp_path/'x.csv'
