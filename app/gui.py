@@ -749,6 +749,10 @@ class MainWindow(QMainWindow):
             b=QPushButton(label,objectName='Primary' if label=='48개 조건 검증' else '')
             b.clicked.connect(fn);buttons.addWidget(b)
         v.addLayout(buttons)
+        check_coverage=QPushButton('저장 일봉과 외부 거래일·최소 종목 수 대조 (고급)')
+        check_coverage.setToolTip('별도로 확인한 market,day,min_symbols CSV와 선택한 연구 DB를 읽기 전용으로 비교해요.')
+        check_coverage.clicked.connect(self.audit_research_market_coverage)
+        v.addWidget(check_coverage)
         decision=QHBoxLayout()
         a=QPushButton('선택 조건 연구 프리셋 승인');a.clicked.connect(lambda:self.review_research(True));decision.addWidget(a)
         b=QPushButton('선택 조건 거부');b.clicked.connect(lambda:self.review_research(False));decision.addWidget(b)
@@ -832,6 +836,22 @@ class MainWindow(QMainWindow):
             self.research_run_id=latest[0]
             self.research_report=latest[2]
             self.show_research(latest[2],show_message=False)
+
+    def audit_research_market_coverage(self):
+        if self.work is not None and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 자료를 확인해 주세요.')
+            return
+        path,_=QFileDialog.getOpenFileName(
+            self,'외부에서 확인한 거래일·최소 종목 수 CSV 선택',str(Path.home()),'CSV (*.csv)')
+        if not path:
+            return
+        from app.market_coverage import audit_coverage, render_audit
+        source=self.research_source.currentText()
+        history=self.history
+        self.run_task(
+            lambda: render_audit(audit_coverage(history,source,path)),
+            lambda message: QMessageBox.information(self,'저장 시세 누락 대조',message),
+            '외부 입력과 저장 일봉의 누락 대조 완료')
 
     def import_research_csv(self):
         path,_=QFileDialog.getOpenFileName(self,'실제 OHLCV CSV 불러오기',str(Path.home()),'CSV (*.csv)')
