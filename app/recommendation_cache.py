@@ -28,6 +28,15 @@ def evaluate_saved(database, history, mode, *, today=None):
     return _evaluate(database,history,data,sessions,mode,today)
 
 
+def evaluate_requested(database,history,mode,*,source=None,today=None):
+    """Preserve a fixed selection; otherwise use cached KRX with automatic dates."""
+    if source is not None:return evaluate_recent(database,history,mode,source=source,today=today)
+    with database.connect() as db:
+        fixed=db.execute('SELECT 1 FROM recommendation_selections WHERE mode=?',(mode,)).fetchone()
+    return (evaluate_saved(database,history,mode,today=today) if fixed else
+            evaluate_recent(database,history,mode,source='KRX',today=today))
+
+
 def evaluate_recent(database,history,mode,*,source='KRX',today=None):
     """Explicit cached evaluation using XKRX sessions, without a date file.
 

@@ -21,6 +21,7 @@ from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
 from app.strategy import evaluate, auto_paper_exit, create_proposals
 from app.practice_quotes import fresh_practice_price
 from app.recommendation_request import RecommendationRequest
+from app.outcome_request import OutcomeRequest
 from app.quote_batch_profile import QuoteBatchProfile
 from app.recommendation_schedule import summary as recommendation_schedule_summary,calendar_source as recommendation_calendar_source
 from app.practice_details import sale_details
@@ -160,6 +161,8 @@ class MainWindow(QMainWindow):
         self.remote_scan_active = False
         self.remote_theme = None
         self.remote_theme_active = False
+        self.remote_outcome=None
+        self.remote_outcome_active=False
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
         self.resize(1390, 860)
         self.setMinimumSize(1100, 690)
@@ -1687,10 +1690,13 @@ class MainWindow(QMainWindow):
             return
         self.remote_scan = RecommendationRequest(current_mode(self.cfg).key)
         self.remote_theme = ThemeRequest(self.history,current_mode(self.cfg).key)
+        self.remote_outcome=OutcomeRequest(current_mode(self.cfg).key,
+            source=lambda mode=current_mode(self.cfg).key:recommendation_calendar_source(self.cfg,mode))
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
                                      recommendation_request=self.remote_scan,
                                      theme_request=self.remote_theme,
+                                     outcome_request=self.remote_outcome,
                                      recommendation_status=lambda db=self.db, mode=current_mode(self.cfg).key: recommendation_schedule_summary(db,mode,enabled=self.cfg.get('recommendation_auto_evaluate'),now=datetime.now(KST),automatic_source=recommendation_calendar_source(self.cfg,mode)),
                                      watch_status=self.mock_watch_status.summary,
                                      watch_refresh=self.mock_watch_status.request_refresh,
@@ -1802,6 +1808,11 @@ class MainWindow(QMainWindow):
             self.task_failed(str(ex))
 
     def task_failed(self, message):
+        if getattr(self,'remote_outcome_active',False):
+            self.remote_outcome.finish(success=False)
+            self.remote_outcome_active=False
+            self.statusBar().showMessage('추천 성적 갱신 미완료 · 저장 자료를 확인하세요.')
+            return
         if getattr(self,'theme_progress',None) is not None:
             self.theme_progress.setText('검색 미완료 · 오류 안내를 확인해 주세요.')
         if self.remote_theme_active:
@@ -1856,6 +1867,21 @@ class MainWindow(QMainWindow):
         if self.remote_scan.take(current_mode(self.cfg).key,
                                  busy=bool(self.work and self.work.isRunning()), active=active):
             self.scan(remote=True)
+            return
+        outcome=getattr(self,'remote_outcome',None)
+        if outcome is not None:
+            data=outcome.take(current_mode(self.cfg).key,busy=bool(self.work and self.work.isRunning()),active=active)
+            if data is not None:
+                from app.recommendation_cache import evaluate_requested
+                self.remote_outcome_active=True
+                db,history,mode=self.db,self.history,outcome.mode
+                source=data['source']
+                self.run_task(lambda:evaluate_requested(db,history,mode,source=source,today=data['today']),
+                    self.remote_outcome_done,'추천 성적 갱신 완료')
+
+    def remote_outcome_done(self,result):
+        self.remote_outcome.finish(success=True,result=result)
+        self.remote_outcome_active=False
 
     def remote_theme_done(self,result):
         self.remote_theme.finish(success=True,result=result)

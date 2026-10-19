@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from app.backtest import Bar
 from app.krx_history import HistoryStore
-from app.recommendation_cache import evaluate_selection,evaluate_saved,evaluate_recent
+from app.recommendation_cache import evaluate_selection,evaluate_saved,evaluate_recent,evaluate_requested
 from app.storage import Database
 from test_recommendation_import import package, TODAY
 from test_recommendation_reports import store
@@ -24,6 +24,7 @@ def test_cached_selection_evaluates_without_network_and_is_idempotent(tmp_path):
     path.unlink()
     reopened=Database(db.path)
     assert evaluate_saved(reopened,history,'DEMO',today=TODAY)['added']==0
+    assert evaluate_requested(reopened,history,'DEMO',today=TODAY)['added']==0
     with pytest.raises(ValueError,match='먼저'):
         evaluate_saved(reopened,history,'MOCK',today=TODAY)
     path.write_text(json.dumps(selection),encoding='utf8')
@@ -96,3 +97,13 @@ def test_calendar_failure_does_not_write_reviews(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match='거래일'):
         evaluate_recent(db,history,'REAL_QUOTES',today=date(2026,10,20))
     with db.connect() as conn:assert conn.execute('SELECT count(*) FROM recommendation_reviews').fetchone()[0]==0
+
+
+def test_remote_request_without_selection_defaults_to_cached_krx(tmp_path):
+    db,_=store(tmp_path);history=HistoryStore(tmp_path/'history.db')
+    with db.connect() as conn:conn.execute("UPDATE recommendation_batches SET mode='REAL_QUOTES'")
+    result=evaluate_requested(db,history,'REAL_QUOTES',today=date(2026,10,20))
+    assert result['recommendations']==3 and result['available_through']=='2026-10-19'
+    with db.connect() as conn:
+        assert conn.execute('SELECT DISTINCT price_source FROM recommendation_reviews').fetchone()[0]=='KRX'
+        assert conn.execute('SELECT count(*) FROM recommendation_selections').fetchone()[0]==0

@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -53,6 +53,7 @@ class TelegramOrderService:
         self.practice_sales = practice_sales
         self.theme_report = theme_report
         self.theme_request = theme_request
+        self.outcome_request=outcome_request
         self.theme_status = theme_status
         self.theme_budget = theme_budget
         self.practice_daily = practice_daily
@@ -265,6 +266,12 @@ class TelegramOrderService:
                 else:
                     args=dict(scan_id=int(match[1]),page=int(match[2] or 1))
                     reply = self.recommendation_report(False,**args,details=True) if detail else self.recommendation_report(False,**args)
+            elif text in ('/성적갱신','/성적갱신상태'):
+                if self.outcome_request is None:
+                    reply='성적 갱신 연결이 없어요. PC에서 프로그램을 업데이트하고 수신을 다시 시작해 주세요.'
+                elif text=='/성적갱신상태':reply=self.outcome_request.summary()
+                elif not self.accepts_search_requests():reply='수신이 중지됐어요. PC에서 다시 시작해 주세요.'
+                else:reply=self.outcome_request.request()
             elif text == '/평가상태':
                 reply=self.recommendation_status() if self.recommendation_status else '추천 성적 상태 연결이 없어요. 집 PC에서 수신을 다시 시작해 주세요.'
             elif text == '/추천요약':
@@ -322,6 +329,7 @@ class TelegramOrderService:
                 reply += '\n/검색취소: 대기·진행 중인 원격 검색 취소'
                 reply += '\n/보호상태: 모의 보호 판단 기록 (자동 매도 미연결)'
                 reply += '\n/평가상태: 추천 성적 자동 갱신 상태'
+                reply += '\n/성적갱신: 저장 자료로 추천 성적 다시 계산 · /성적갱신상태: 진행 확인'
                 reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
                 reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
