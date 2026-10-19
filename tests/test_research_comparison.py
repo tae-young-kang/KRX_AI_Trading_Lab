@@ -101,3 +101,22 @@ def test_holdout_change_described_without_auto_promotion(train,test):
 def test_invalid_sample_thresholds_rejected(options):
     with pytest.raises(ValueError):
         compare_variants(report(experiment()),**options)
+
+
+def test_research_export_includes_quality_and_gap_without_reordering(tmp_path):
+    import csv
+    from app.research import export_report
+
+    first=experiment(code='A',train=4,test=-1)
+    second=experiment(code='B',train=1,test=3)
+    raw=report(first,second,state='ALERT')
+    raw.update(data_begin='2025-01-01', data_end='2025-05-01',
+               symbols=2,top_signals=[])
+    export_report(raw,tmp_path/'comparison')
+    with (tmp_path/'comparison'/'summary.csv').open(encoding='utf-8-sig',newline='') as handle:
+        rows=list(csv.DictReader(handle))
+    assert [row['id'] for row in rows]==['A','B']
+    assert rows[0]['holdout_gap3']=='-5.0'
+    assert rows[0]['data_quality_label']=='자료 품질 경고'
+    assert rows[1]['comparison_note']=='자료 부족·이상 경고'
+    assert raw['chosen_on_train_only']=='A'
