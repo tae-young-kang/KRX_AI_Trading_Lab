@@ -5,6 +5,7 @@ import re
 from app.recommendation_outcomes import SessionEvidence, session_day
 from app.theme_store import prepare
 from app.theme_one import SETUP_GUIDANCE
+from app.theme_sources import valid_source
 from app.trading_clock import KST
 
 
@@ -31,7 +32,7 @@ def parse_selection(raw, mode, *, today=None, minimum_sessions=7):
         if mode=='DEMO':
             if data['source']!='DEMO' or calendar['source']!='DEMO':
                 raise ValueError()
-        elif data['source'] not in ('KRX','CSV_USER') or calendar['source'] not in ('USER_CONFIRMED','EXCHANGE_CALENDARS_XKRX'):
+        elif not valid_source(mode,data['source']) or calendar['source'] not in ('USER_CONFIRMED','EXCHANGE_CALENDARS_XKRX'):
             raise ValueError()
         sessions=SessionEvidence(tuple(calendar['days']),calendar['begin'],calendar['end'],calendar['source'])
         _,_,days=sessions.validate(mode)
@@ -69,9 +70,9 @@ def prepare_days(history,text,mode,source,*,today=None):
     return prepare_confirmed(history,data,mode,today=today)
 
 
-def prepare_confirmed(history,data,mode,*,today=None,remember=True):
+def prepare_confirmed(history,data,mode,*,today=None,remember=True,scope=None):
     data,sessions=parse_selection(json.dumps(data).encode('utf-8'),mode,today=today)
-    result=prepare(history,sessions=sessions,through=data['through'],mode=mode,source=data['source'])
+    result=prepare(history,sessions=sessions,through=data['through'],mode=mode,source=data['source'],scope=scope)
     if not remember:
         return result
     with history.connect() as db:

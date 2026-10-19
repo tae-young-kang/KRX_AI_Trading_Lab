@@ -95,6 +95,10 @@ class TelegramOrderWorker(QThread):
                     self.recommendation_request.send_notice(
                         lambda text: transport.send(self.chat_id, text),
                         active=not self.isInterruptionRequested() and self.service.accepts_search_requests())
+                if self.theme_request:
+                    self.theme_request.send_notice(transport,self.chat_id,
+                        active=not self.isInterruptionRequested() and self.service.accepts_search_requests(),
+                        stopped=lambda:self.isInterruptionRequested() or not self.service.accepts_search_requests())
                 banner = self.service.safety_banner() if self.orders_enabled else ''
                 if banner != last_banner and not self.isInterruptionRequested():
                     self.status.emit('수신 중 · 가짜 서버만 연결\n'+banner)

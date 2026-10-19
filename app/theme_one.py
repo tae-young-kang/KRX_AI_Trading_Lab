@@ -4,6 +4,7 @@ from math import isfinite, fsum
 from fractions import Fraction
 import re
 from app.recommendation_outcomes import session_day
+from app.theme_sources import valid_source
 
 RULES_TEXT=('테마1 · 종목을 찾는 조건\n'
     '대상: 코스피·코스닥 종목\n'
@@ -32,7 +33,7 @@ def detect(*, code, market, bars, sessions, through, mode, price_source):
     if (market not in ('KOSPI','KOSDAQ') or mode not in ('DEMO','MOCK','REAL_QUOTES')
             or not isinstance(code,str) or not re.fullmatch(r'[A-Za-z0-9]{6}',code)):
         raise ValueError('시장과 자료 모드를 확인해 주세요.')
-    if price_source not in ('DEMO','KRX','CSV_USER') or (mode=='DEMO')!=(price_source=='DEMO'):
+    if not valid_source(mode,price_source):
         raise ValueError('가격 자료 출처를 확인해 주세요.')
     begin,end,days=sessions.validate(mode)
     target=session_day(through)

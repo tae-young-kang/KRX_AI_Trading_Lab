@@ -31,6 +31,8 @@ from app.theme_input import prepare_confirmed
 from app.theme_request import ThemeRequest
 from app.theme_calendar import request_selection
 from app.theme_collection import collect_and_prepare
+from app.theme_kiwoom import collect_theme as collect_kiwoom_theme
+from app.theme_sources import KIWOOM_SOURCES
 from app.theme_one import RULES_TEXT as THEME_ONE_RULES
 from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
@@ -356,6 +358,12 @@ class MainWindow(QMainWindow):
         prepare_button=QPushButton('테마1 검색 시작 · 오늘 기준',objectName='Primary')
         prepare_button.clicked.connect(self.prepare_theme_guided)
         layout.addWidget(prepare_button)
+        self.theme_progress=lbl('검색을 시작하면 진행 상황이 여기에 표시됩니다.','Muted')
+        self.theme_progress.setWordWrap(True)
+        layout.addWidget(self.theme_progress)
+        cancel=QPushButton('진행 중인 검색 중지')
+        cancel.clicked.connect(self.cancel_scan)
+        layout.addWidget(cancel)
         view=QTextEdit()
         view.setReadOnly(True)
         layout.addWidget(view)
@@ -395,6 +403,7 @@ class MainWindow(QMainWindow):
             dialog.exec()
         finally:
             refresh.stop()
+            self.theme_progress=None
 
     def show_theme_budget(self):
         total,ok=QInputDialog.getInt(self,'1/3 · 총예산','전체 종목에 나눌 총예산 (원)',1000000,1,2000000000,10000)
@@ -946,10 +955,24 @@ class MainWindow(QMainWindow):
 
     def prepare_theme_guided(self):
         mode=current_mode(self.cfg).key
-        sources=['DEMO'] if mode=='DEMO' else ['KRX 수집 후 판정','KRX 저장 자료','CSV_USER']
+        sources=['DEMO'] if mode=='DEMO' else ['키움 시세로 찾기 · 당일 조회','KRX 수집 후 판정','KRX 저장 자료','CSV_USER']
         choice,ok=QInputDialog.getItem(self,'1/2 · 테마1 자료 선택',
-            '저장 자료로 판정하거나, KRX 일봉을 수집한 뒤 판정할 수 있어요. KRX 수집은 별도 인증키와 서비스 승인이 필요해요.',sources,0,False)
+            '오늘 종목은 첫 번째 키움 시세로 찾기를 선택하세요.\nKRX/CSV는 별도로 제공된 일봉 자료를 이용하는 방법이에요.',sources,0,False)
         if not ok:return
+        if choice=='키움 시세로 찾기 · 당일 조회':
+            include_etf=bool(self.cfg.get('include_etf',False))
+            if QMessageBox.question(self,'테마1 · 오늘 기준 검색',
+                '코스피·코스닥 전체를 조회한 뒤 테마1 조건으로 고릅니다.\n'
+                +('ETF 포함\n' if include_etf else 'ETF 제외\n')+
+                '키움 일봉으로 오늘 자료를 확인합니다. 실제 주문은 하지 않아요. 시작할까요?')!=QMessageBox.StandardButton.Yes:return
+            key,secret=self.broker_keys('MOCK' if mode=='MOCK' else 'REAL')
+            requested_at=datetime.now(KST)
+            def fetch(progress,cancelled):
+                client=KiwoomMarket(key,secret,'MOCK' if mode=='MOCK' else 'REAL',batch_profile=self.quote_batch_profile)
+                try:return collect_kiwoom_theme(self.history,client,mode,now=requested_at,progress=progress,cancelled=cancelled,include_etf=include_etf)
+                finally:client.session.close()
+            self.run_task(fetch,self.theme_prepared,'테마1 검색 완료',with_progress=True)
+            return
         collect=choice=='KRX 수집 후 판정'
         source='KRX' if choice.startswith('KRX') else choice
         requested_at=datetime.now(KST)
@@ -976,9 +999,11 @@ class MainWindow(QMainWindow):
                           self.theme_prepared,'테마1 저장 시세 판정')
 
     def theme_prepared(self,result):
+        if getattr(self,'theme_progress',None) is not None:
+            self.theme_progress.setText('자료 확인 필요' if missing_data_notice(result) else f'검색 완료 · 감지 {result["matched"]}개')
         notice=missing_data_notice(result)
         if notice:
-            QMessageBox.information(self,'테마1 · 자료 부족',notice)
+            QMessageBox.information(self,'테마1 · 자료 확인 필요',notice+f'\n확인된 감지 종목 {result["matched"]}개 · 아래 결과에서 확인하세요.')
             return
         collection=result.get('collection')
         collected=(f'KRX 신규 응답 {collection["requests"]}회 · 저장 {collection["rows"]:,}행\n'
@@ -1732,6 +1757,8 @@ class MainWindow(QMainWindow):
             self.task_failed(str(ex))
 
     def task_failed(self, message):
+        if getattr(self,'theme_progress',None) is not None:
+            self.theme_progress.setText('검색 미완료 · 오류 안내를 확인해 주세요.')
         if self.remote_theme_active:
             self.remote_theme.finish(success=False)
             self.remote_theme_active=False
@@ -1768,8 +1795,18 @@ class MainWindow(QMainWindow):
                 busy=bool(self.work and self.work.isRunning()),active=active)
             if data is not None:
                 self.remote_theme_active=True
-                self.run_task(lambda:prepare_confirmed(self.history,data,self.remote_theme.mode,remember=False),
-                              self.remote_theme_done,'테마1 판정 저장 완료')
+                if data['source'] in KIWOOM_SOURCES.values():
+                    mode=self.remote_theme.mode
+                    include_etf=bool(self.cfg.get('include_etf',False))
+                    key,secret=self.broker_keys('MOCK' if mode=='MOCK' else 'REAL')
+                    def fetch(progress,cancelled):
+                        client=KiwoomMarket(key,secret,'MOCK' if mode=='MOCK' else 'REAL',batch_profile=self.quote_batch_profile)
+                        try:return collect_kiwoom_theme(self.history,client,mode,selection=data,progress=progress,cancelled=cancelled,include_etf=include_etf)
+                        finally:client.session.close()
+                    self.run_task(fetch,self.remote_theme_done,'테마1 검색 완료',with_progress=True)
+                else:
+                    self.run_task(lambda:prepare_confirmed(self.history,data,self.remote_theme.mode,remember=False),
+                                  self.remote_theme_done,'테마1 판정 저장 완료')
                 return
         if self.remote_scan.take(current_mode(self.cfg).key,
                                  busy=bool(self.work and self.work.isRunning()), active=active):
@@ -1808,6 +1845,8 @@ class MainWindow(QMainWindow):
         if self.remote_scan_active:
             self.remote_scan.progress(message)
         self.count_info.setText(message)
+        if getattr(self,'theme_progress',None) is not None:
+            self.theme_progress.setText(message)
         self.statusBar().showMessage(message)
 
     def cancel_scan(self):

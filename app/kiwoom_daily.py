@@ -9,9 +9,10 @@ from app.recommendation_outcomes import session_day
 
 
 def integer(value,*,price=False):
-    if not isinstance(value,str) or not re.fullmatch(r'[+-]?[0-9]{1,20}',value):
+    if isinstance(value,str):value=value.strip()
+    if not isinstance(value,str) or not re.fullmatch(r'[+-]?(?:[0-9]{1,20}|[0-9]{1,3}(?:,[0-9]{3}){1,6})',value):
         raise ValueError('키움 일봉의 가격·거래량·거래대금을 확인해야 해요.')
-    number=int(value)
+    number=int(value.replace(',',''))
     if price:
         number=abs(number)  # Kiwoom price signs describe direction, not negative prices.
         if number==0:raise ValueError('키움 일봉 가격이 없어요.')
@@ -56,9 +57,10 @@ def read_daily(client,*,code,name,market,days,cancelled=None,max_pages=5):
             raise ValueError('키움 일봉 응답 목록을 확인해 주세요.')
         for row in rows:
             try:
-                raw=row['dt']
+                raw=row['dt'].strip() if isinstance(row['dt'],str) else row['dt']
                 if not isinstance(raw,str) or not re.fullmatch(r'[0-9]{8}',raw):raise ValueError()
                 day=datetime.strptime(raw,'%Y%m%d').date().isoformat()
+                if day<days[0]:break
                 if day>through or day in seen_dates or (previous_day and day>=previous_day):raise ValueError()
                 seen_dates.add(day)
                 previous_day=day
@@ -69,6 +71,7 @@ def read_daily(client,*,code,name,market,days,cancelled=None,max_pages=5):
                         integer(row['trde_prica'])/100,None)
                 validate_bars([bar])
                 found[day]=bar
+                if set(found)==target:break
             except (KeyError,TypeError,ValueError,OverflowError):
                 raise ValueError('키움 일봉의 날짜·중복·가격·거래대금을 확인해야 해요. 자료를 저장하지 않았어요.') from None
         if set(found)==target or (previous_day and previous_day<=days[0]):break

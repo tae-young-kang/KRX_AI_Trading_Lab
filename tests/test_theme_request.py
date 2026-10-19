@@ -13,7 +13,7 @@ from test_telegram_orders import sandbox, update
 
 def setup(tmp_path):
     history=HistoryStore(tmp_path/'history.db')
-    data=request_selection('REAL_QUOTES',now=datetime(2026,10,19,18,tzinfo=KST))
+    data=request_selection('REAL_QUOTES','CSV_USER',now=datetime(2026,10,19,18,tzinfo=KST))
     prepare_confirmed(history,data,'REAL_QUOTES',today=date(2026,10,19))
     clock=[0]
     request=ThemeRequest(history,'REAL_QUOTES',clock=lambda:clock[0],wall_clock=lambda:datetime(2026,10,19,18,tzinfo=KST))
@@ -27,7 +27,7 @@ def test_selection_survives_restart_and_request_freezes_confirmed_dates(tmp_path
     assert '이미' in request.request()
     # A later PC selection must not replace the dates of an already queued request.
     newer=deepcopy(data)
-    newer['source']='CSV_USER'
+    newer['source']='KRX'
     prepare_confirmed(history,newer,'REAL_QUOTES',today=date(2026,10,19))
     assert request.take('REAL_QUOTES',busy=True,active=True) is None
     frozen=request.take('REAL_QUOTES',busy=False,active=True)
@@ -88,6 +88,6 @@ def test_gui_timer_hands_theme_to_cached_engine_without_market_scan(tmp_path):
     fake.remote_theme_done=lambda result:gui_method('remote_theme_done')(fake,result)
     fake.run_task=lambda fn,ok,text: (calls.append('cached task'),ok(fn()))
     gui_method('poll_remote_scan',current_mode=lambda cfg:SimpleNamespace(key='REAL_QUOTES'),
-               prepare_confirmed=prepare_confirmed)(fake)
+               prepare_confirmed=prepare_confirmed,KIWOOM_SOURCES={})(fake)
     assert calls==['cached task'] and not fake.remote_theme_active
     assert '자료 부족' in request.summary() and request.state=='NEEDS_DATA'

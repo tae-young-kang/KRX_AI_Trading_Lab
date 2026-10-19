@@ -3,6 +3,7 @@ import json
 import re
 from hashlib import sha256
 from app.theme_one import SETUP_GUIDANCE
+from app.theme_sources import valid_source
 
 
 def destination_scope(bot_id,chat_id):
@@ -41,7 +42,7 @@ def deliver_one(history, *, alert_id, mode, source, destination, send, expected_
     caller must bind it to its explicitly configured, authorized recipient.
     """
     if (type(alert_id) is not int or alert_id<=0 or mode not in ('DEMO','MOCK','REAL_QUOTES')
-            or source not in ('DEMO','KRX','CSV_USER') or (mode=='DEMO')!=(source=='DEMO')
+            or not valid_source(mode,source)
             or not isinstance(destination,str) or not re.fullmatch('[a-f0-9]{64}',destination)
             or not callable(send)):
         raise ValueError('알림 대상과 자료 모드를 확인해 주세요.')

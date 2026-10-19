@@ -25,6 +25,14 @@ def request_selection(mode,source='KRX',*,now=None):
         raise ValueError('요청 시각의 한국 날짜를 확인해야 해요.')
     day=moment.astimezone(KST).date()
     days=recent_sessions(day)
+    if days[-1]==day.isoformat():
+        try:
+            import exchange_calendars
+            calendar=exchange_calendars.get_calendar('XKRX',start=(day-timedelta(days=90)).isoformat(),end=day.isoformat())
+            if moment<calendar.session_open(day.isoformat()).to_pydatetime():
+                days=recent_sessions(day-timedelta(days=1))
+        except Exception:
+            raise ValueError('거래일의 개장 시각을 확인하지 못했어요. 달력 지원 범위를 확인해 주세요.') from None
     data=dict(version=1,mode=mode,source=source,through=days[-1],
         calendar=dict(days=list(days),begin=days[0],end=days[-1],
                       source='DEMO' if mode=='DEMO' else 'EXCHANGE_CALENDARS_XKRX'))

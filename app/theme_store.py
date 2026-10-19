@@ -6,22 +6,36 @@ from datetime import date
 from app.theme_one import detect, alert_text, SETUP_GUIDANCE
 from app.recommendation_outcomes import session_day
 from app.nxt_evidence import latest_for_day
+from app.theme_sources import valid_source,KIWOOM_SOURCES
 
 
 def missing_data_notice(report):
     missing=report.get('missing_market_days',[])
-    if not missing:return ''
+    missing_symbols=report.get('search_scope',{}).get('missing_symbols',0)
+    if not missing and not missing_symbols:return ''
     dates=', '.join(sorted({day for _,day in missing}))
-    return ('[자료 부족 · 판정 확인 필요]\n시세가 없는 날짜: '+dates+'\n'
-            '조건에 맞는 종목이 없다는 뜻이 아니에요. 해당 날짜 자료가 제공된 뒤 다시 검색해 주세요.\n'
-            'KRX 일봉은 당일 자료 제공이 늦을 수 있어요. 자료가 있는 날짜로 임의 변경하지 않았어요.')
+    invalid=report.get('search_scope',{}).get('invalid_symbols',0)
+    return ('[자료 부족 · 판정 확인 필요]\n시세가 없는 날짜: '+(dates or '일부 종목의 요청 기간')+'\n'
+            +(f'일봉 확인이 필요한 종목 {invalid}개는 판정에서 제외했어요.\n' if invalid else '')
+            +'조건에 맞는 종목이 없다는 뜻이 아니에요. 해당 날짜 자료가 제공된 뒤 다시 검색해 주세요.\n'
+            '해당 날짜의 자료 제공 여부를 확인해 주세요. 날짜를 임의로 과거로 바꾸지는 않았어요.')
 
 
-def prepare(history, *, sessions, through, mode, source):
+def prepare(history, *, sessions, through, mode, source,scope=None):
     """Use one bounded cache read; retain evidence corrections as new revisions."""
-    if (mode not in ('DEMO','MOCK','REAL_QUOTES') or source not in ('DEMO','KRX','CSV_USER')
-            or (mode=='DEMO')!=(source=='DEMO')):
+    if not valid_source(mode,source):
         raise ValueError('자료 모드와 출처를 확인해 주세요.')
+    if scope is not None:
+        keys={'universe_count','candidate_count','excluded_count','unknown_count','missing_symbols','markets','include_etf','invalid_symbols'}
+        if (source not in KIWOOM_SOURCES.values() or not isinstance(scope,dict) or set(scope)!=keys
+                or any(type(scope[k]) is not int or scope[k]<0 for k in keys-{'markets','include_etf'})
+                or type(scope['include_etf']) is not bool
+                or scope['candidate_count']+scope['excluded_count']!=scope['universe_count']
+                or scope['unknown_count']>scope['candidate_count'] or scope['missing_symbols']>scope['candidate_count']
+                or scope['invalid_symbols']>scope['missing_symbols']
+                or not isinstance(scope['markets'],list) or len(set(scope['markets']))!=len(scope['markets'])
+                or any(m not in ('KOSPI','KOSDAQ') for m in scope['markets'])):
+            raise ValueError('테마1 전체 대상·후보 선별 근거를 확인해야 해요.')
     _,_,days=sessions.validate(mode)
     if session_day(through) not in days:
         raise ValueError('감지일은 확인된 거래일이어야 해요.')
@@ -32,7 +46,8 @@ def prepare(history, *, sessions, through, mode, source):
     nxt=latest_for_day(nxt_rows,mode,through)
     expected_days={d.isoformat() for d in eligible[-7:]}
     observed_market_days={(b.market,b.date) for b in bars}
-    missing_market_days=[(market,day) for market in ('KOSPI','KOSDAQ') for day in sorted(expected_days)
+    required_markets=scope['markets'] if scope is not None else ('KOSPI','KOSDAQ')
+    missing_market_days=[(market,day) for market in required_markets for day in sorted(expected_days)
                          if (market,day) not in observed_market_days]
     observed={(row['market'],row['day']):row for row in observations}
     price_counts=defaultdict(int)
@@ -96,9 +111,10 @@ def prepare(history, *, sessions, through, mode, source):
             alert_ids.append(db.execute('SELECT id FROM theme_alerts WHERE fingerprint=?',(key,)).fetchone()[0])
         report=dict(symbols=len(grouped),states=dict(states),matched=len(results),prepared=inserted,
                     missing_market_days=missing_market_days,coverage='CACHED_SYMBOLS_ONLY',ingest_quality=quality)
-        db.execute('INSERT INTO theme_runs(mode,source,day,report_json,alert_ids_json) VALUES(?,?,?,?,?)',
-                   (mode,source,through,json.dumps(report,sort_keys=True),json.dumps(alert_ids)))
-    return dict(report,results=results)
+        if scope is not None:report['search_scope']=scope
+        run_id=db.execute('INSERT INTO theme_runs(mode,source,day,report_json,alert_ids_json) VALUES(?,?,?,?,?)',
+                   (mode,source,through,json.dumps(report,sort_keys=True),json.dumps(alert_ids))).lastrowid
+    return dict(report,results=results,run_id=run_id)
 
 
 def latest_report(history, *, mode, source=None, page=1):
@@ -121,6 +137,12 @@ def latest_report(history, *, mode, source=None, page=1):
                 f'자료 부족 종목 {report["states"].get("PRICE_MISSING",0)}개 · '
                 f'시장별 일별 자료가 없는 구간 {len(report["missing_market_days"])}개\n'
                 '전체 시장 수집 완료는 미확인입니다. 발송·주문 완료 기록이 아닙니다.\n')
+        if 'search_scope' in report:
+            scope=report['search_scope']
+            label='실제 시세' if mode=='REAL_QUOTES' else '키움 모의 시세'
+            header=(f'[테마1 · {label}] {run["day"]}\n찾은 종목 {report["matched"]}개\n'
+                    f'전체 대상 {scope["universe_count"]:,}개 · 일봉 확인 {scope["candidate_count"]:,}개\n'
+                    '100억원·고가 +5%를 최근 6거래일 중 3일 이상 만족한 종목이에요.\n')
         notice=missing_data_notice(report)
         if notice and not ids:
             return notice+f'\n기준일 {run["day"]} · 저장된 종목 {report["symbols"]}개\n보낼 감지 알림은 아직 없어요.'

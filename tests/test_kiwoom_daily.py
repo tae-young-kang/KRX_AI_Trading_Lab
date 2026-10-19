@@ -63,3 +63,13 @@ def test_cancel_prevents_any_request():
     client=Client([])
     with pytest.raises(ValueError):read(client,cancelled=lambda:True)
     assert client.calls==[]
+
+
+def test_formatted_numbers_and_irrelevant_older_rows():
+    rows=[row(d) for d in reversed(DAYS)]
+    for item in rows:
+        item.update(dt=' '+item['dt']+' ',high_pric=' +10,500 ',trde_prica=' 10,000 ')
+    rows.append({'dt':'old-invalid-record'})
+    result=read(Client([page(rows)]))
+    assert len(result['bars'])==7 and not result['missing_days']
+    assert all(b.high==10500 and b.trade_value_eok==100 for b in result['bars'])
