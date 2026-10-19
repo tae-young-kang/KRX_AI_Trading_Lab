@@ -107,8 +107,9 @@ def test_research_variants_preserve_train_only_ranking_with_test_half_diagnostic
     result=evaluate_research(source)
     before_ids=[v['id'] for v in result['variants']]
     original=deepcopy(result)
-    assert len(before_ids)==48
-    assert len(set(before_ids))==48
+    # One synthetic market contains 24 of the 48 KOSPI/KOSDAQ variants.
+    assert len(before_ids)==24
+    assert len(set(before_ids))==24
     assert original['chosen_on_train_only']==result['chosen_on_train_only']
     for v in result['variants']:
         assert 'test_early_excess3' in v and 'test_late_excess3' in v
