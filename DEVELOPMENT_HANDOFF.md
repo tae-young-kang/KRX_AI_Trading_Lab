@@ -764,3 +764,13 @@ b90f606에서는 계좌 패턴 검사의 산술식 오탐을 확인하기 전에
 - GitHub Actions Python 3.11 오프라인 전체 **806개 통과** https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39239155394 (변경 코드 SHA `378d0b8e7e0981abdb5cc6f441aa792a5da7d97d`).
 - 개별 조건별 품질 인증/실제 투자수익 보장이 아닌 **같은 실험 자료의 출처 전체 상태**, TRAIN/TEST 수치 비교는 다중 비교/보유기간 중첩으로 독립 표본이 아님. 12/5일은 경고 기준이지 유의성/통계적 신뢰구간 아님.
 - 실제 Windows GUI, 실 원본 시세/기업행동/상장폐지 데이터, 실제 체결 실증 미완료. 실제 시장 API/계좌/비밀키 접속 및 실주문 없음. Draft PR #1 유지, main 미병합.
+
+## 2026-10-19 Stage 7~9: 동일 TEST 기간 초반/후반 안정성 표시, 814 검사 통과
+
+- 핵심 목적은 추천 종목의 스크리닝 품질 향상이며 TEST 평균 한 숫자만 보고 중간에 성과가 무너진 조건을 놓치지 않도록 함.
+- `app/research_stability.py`: 각 시장의 TEST 거래일을 시계열상 앞/뒤 반으로 나눈 뒤, 기존 `evaluate_research`가 산출한 날짜별 **시장대비 초과수익**을 구간별 평균/관측일 수/후반 변화량/주의 문구로 계산. 5일 미만이면 표본 부족, 관측 안 된 날짜는 0 대입 없음.
+- 기존 TRAIN 기준 48조건 정렬·학습 우선 후보 선택을 절대 바꾸지 않으며 TEST 데이터로 조건 자동 개선/주문/승인 없음.
+- GUI 연구 비교표 + CSV `summary.csv` + 선택 조건 상세에 초반/후반 수익·관측일/안정성 진단 추가. 지난 연구보고서에서 신규 필드 누락 시 비어 있거나 '구간 분리 기록 없음' 표시.
+- 오프라인 합성 검증 `tests/test_research_stability.py` 8개 추가. 최초 KOSPI 단일시장 입력에 대한 48조건 오기 테스트를 수정하고 재실행하여 GitHub Actions **814 passed** https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39241322674 (코드 SHA `8dc0cae6c48127a4cf4e4f0375c3acfb42af8243`).
+- 한계: TEST 앞/뒤는 같은 보유기간 및 동일 시장 충격을 공유하며 별개의 홀드아웃이 아님. 실제 KRX 자료 공식 원본·상장폐지 및 수정주가 확인/Windows GUI/실제 모의 체결·HTS 장부 대조 미완료. 실제 API·비밀정보·매매 주문 미사용.
+- 새 문서: `docs/RESEARCH_TEST_STABILITY.md`. PR #1 Draft 유지, 본 작업은 별도 브랜치에만 존재.

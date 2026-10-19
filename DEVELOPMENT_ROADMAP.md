@@ -561,3 +561,12 @@ Windows GUI, 개인 DB, 실시간 키움/모의 체결 검증은 남아 있습�
 - 표본 부족 기준은 안내용이며, 동일 홀드아웃에서 48개 후보를 살펴보는 것은 통계적으로 독립적인 전략 검증이 아닙니다.
 - GitHub Actions 오프라인 전체 **806개 통과**: https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39239155394
 - GUI 실기 확인 및 실제 데이터/모의 체결 실증은 아직 필요합니다. `docs/RESEARCH_COMPARISON.md`를 참조하세요.
+
+## 2026-10-19 단계 7~9: 시간 구간별 TEST 안정성 보조 지표 (Draft PR #1)
+
+- 각 시장의 TEST 날짜를 시간 순서대로 절반 나누고, 각 조건의 관측된 날짜별 3일 시장대비 초과수익 평균을 앞/뒤로 계산합니다.
+- TEST 시장 날짜 중 실제 가격 미관측/결과 미성숙 상태는 0%로 채우지 않음. 조건에 따라 실제 관측일이 적으면 표본 부족 경고.
+- GUI 연구 표의 `TEST 초반→후반`, 상세조건의 관측일 수·변화량·주의, CSV의 구간 필드 추가.
+- 기존 전략 선정은 **TRAIN에서만** 수행하며 TEST 구간은 진단용. 같은 홀드아웃을 다시 분할한 것으로 독립 기간 walk-forward 성능이 증명된 것은 아님.
+- 최종 GitHub Actions 오프라인 **814 passed**: https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39241322674
+- Windows GUI, KRX 공식 실데이터, 키움 모의 체결/HTS 대조, 실계좌 주문은 미검증. 실계좌 주문 잠금 유지.

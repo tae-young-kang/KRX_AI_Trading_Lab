@@ -148,3 +148,16 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - GitHub Actions **806 passed in 29.46s**, 성공 검증 코드 SHA `378d0b8e7e0981abdb5cc6f441aa792a5da7d97d`, https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39239155394 . 이후 문서만 추가되었음.
 - 환경: Python 3.11 오프라인 pytest (`tests/test_scan_ui.py` 제외). 실 Windows GUI, 사용자 원본 시세의 신뢰도, 키움 실제 모의 체결/HTS 대조, 실계좌 주문, 개인 인증정보는 **사용·검증하지 않았음**.
 - 다음 Work 목표: 실제 Windows 합성 데이터 GUI에서 연구 표·선택 변경/품질 없는 과거 리포트/CSV 내보내기를 검증하고, 단계 7~8의 **정확한 실제 데이터로 독립 전략 성능 검증**과 단계 5의 모의 체결 준비를 순차 진행. PR #1 리뷰 전 `main`에 병합하지 마세요.
+
+## 2026-10-19 다음 연속 개발: TEST 초반·후반 기간 안정성 진단 (Stage 7~9)
+
+- `app/research_stability.py`: TEST 시장 거래일의 시간 순서상 **앞/뒤 절반**을 동일시장 24개 조건에 같은 기준으로 적용합니다. 종목 추천이 발생한 날짜만 골라 임의로 절반씩 자르지 않습니다.
+- 각 조건의 일별 3거래일 **시장대비 초과수익**을 초반/후반 관측 날짜별 동일가중으로 평균합니다. 이 값은 `top_signals.r3`의 순수익이 아니므로 섞지 않습니다. 미관측 날짜는 0%로 채우지 않습니다.
+- `app/research.py`: `test_early_excess3`, `test_late_excess3`, 각 실제 관측일 수, `test_late_gap3`, `test_stability_note`를 48개 조건 결과에 추가. TRAIN 기반 원래 `variants` 정렬과 `chosen_on_train_only`는 **절대 변경하지 않음**. `summary.csv`에도 새 필드 내보내기.
+- `app/gui.py`: `TEST 초반→후반` 열 및 선택 조건의 세부 초과수익/관측일/후반 안정성 주의 문구 표시. 구버전 보고서에는 구간 자료가 없음으로 표시.
+- `app/research_comparison.py`: 기존 TEST 구간과 새 초반·후반은 독립 검증이 아니라는 문구 보강.
+- `tests/test_research_stability.py`: 시장 세션 기준 분할, 미관측/표본 부족/중복 날짜/범위 밖/overflow, 실제 연구 엔진 TRAIN 기준 후보 보존, CSV 순서 포함 **8개 새 검사**.
+- 최초 실행 시 합성 테스트가 KOSPI 한 시장만 입력하면서 48조건을 기대하는 검사 오류가 발생했으나, **단일 시장 24조건이 올바름을 확인해 수정**했습니다. 최종 GitHub Actions Python 3.11 전체 오프라인 검사 **814 passed in 17.65s**, 코드 SHA `8dc0cae6c48127a4cf4e4f0375c3acfb42af8243`, https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39241322674
+- 상세 제약: `docs/RESEARCH_TEST_STABILITY.md`. TEST를 다시 쪼개 본 기술통계이지 진정한 신규 기간 walk-forward 검증이 아닙니다. 시장 전체 누락 거래일·생존편향/기업행동·데이터 허가/거래 가능성은 확인되지 않았습니다.
+- 이 세션에서 사용자 Windows GUI 클릭·실제 KRX 자료/Kiwoom 모의 주문·HTS 체결 대조·실계좌 주문/비밀키 사용 **없음**. PR #1 작업 브랜치만 변경, main 보존.
+- 집 Work는 PR #1 HEAD/CI/diff/미커밋 변경을 먼저 대조하고 Windows 오프라인 합성 GUI/CSV를 검증한 뒤, 독립 실제 KRX 자료 기반 시간 경과 검증과 키움 모의 체결 실증 준비를 순차 수행하세요.
