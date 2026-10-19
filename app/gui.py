@@ -1036,6 +1036,11 @@ class MainWindow(QMainWindow):
             f' ({r.get("test_early_days",0)}일) → 후반 {f("test_late_excess3")}%p'
             f' ({r.get("test_late_days",0)}일) · 후반 변화 {f("test_late_gap3")}%p'
             f' · {r.get("test_stability_note","구간 분리 기록 없음")}\n'
+            +(f"3거래일 추천 가격 관측: {r['test_r3_observed']}/{r['test_r3_selected']}종목 · "
+              f"가격 누락 {r['test_r3_missing']} · 자료 끝쪽 {r['test_r3_tail']}\n"
+              f"3거래일 경과한 추천일: 완전 {r['test_r3_complete_days']} / 일부 {r['test_r3_partial_days']} / "
+              f"전체 누락 {r['test_r3_missing_days']}일\n" if 'test_r3_selected' in r else '추천별 가격 확보 집계 기록 없음\n')
+            +
             '같은 검증 구간을 앞/뒤로 나눈 진단으로 독립적인 추가 검증이나 실제 투자수익은 아닙니다.')
 
     def review_research(self,approve):

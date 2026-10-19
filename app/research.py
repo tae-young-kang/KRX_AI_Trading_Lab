@@ -136,6 +136,7 @@ def mean_or_none(a):return mean(a) if a else None
 
 def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,min_train_days=12,minimum_history=20):
     from app.research_stability import split_test_stability
+    from app.research_observation import signal_coverage
     if not 1<=topk<=50:raise ValueError('Top-K는 1~50만 지원합니다.')
     if not .5<=train_fraction<=.85:raise ValueError('학습 비율은 50~85%만 지원합니다.')
     if cost_roundtrip_pct<0 or cost_roundtrip_pct>=10:raise ValueError('비용 설정이 올바르지 않습니다.')
@@ -154,6 +155,7 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
     for v in make_variants():
         market=v['market'];cut=cuts.get(market)
         if cut is None:continue
+        variant_signals=[]
         for day in market_days[market]:
             arr=by_day.get((market,day),[])
             if not arr:continue
@@ -165,8 +167,10 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
                 values={f'r{h}':round(r['future'][h]-cost_roundtrip_pct,5)
                         if r['future'][h] is not None and (split=='TEST' or (r['date_exit'][h] is not None and r['date_exit'][h]<=cut))
                         else None for h in HORIZONS}
-                signals.append({'strategy':v['id'],'split':split,'day':day,'code':r['code'],
-                                'name':r['name'],'market':market,'rank':pos,'score':r['score'],**values})
+                signal={'strategy':v['id'],'split':split,'day':day,'code':r['code'],
+                        'name':r['name'],'market':market,'rank':pos,'score':r['score'],**values}
+                signals.append(signal)
+                variant_signals.append(signal)
             if not selected:continue
             benchmark=[r for r in arr if r['future'][3] is not None and r['close']>=v['min_price']
                        and r['cap_eok'] is not None and r['value_eok'] is not None
@@ -190,6 +194,7 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
                     'losers':sum(r['future'][3]-cost_roundtrip_pct<=0 for r in valid)})
         summary={'id':v['id'],'name':v['name'],'market':market,'params':{k:v[k] for k in v if k not in ('id','name')}}
         for split in ('TRAIN','TEST'):
+            summary.update(signal_coverage(variant_signals,market_days[market],split=split,cut=cut))
             d=outcomes.get((v['id'],split),[])
             prefix='train' if split=='TRAIN' else 'test'
             summary.update({f'{prefix}_days':len(d),f'{prefix}_signals':sum(x['n'] for x in d),
@@ -235,6 +240,8 @@ def export_report(report,path):
                 'holdout_gap3','data_quality_label','comparison_note','adequate_train_days','adequate_test_days',
                 'test_early_days','test_late_days','test_early_excess3','test_late_excess3',
                 'test_late_gap3','test_stability_note']
+        fields.extend(prefix+'_r3_'+key for prefix in ('train','test') for key in
+                      ('selected','observed','missing','embargo','tail','complete_days','partial_days','missing_days'))
         wr=csv.DictWriter(f,fields,extrasaction='ignore');wr.writeheader();wr.writerows(compare_variants(report))
     with (root/'signals.csv').open('w',encoding='utf-8-sig',newline='') as f:
         fields=['strategy','split','day','code','name','market','rank','score','r1','r3','r5']
