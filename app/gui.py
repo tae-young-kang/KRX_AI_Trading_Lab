@@ -1879,6 +1879,14 @@ class MainWindow(QMainWindow):
                 self.remote_outcome_active=True
                 db,history,mode=self.db,self.history,outcome.mode
                 source=data['source']
+                if data.get('collect'):
+                    from app.outcome_recovery import collect_missing
+                    key=self.creds.get('krx_api_key')
+                    def collect(progress,cancelled):
+                        return collect_missing(db,history,KRXDailyClient(key or ''),mode,source=source,
+                            today=data['today'],progress=progress,cancelled=cancelled)
+                    self.run_task(collect,self.remote_outcome_done,'추천 성적 자료 보완 완료',with_progress=True)
+                    return
                 self.run_task(lambda:evaluate_requested(db,history,mode,source=source,today=data['today']),
                     self.remote_outcome_done,'추천 성적 갱신 완료')
 
