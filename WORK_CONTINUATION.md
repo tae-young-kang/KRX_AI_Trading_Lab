@@ -161,3 +161,14 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - 상세 제약: `docs/RESEARCH_TEST_STABILITY.md`. TEST를 다시 쪼개 본 기술통계이지 진정한 신규 기간 walk-forward 검증이 아닙니다. 시장 전체 누락 거래일·생존편향/기업행동·데이터 허가/거래 가능성은 확인되지 않았습니다.
 - 이 세션에서 사용자 Windows GUI 클릭·실제 KRX 자료/Kiwoom 모의 주문·HTS 체결 대조·실계좌 주문/비밀키 사용 **없음**. PR #1 작업 브랜치만 변경, main 보존.
 - 집 Work는 PR #1 HEAD/CI/diff/미커밋 변경을 먼저 대조하고 Windows 오프라인 합성 GUI/CSV를 검증한 뒤, 독립 실제 KRX 자료 기반 시간 경과 검증과 키움 모의 체결 실증 준비를 순차 수행하세요.
+
+## 2026-10-19 집 PC 재개: PR #1 Windows 오프라인 검증 보강
+
+- Draft PR #1/원격 HEAD `4e8ceba`와 main `d3724fd`를 확인하고 PR 브랜치로 전환했습니다. main과의 변경 25개 파일을 확인했으며 미커밋 사용자 변경은 없었습니다.
+- 기존 PR 최신 CI success 확인: https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39241674507
+- 재개 기준 전체 로컬 Windows Python 3.15: 813 passed, 1 skipped. 건너뜀은 Windows 심볼릭 링크 생성 권한 제한이며 GUI 검사는 별도 제외입니다.
+- 새 검증: 실제 연구 엔진 TEST 가격만 변화시켜 TRAIN 수치/순위/후보 불변, 실제 GUI 메서드를 가짜 위젯으로 실행해 표11열·상세·CSV 순서/수치 일치, 구버전 보고서 신규 필드 미조작 검사.
+- 새 전체 검사: 816 passed, 1 skipped (21.17s), compileall 통과. QApplication/GUI/실제 키/시장/텔레그램/주문 실행 없음.
+- GitHub Actions를 Linux+Windows Python3.11 행렬로 확장. 이번 코드의 원격 CI는 푸시 후 별도 확인할 예정입니다.
+- 현재 단계5 실제 모의 체결/HTS 대조 미완료. 단계7~9의 기존 TRAIN-only 후보 및 TEST 진단을 재검증했으며 새 전략 채택/실주문은 하지 않았습니다.
+- 다음: 새 원격 CI 확인, 독립 실제 자료/기업행동·시장 범위 검증과 모의 실제 실행 준비. 실제 GUI 클릭은 AGENTS.md의 버전관리 작업 중 GUI 실행 금지 때문에 완료로 표시하지 않습니다.

@@ -774,3 +774,13 @@ b90f606에서는 계좌 패턴 검사의 산술식 오탐을 확인하기 전에
 - 오프라인 합성 검증 `tests/test_research_stability.py` 8개 추가. 최초 KOSPI 단일시장 입력에 대한 48조건 오기 테스트를 수정하고 재실행하여 GitHub Actions **814 passed** https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39241322674 (코드 SHA `8dc0cae6c48127a4cf4e4f0375c3acfb42af8243`).
 - 한계: TEST 앞/뒤는 같은 보유기간 및 동일 시장 충격을 공유하며 별개의 홀드아웃이 아님. 실제 KRX 자료 공식 원본·상장폐지 및 수정주가 확인/Windows GUI/실제 모의 체결·HTS 장부 대조 미완료. 실제 API·비밀정보·매매 주문 미사용.
 - 새 문서: `docs/RESEARCH_TEST_STABILITY.md`. PR #1 Draft 유지, 본 작업은 별도 브랜치에만 존재.
+
+## 2026-10-19 PR #1 집 PC 이어하기 / 연구 엔진·화면 데이터·CSV 검증
+
+- 실제 PR Draft OPEN, 브랜치 codex/work-handoff-backup-inspection-20261019, 기준 원격4e8ceba/main d3724fd. main 변경/병합 없음.
+- WORK_CONTINUATION.md 및 로드맵/기존 인수인계, 실제 최신 CI success와 연구 관련 변경 확인.
+- tests/test_research_handoff_validation.py 추가: 실제 TEST 가격 충격에도 TRAIN 지표/순위/후보 불변, GUI 생성 없이 실제 메서드의 가짜 위젯/CSV 값 대조 및 구버전 표시.
+- 전체 로컬 Windows Python3.15 816 passed, 1 skipped. 심볼릭 링크 권한 검사1개 skip, tests/test_scan_ui.py 제외. compileall 통과.
+- CI를 Linux/Windows Python3.11로 확대, 푸시 후 실제 결과 확인 필요.
+- 개인 DB/인증정보/시장/모의·실계좌 주문/GUI 실행 없음. 단계5 실제 모의 및 독립 실제 데이터/GUI 실증은 미완료.
+- 다음: PR 작업 브랜치에만 커밋·푸시/원격 CI 확인·인수인계, 원래 로드맵의 실제 자료 신뢰도/모의 체결 준비를 지속합니다.

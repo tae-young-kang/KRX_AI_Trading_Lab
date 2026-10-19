@@ -570,3 +570,9 @@ Windows GUI, 개인 DB, 실시간 키움/모의 체결 검증은 남아 있습�
 - 기존 전략 선정은 **TRAIN에서만** 수행하며 TEST 구간은 진단용. 같은 홀드아웃을 다시 분할한 것으로 독립 기간 walk-forward 성능이 증명된 것은 아님.
 - 최종 GitHub Actions 오프라인 **814 passed**: https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39241322674
 - Windows GUI, KRX 공식 실데이터, 키움 모의 체결/HTS 대조, 실계좌 주문은 미검증. 실계좌 주문 잠금 유지.
+
+### 2026-10-19 PR #1 집 PC 오프라인 재검증
+
+TEST 가격 충격에 대한 TRAIN-only 지표/순위/후보 불변과 GUI 메서드·CSV 데이터 일치를
+가짜 위젯/합성 시세로 확인했습니다. Windows 로컬 816 passed, 1 skipped, GUI 실행 제외.
+GitHub Actions에는 Linux/Windows 행렬을 추가했습니다. 실제 GUI 클릭/시장 자료 신뢰도/모의 체결 실증과 구분합니다.
