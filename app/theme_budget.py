@@ -2,6 +2,7 @@
 import json
 from app.budget_preview import equal_budget_preview
 from app.protection_plan import validate_policy
+from app.theme_one import SETUP_GUIDANCE
 
 
 def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps, take_bps=200, stop_bps=300):
@@ -9,10 +10,10 @@ def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps, take_bps=20
     with history.connect() as db:
         db.execute('BEGIN')
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_runs'").fetchone():
-            raise ValueError('먼저 테마1 판정을 만들어 주세요.')
+            raise ValueError('먼저 테마1 판정을 만들어 주세요.'+SETUP_GUIDANCE)
         run=db.execute('SELECT * FROM theme_runs WHERE mode=? ORDER BY id DESC LIMIT 1',(mode,)).fetchone()
         if run is None:
-            raise ValueError('현재 모드의 테마1 판정이 없어요.')
+            raise ValueError('현재 모드의 테마1 판정이 없어요.'+SETUP_GUIDANCE)
         targets=[]
         for alert_id in json.loads(run['alert_ids_json']):
             row=db.execute('SELECT result_json FROM theme_alerts WHERE id=? AND mode=? AND source=?',

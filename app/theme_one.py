@@ -19,6 +19,13 @@ RULES_TEXT=('테마1 · 종목을 찾는 조건\n'
     '종목명·시장·감지일 시가총액·NXT 거래 가능 여부도 함께 안내해요. 확인 근거가 없으면 미확인으로 표시해요.\n'
     '일반 추천 조건과 별도의 발굴 방법이에요. /조건변경으로 테마1 기준이 바뀌지는 않아요.')
 
+SETUP_GUIDANCE=('\nPC 홈 → 테마1 · 종목 찾기 → 테마1 검색 시작을 누르세요.\n'
+    '실제 종목: KRX 수집 후 판정 → 시작. 요청일 기준 거래일은 자동 계산해요.\n'
+    'KRX OPEN API 인증키와 유가증권·코스닥 일별매매정보 서비스 승인이 필요해요. 키움 키와 달라요.\n'
+    '확인한 일봉 CSV를 고급 연구에서 넣고 CSV_USER로 판정할 수도 있어요.\n'
+    '완료 후 /테마1에서 결과를 봅니다. /테마1만 보내면 새 수집을 시작하지 않아요.\n'
+    '조건 설명: /테마1조건 · 가짜 연습 자료는 실제 추천이 아니에요.')
+
 
 def detect(*, code, market, bars, sessions, through, mode, price_source):
     """Require six confirmed sessions plus the preceding close, never weekday guesses."""

@@ -346,21 +346,22 @@ class Telegram:
 
 
 def recommendation_text(rows, demo=False):
-    lines = ['📊 KOSPI AI Trading · 종목 스크리닝',
-             '⚠️ 가상 데이터 / 데모 테스트' if demo else '키움 시세 조회 · 투자권유 아님',
-             '알림 생성: ' + datetime.now().strftime('%Y-%m-%d %H:%M'),
-             '조회 당시 제공 시세 기준 · 장마감 후에도 조회·알림 가능', '']
-    if not demo:
-        lines.append(PRICE_BASIS_NOTICE)
+    lines = ['📌 조건에 맞는 종목',
+             '가상 데이터 · 연습용' if demo else '조회한 시세 기준 · 실제 주문 안 함',
+             datetime.now().strftime('%Y-%m-%d %H:%M'), '']
     if not rows:
-        lines.append('현재 설정 조건을 통과한 종목이 없습니다.')
+        lines.append('조건에 맞는 종목이 없어요. /조건에서 기준을 확인해 주세요.')
     for i, row in enumerate(rows[:15], 1):
         kind = ' · ETF' if getattr(row, 'is_etf', False) else ''
-        lines.append(f'{i}. {row.name} ({row.code}) · {row.market}{kind}\n'
-                     f'  {row.price:,.0f}원 / {row.change_pct:+.1f}% / 점수 {getattr(row, "score", 0):.0f}\n'
-                     f'  거래대금 {row.trade_value_eok:,.0f}억 · 시총 {row.cap_eok:,.0f}억' if row.cap_eok is not None
-                     else f'{i}. {row.name} ({row.code}) · 시총 미수집')
+        market={'KOSPI':'코스피','KOSDAQ':'코스닥'}.get(row.market,row.market)
+        cap=f'{row.cap_eok:,.0f}억원' if row.cap_eok is not None else '미확인'
+        lines.append(f'{i}. {row.name} · {market}{kind}\n'
+                     f'가격 {row.price:,.0f}원  |  오늘 {row.change_pct:+.1f}%\n'
+                     f'거래대금 {row.trade_value_eok:,.0f}억원  |  시가총액 {cap}\n'
+                     f'종목코드 {row.code}')
         if not demo:
-            lines.append('  시세 기준: ' + (getattr(row, 'quote_stamp', '') or 'API 제공 시각 확인 불가'))
-    lines += ['', '이 버전은 알림 및 GUI 가상매매 전용입니다. 텔레그램 자동주문 미지원.']
+            lines.append('시세 시각: ' + (getattr(row, 'quote_stamp', '') or '미확인 · 최신 가격을 확인하세요'))
+        lines.append('')
+    lines += ['선택한 조건으로 고른 종목이며 상승을 보장하지 않아요.',
+              '기준 보기 /조건 · 다시 찾기 /추천검색']
     return '\n'.join(lines)

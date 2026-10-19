@@ -3,15 +3,19 @@ from threading import Lock
 from time import monotonic
 
 from app.theme_input import saved_selection
+from app.theme_calendar import request_selection
+from app.trading_clock import KST
+from datetime import datetime
 
 
 class ThemeRequest:
-    def __init__(self,history,mode,*,clock=monotonic):
+    def __init__(self,history,mode,*,clock=monotonic,wall_clock=None):
         self.history,self.mode,self.clock=history,mode,clock
         self.lock=Lock()
         self.state='IDLE'
         self.data=None
         self.message='아직 테마1 검색 요청이 없어요.'
+        self.wall_clock=wall_clock or (lambda:datetime.now(KST))
 
     def _expire(self):
         if self.state=='PENDING' and not 0<=self.clock()-self.started<120:
@@ -24,14 +28,18 @@ class ThemeRequest:
             if self.state in ('PENDING','RUNNING'):
                 return '이미 테마1 검색 요청이 있어요. /테마1검색상태로 확인하세요.'
             try:
-                data=saved_selection(self.history,self.mode)
+                try:
+                    source=saved_selection(self.history,self.mode)['source']
+                except ValueError:
+                    source='DEMO' if self.mode=='DEMO' else 'KRX'
+                data=request_selection(self.mode,source,now=self.wall_clock())
             except ValueError as error:
                 return str(error)
             self.data=data
             self.started=self.clock()
             self.state='PENDING'
             self.message=(f'테마1 판정 요청 · 자료 {data["source"]} · 기준일 {data["through"]}\n'
-                          'PC에서 확인한 날짜 그대로 저장 시세를 판정해요. 오늘로 날짜를 자동 연장하지 않아요.\n'
+                          '요청일 기준 최근 6거래일과 전일 종가용 1일을 자동 계산했어요.\n'
                           '새 시세 수집은 하지 않아요. /테마1검색상태로 확인하세요.')
             return self.message
 

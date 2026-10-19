@@ -2,6 +2,7 @@
 import json
 import re
 from hashlib import sha256
+from app.theme_one import SETUP_GUIDANCE
 
 
 def destination_scope(bot_id,chat_id):
@@ -87,10 +88,10 @@ def deliver_one(history, *, alert_id, mode, source, destination, send, expected_
 def latest_snapshot(history,mode):
     with history.connect() as db:
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_runs'").fetchone():
-            raise ValueError('먼저 테마1 판정을 만들어 주세요.')
+            raise ValueError('먼저 테마1 판정을 만들어 주세요.'+SETUP_GUIDANCE)
         row=db.execute('SELECT id,source,day,alert_ids_json FROM theme_runs WHERE mode=? ORDER BY id DESC LIMIT 1',(mode,)).fetchone()
         if row is None:
-            raise ValueError('현재 모드의 테마1 판정이 없어요.')
+            raise ValueError('현재 모드의 테마1 판정이 없어요.'+SETUP_GUIDANCE)
         return dict(run_id=row['id'],source=row['source'],day=row['day'],count=len(json.loads(row['alert_ids_json'])))
 
 

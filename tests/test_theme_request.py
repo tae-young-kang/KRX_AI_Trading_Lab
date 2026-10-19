@@ -1,6 +1,8 @@
 """Cached Theme1 Telegram requests, temporary DB and synthetic bars only."""
 from copy import deepcopy
-from datetime import date
+from datetime import date,datetime
+from app.trading_clock import KST
+from app.theme_calendar import request_selection
 import pytest
 from app.krx_history import HistoryStore
 from app.theme_input import prepare_confirmed, saved_selection
@@ -11,10 +13,10 @@ from test_telegram_orders import sandbox, update
 
 def setup(tmp_path):
     history=HistoryStore(tmp_path/'history.db')
-    data=selection()
+    data=request_selection('REAL_QUOTES',now=datetime(2026,10,19,18,tzinfo=KST))
     prepare_confirmed(history,data,'REAL_QUOTES',today=date(2026,10,19))
     clock=[0]
-    request=ThemeRequest(history,'REAL_QUOTES',clock=lambda:clock[0])
+    request=ThemeRequest(history,'REAL_QUOTES',clock=lambda:clock[0],wall_clock=lambda:datetime(2026,10,19,18,tzinfo=KST))
     return history,data,clock,request
 
 
@@ -40,7 +42,7 @@ def test_selection_survives_restart_and_request_freezes_confirmed_dates(tmp_path
 def test_missing_settings_expiry_mode_and_stop_fail_without_execution(tmp_path):
     history,data,clock,request=setup(tmp_path)
     other=ThemeRequest(history,'MOCK')
-    assert '설정이 없어요' in other.request()
+    assert '테마1 판정 요청' in other.request()
     request.request();clock[0]=120
     assert request.take('REAL_QUOTES',busy=False,active=True) is None
     assert '만료' in request.summary()

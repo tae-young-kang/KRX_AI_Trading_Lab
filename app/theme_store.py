@@ -3,7 +3,7 @@ from collections import defaultdict
 from hashlib import sha256
 import json
 from datetime import date
-from app.theme_one import detect, alert_text
+from app.theme_one import detect, alert_text, SETUP_GUIDANCE
 from app.recommendation_outcomes import session_day
 from app.nxt_evidence import latest_for_day
 
@@ -99,11 +99,11 @@ def latest_report(history, *, mode, source=None, page=1):
     with history.connect() as db:
         db.execute('BEGIN')
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_runs'").fetchone():
-            return '테마1 판정 기록이 없어요. 자료를 확인한 뒤 먼저 판정해 주세요.'
+            return '테마1 판정 기록이 없어요. 자료를 확인한 뒤 먼저 판정해 주세요.'+SETUP_GUIDANCE
         run=db.execute('SELECT * FROM theme_runs WHERE mode=?'+(' AND source=?' if source else '')+' ORDER BY id DESC LIMIT 1',
                        (mode,source) if source else (mode,)).fetchone()
         if run is None:
-            return '이 모드·자료 출처의 테마1 판정 기록이 없어요.'
+            return '이 모드·자료 출처의 테마1 판정 기록이 없어요.'+SETUP_GUIDANCE
         source=run['source']
         report=json.loads(run['report_json'])
         ids=json.loads(run['alert_ids_json'])

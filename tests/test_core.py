@@ -70,6 +70,10 @@ def test_numeric_and_recommendations():
     assert numeric('') is None
     s=Stock('900001','가상종목','KOSPI',10000,2,200,150,5000)
     assert '가상 데이터' in recommendation_text([s],True)
+    s.cap_eok=None
+    message=recommendation_text([s],True)
+    assert '가격 10,000원' in message and '시가총액 미확인' in message
+    assert '코스피' in message and '점수' not in message
 
 
 def test_csv_export(tmp_path):

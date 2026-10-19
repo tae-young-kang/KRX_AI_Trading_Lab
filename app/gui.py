@@ -26,9 +26,9 @@ from app.recommendation_schedule import summary as recommendation_schedule_summa
 from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
 from app.theme_input import prepare_selection as prepare_theme_selection
-from app.theme_input import selection_from_days, prepare_days as prepare_theme_days
 from app.theme_input import prepare_confirmed
 from app.theme_request import ThemeRequest
+from app.theme_calendar import request_selection
 from app.theme_collection import collect_and_prepare
 from app.theme_one import RULES_TEXT as THEME_ONE_RULES
 from app.theme_delivery import delivery_summary as theme_delivery_summary
@@ -325,7 +325,7 @@ class MainWindow(QMainWindow):
         history_button = QPushButton('지난 추천 확인하기 · 기록과 이후 가격')
         history_button.clicked.connect(self.show_recommendation_history)
         v.addWidget(history_button)
-        theme_button=QPushButton('테마1 · 저장된 감지 종목 보기')
+        theme_button=QPushButton('테마1 · 종목 찾기')
         theme_button.clicked.connect(self.show_theme_history)
         v.addWidget(theme_button)
         cards = QHBoxLayout()
@@ -346,13 +346,13 @@ class MainWindow(QMainWindow):
     def show_theme_history(self):
         mode=current_mode(self.cfg)
         dialog=QDialog(self)
-        dialog.setWindowTitle(mode.title+' · 테마1 저장 결과')
+        dialog.setWindowTitle(mode.title+' · 테마1 종목 찾기')
         dialog.resize(800,600)
         layout=QVBoxLayout(dialog)
         guide=lbl('저장된 감지 결과예요. 새 판정과 알림 발송은 아래 버튼에서 각각 선택하세요. 텔레그램 조회: /테마1','Muted')
         guide.setWordWrap(True)
         layout.addWidget(guide)
-        prepare_button=QPushButton('새 테마1 판정 만들기 · 자료 선택')
+        prepare_button=QPushButton('테마1 검색 시작 · 오늘 기준',objectName='Primary')
         prepare_button.clicked.connect(self.prepare_theme_guided)
         layout.addWidget(prepare_button)
         view=QTextEdit()
@@ -934,22 +934,13 @@ class MainWindow(QMainWindow):
 
     def prepare_theme_guided(self):
         mode=current_mode(self.cfg).key
-        sources=['DEMO'] if mode=='DEMO' else ['KRX 저장 자료','KRX 수집 후 판정','CSV_USER']
+        sources=['DEMO'] if mode=='DEMO' else ['KRX 수집 후 판정','KRX 저장 자료','CSV_USER']
         choice,ok=QInputDialog.getItem(self,'1/2 · 테마1 자료 선택',
             '저장 자료로 판정하거나, KRX 일봉을 수집한 뒤 판정할 수 있어요. KRX 수집은 별도 인증키와 서비스 승인이 필요해요.',sources,0,False)
         if not ok:return
         collect=choice=='KRX 수집 후 판정'
         source='KRX' if choice.startswith('KRX') else choice
-        dates,ok=QInputDialog.getMultiLineText(self,'2/2 · 확인한 거래일',
-            '테마1: 최근 6거래일 중 거래대금 100억원 이상 + 전일 종가 대비 고가 +5% 이상인 날이 3일 이상\n'
-            '휴장일을 뺀 실제 거래일을 오래된 순서대로 한 줄에 하나씩 입력하세요 (YYYY-MM-DD).\n'
-            '마지막 날짜가 감지 기준일이에요. 최근 6거래일과 전일 종가용 1일, 총 7거래일 이상이 필요해요.\n'
-            '저장된 날짜를 거래일로 자동 간주하지 않아요. 거래소 달력에서 빠진 거래일이 없는지 확인하세요.')
-        if not ok:return
-        try:
-            data,_=selection_from_days(dates,mode,source)
-        except ValueError as error:
-            QMessageBox.information(self,'거래일 확인',str(error));return
+        requested_at=datetime.now(KST)
         key=None
         if collect:
             key=self.secrets['krx_api_key'].text().strip() or self.creds.get('krx_api_key')
@@ -959,16 +950,17 @@ class MainWindow(QMainWindow):
                 '두 시장의 서비스 이용 승인과 데이터 사용 약관을 확인했나요?\n'
                 '오늘 자료는 잠정치이며 다음 날 다시 확인해야 해요.\n' if collect else '저장 시세로만 판정합니다.\n')
         if QMessageBox.question(self,'테마1 판정 시작',
-            f'자료 {source} · 확인한 거래일 {len(data["calendar"]["days"])}일 · 기준일 {data["through"]}\n'
-            '입력 범위의 모든 거래일을 빠짐없이 확인했나요?\n'
+            f'자료 {source} · 요청일 {requested_at.date().isoformat()}\n'
+            '요청일 기준 최근 6거래일과 전일 종가용 1일을 자동 계산해요. 휴장일이면 직전 거래일까지 봅니다.\n'
             +action+'전체 시장 수집 완료를 보증하지 않아요.\n'
             '완료 후 이 창을 닫고 테마1 결과를 다시 열어 주세요.') != QMessageBox.StandardButton.Yes:return
         if collect:
-            self.run_task(lambda progress,cancelled:collect_and_prepare(self.history,KRXDailyClient(key),data,mode,
+            self.run_task(lambda progress,cancelled:collect_and_prepare(self.history,KRXDailyClient(key),
+                          request_selection(mode,source,now=requested_at),mode,
                           progress=progress,cancelled=cancelled),self.theme_prepared,
                           '테마1 수집 및 판정 완료',with_progress=True)
         else:
-            self.run_task(lambda:prepare_theme_days(self.history,dates,mode,source),
+            self.run_task(lambda:prepare_confirmed(self.history,request_selection(mode,source,now=requested_at),mode),
                           self.theme_prepared,'테마1 저장 시세 판정')
 
     def theme_prepared(self,result):

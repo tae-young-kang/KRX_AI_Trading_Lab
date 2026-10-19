@@ -26,7 +26,7 @@ class SessionEvidence:
     def validate(self, mode):
         if mode not in ('DEMO','MOCK','REAL_QUOTES') or not isinstance(self.days,(tuple,list)):
             raise ValueError('자료 모드와 거래일 목록을 확인해 주세요.')
-        if self.source not in ('DEMO','USER_CONFIRMED','OFFICIAL'):
+        if self.source not in ('DEMO','USER_CONFIRMED','OFFICIAL','EXCHANGE_CALENDARS_XKRX'):
             raise ValueError('거래일 자료의 출처를 확인해 주세요.')
         if (mode == 'DEMO') != (self.source == 'DEMO'):
             raise ValueError('가상 연습과 실제 거래일 자료를 섞을 수 없어요.')

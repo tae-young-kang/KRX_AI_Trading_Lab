@@ -4,7 +4,7 @@ from PySide6.QtCore import QThread, Signal
 from app.order_engine import OrderEngine
 from app.simulated_broker import SimulatedBroker
 from app.telegram_orders import TelegramOrderService
-from app.telegram_receiver import TelegramTransport, receive_once
+from app.telegram_receiver import TelegramTransport, TelegramConnectionError, receive_once
 from app.runtime_lock import ReceiverLock, ReceiverAlreadyRunning
 
 
@@ -102,6 +102,8 @@ class TelegramOrderWorker(QThread):
                 self.msleep(100)
         except ReceiverAlreadyRunning:
             self.status.emit('수신 중지 · 다른 창이나 프로그램에서 주문 연습 수신 중입니다. 먼저 그 창의 수신을 종료하세요.')
+        except TelegramConnectionError as error:
+            self.status.emit('수신 중지 · '+str(error))
         except Exception:
             self.status.emit('수신 중지 · 연결 정보·개인 대화방·다른 봇 수신 프로그램을 확인하세요. 자동 재시작하지 않습니다.')
         finally:

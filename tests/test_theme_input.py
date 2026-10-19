@@ -66,3 +66,15 @@ def test_guided_dates_reject_invalid_evidence(change):
     elif change=='wrong_source':source='DEMO'
     with pytest.raises(ValueError):
         selection_from_days('\n'.join(days),'REAL_QUOTES',source,today=date(2026,10,19))
+
+
+def test_empty_theme_result_and_budget_explain_actual_setup(tmp_path):
+    from app.krx_history import HistoryStore
+    from app.theme_store import latest_report
+    from app.theme_budget import preview_latest
+    from app.theme_one import SETUP_GUIDANCE
+    history=HistoryStore(tmp_path/'empty.db')
+    assert SETUP_GUIDANCE in latest_report(history,mode='REAL_QUOTES')
+    with pytest.raises(ValueError) as error:
+        preview_latest(history,mode='REAL_QUOTES',total_won=1000000,fee_bps=0,buffer_bps=0)
+    assert SETUP_GUIDANCE in str(error.value)
