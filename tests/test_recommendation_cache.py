@@ -74,6 +74,8 @@ def test_automatic_sessions_skip_holiday_and_never_read_future_prices(tmp_path):
     before=db.recommendation_history('REAL_QUOTES')
     result=evaluate_recent(db,history,'REAL_QUOTES',source='CSV_USER',today=date(2026,10,13))
     assert result['available_through']=='2026-10-12'
+    assert sum(result['states'].values())==result['recommendations']*3
+    assert result['states']['OBSERVED']==1 and result['states']['NOT_DUE']==6
     with db.connect() as conn:
         first=json.loads(conn.execute("SELECT results_json FROM recommendation_reviews WHERE code='900001' ORDER BY id LIMIT 1").fetchone()[0])
         assert [r['target_day'] for r in first]==['2026-10-12','2026-10-14','2026-10-16']

@@ -16,11 +16,13 @@ def test_request_freezes_source_date_and_single_claim():
     claimed=[r for r in claims if r is not None]
     assert len(claimed)==1 and claimed[0]['source']=='CSV_USER'
     assert claimed[0]['today'].isoformat()=='2026-10-19'
-    request.finish(success=True,result=dict(recommendations=3,added=2,available_through='2026-10-16'))
+    request.finish(success=True,result=dict(recommendations=3,added=2,available_through='2026-10-16',
+        states={'OBSERVED':2,'NOT_DUE':5,'PRICE_MISSING':2}))
     calls=[]
     def uncertain(text):calls.append(text);raise TimeoutError()
     request.send_notice(uncertain,active=True);request.send_notice(uncertain,active=True)
     assert len(calls)==1 and '미확인' in request.summary()
+    assert '기간별 가격 확인 2건' in calls[0] and '날짜 대기 5건' in calls[0]
 
 
 def test_expiry_mode_change_and_stopped_receiver():
@@ -72,3 +74,4 @@ def test_gui_handoff_evaluates_temporary_cache_and_returns_completion(tmp_path):
     request.send_notice(lambda text:messages.append(text) or 1,active=True)
     assert len(messages)==1 and '추천 3개 확인' in messages[0]
     assert '자료 확인일 2026-10-19' in messages[0]
+    assert '기간별 가격 확인 0건' in messages[0] and '날짜 대기 9건' in messages[0]

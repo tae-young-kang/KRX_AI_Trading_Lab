@@ -3,6 +3,7 @@ from threading import Lock
 from time import monotonic
 from datetime import datetime
 from app.trading_clock import KST
+from app.recommendation_import import evaluation_counts
 
 
 class OutcomeRequest:
@@ -50,6 +51,7 @@ class OutcomeRequest:
             self.message=(f'추천 {result["recommendations"]}개 확인 · 새 평가 {result["added"]}개\n'
                           f'자료 확인일 {result["available_through"]}\n/추천성적에서 확인하세요. 실제 매매 수익률은 아니에요.'
                           if success else '성적을 갱신하지 못했어요. PC에서 평가 자료와 거래일 설정을 확인해 주세요.')
+            if success and evaluation_counts(result):self.message+='\n'+evaluation_counts(result)
             self.notice=self.message
 
     def send_notice(self,sender,*,active):

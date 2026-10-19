@@ -22,6 +22,7 @@ from app.strategy import evaluate, auto_paper_exit, create_proposals
 from app.practice_quotes import fresh_practice_price
 from app.recommendation_request import RecommendationRequest
 from app.outcome_request import OutcomeRequest
+from app.recommendation_import import evaluation_counts
 from app.quote_batch_profile import QuoteBatchProfile
 from app.recommendation_schedule import summary as recommendation_schedule_summary,calendar_source as recommendation_calendar_source
 from app.practice_details import sale_details
@@ -849,6 +850,8 @@ class MainWindow(QMainWindow):
         def finish(result):
             if result['state']=='SUCCEEDED':
                 self.recommendation_auto_status.setText('저장 자료로 추천 성적 갱신 완료 · 확인한 기간 끝 '+result['result']['available_through'])
+                counts=evaluation_counts(result['result'])
+                if counts:self.recommendation_auto_status.setText(self.recommendation_auto_status.text()+'\n'+counts)
             elif result['state']=='FAILED':
                 self.recommendation_auto_status.setText('자동 갱신 미완료 · 거래일/저장 자료를 확인해 수동 재평가하세요. 오늘 자동 재시도하지 않아요.')
             elif result['state']=='ALREADY_ATTEMPTED':
@@ -1068,7 +1071,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self,'추천 후 가격 확인',
                 f'추천 {result["recommendations"]}개 확인 · 새 평가 {result["added"]}개\n'
                 f'자료 확인일 {result["available_through"]}\n1·3·5거래일 뒤 가격은 /추천성적에서 확인하세요.\n'
-                '저녁 자동 갱신을 켠 경우 새 거래일까지 자동 계산해요. 실제 매매 수익률이 아니에요.')
+                +evaluation_counts(result)+'\n저녁 자동 갱신을 켠 경우 새 거래일까지 자동 계산해요. 실제 매매 수익률이 아니에요.')
         self.run_task(lambda:evaluate_recent(db,history,mode,source=source),done,'추천 후 가격 확인 완료')
 
     def evaluate_cached_recommendations(self):
