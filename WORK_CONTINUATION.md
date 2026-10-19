@@ -125,3 +125,14 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - **GitHub Actions 전체 오프라인 테스트 775 passed in 15.21s**, Python 3.11, `tests/test_scan_ui.py` 제외, https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39232225038 (검증 코드 SHA `bb406702e092537ea511f7b10eddf32fe57c11d2`).
 - 중요: 사용자 CSV가 진짜 공식 자료인지 인증하지 않으며, 입력이 부정확하면 진단도 잘못됩니다. 하한 충족은 실제 모든 상장 종목/거래일/종가 확인의 증거가 아닙니다. 실제 개인 DB 및 Windows GUI는 실행해 보지 않았습니다.
 - Draft PR #1 및 기존 안전 규칙 유지. 집 PC Work는 CI 상태와 PR diff/미커밋 자료를 확인하고, 실제 사용자 근거 파일이 준비되면 자료 자체의 출처/시장 범위를 별도 대조해 주세요.
+
+## 2026-10-19 연속 개발: 48개 연구 조건의 실행 전 자료 품질 표시 (Stage 8)
+
+- `app/research_preflight.py`: `check_research_coverage`로 연구 실행 **전에** 저장 일봉과 세션 중 선택된 외부 시장 거래일·최소 종목 수 CSV를 다시 대조합니다. 결과는 `NOT_CHECKED`(외부 근거 없음), `ALERT`(누락/기준 미달/미대조 날짜), `REFERENCE_FLOOR_MET`(제공된 하한 기준만 충족, 공식 완전성 아님).
+- `app/gui.py`: 외부 대조 버튼이 성공적으로 끝나면 **동일 연구 자료 출처에만** 참조 CSV 경로를 세션 중 기억합니다. 다른 출처 선택 시 해제. 수동 48개 조건 연구 실행 전 품질 검사 후 결과의 `coverage_quality`에 저장해 메인 연구 요약과 완료 안내에 표시합니다. 경고가 있어도 탐색 연구는 가능하나 검증 완료로 취급하지 않습니다.
+- GUI 자동 KRX 연구: 선택한 독립 KRX 참조 자료 검사에서 `ALERT` 또는 예기치 않은 품질 상태면 연구를 **보류**하고 저장하지 않습니다. 외부 참조 없는 자동 실행은 허용하되 결과에 `NOT_CHECKED`를 기록합니다.
+- `tests/test_research_preflight.py`: 참조 없음/누락일/출처 분리/파일 손상/정규화 제외/세션 중 파일 삭제/자동 보류·구버전 기록 표시/DB 리포트 저장을 포함한 신규 오프라인 검사 9개.
+- `docs/RESEARCH_PREFLIGHT.md`: UI 사용 순서/품질 상태/수동 vs 자동 정책/한계.
+- GitHub Actions Python 3.11 오프라인 회귀 **784 passed in 15.99s** (환경에 의존하는 `tests/test_scan_ui.py` 제외). https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39237697971 (검증 코드 SHA `5f118ed52d7df7766453f9e82b13a1669f37ce77`).
+- 외부 대조 CSV는 사용자 제공이므로 공식 KRX 거래일/전체 상장 종목의 출처 인증·기업행동/수정주가/생존편향·실제 수익의 독립 실증이 아닙니다. Windows GUI 실제 클릭, 개인 이력, 키움 실모의 체결/HTS 대조, 실계좌 주문은 **실행하지 않았습니다**.
+- Work 인수인계: 최신 Draft PR #1의 브랜치 SHA·CI를 재확인하고 Windows GUI의 외부 대조→수동 연구 품질 경고/상태 저장→자동 보류 경로를 합성 자료로 확인해 주세요. 기존 main은 변경하지 않았고 강제 푸시/실주문/비밀키 업로드 금지 유지.

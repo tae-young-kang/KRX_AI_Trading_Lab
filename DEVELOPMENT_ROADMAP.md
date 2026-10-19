@@ -544,3 +544,11 @@ Windows GUI, 개인 DB, 실시간 키움/모의 체결 검증은 남아 있습�
 - GitHub Actions Python 3.11 **775개 오프라인 테스트 통과**:
   https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39232225038
 - 단계5 모의투자 실제 검증, GUI 조작, 사용자/공식 원본 대조는 후속 과제입니다.
+
+## 2026-10-19 단계8 보완: 48개 조건 연구의 독립 Coverage 상태 표시 (Draft PR #1)
+
+- 외부 거래일·최소 종목 수 CSV 검사 성공 후, 같은 자료 출처로 연구를 진행하면 검사를 매번 다시 실행해 보고서에 `coverage_quality`를 남깁니다.
+- 독립 참조가 없다면 `NOT_CHECKED`, 참조한 기준/날짜에 누락이 있으면 `ALERT`, 외부 최소 기준에만 경고가 없으면 `REFERENCE_FLOOR_MET`이며 마지막 상태도 공식 전체시장 검증 완료는 아닙니다.
+- 수동 조건 연구는 품질 경고를 표시하고 연구용으로 저장; 자동 KRX 연구는 선택한 독립 참조에서 경고가 발견되면 보류합니다.
+- 합성 데이터 9개 신규 테스트를 포함한 GitHub Actions **784개 오프라인 테스트 통과**, https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39237697971
+- Windows GUI의 전체 사용 동선, 자료 출처 공신력 검증 및 모의 체결/실계좌 주문은 미실시. 단계 5 실증과 단계 7~8 실제 기록/자료 대조는 미완료입니다.

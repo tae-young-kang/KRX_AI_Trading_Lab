@@ -744,3 +744,13 @@ b90f606에서는 계좌 패턴 검사의 산술식 오탐을 확인하기 전에
 - 미래 날짜/잘못된 ISO/중복/과대 파일/잘못된 종목수 거절, 데이터 출처 분리. GUI에서 현재 연구 출처를 고정해 검사하고 주문·자료 저장·실거래 호출 없이 결과 안내.
 - `tests/test_market_coverage.py` 합성 데이터 테스트 14개 추가. GitHub Actions 전체 오프라인 **775개 통과** https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39232225038, SHA `bb406702e092537ea511f7b10eddf32fe57c11d2`.
 - 실제 Windows GUI 클릭 동선/개인 자료/KRX API 정상 허가/키움 모의 실증/HTS 장부 대조는 **여전히 미완료**. Draft PR #1 작업 브랜치에만 존재; `main` 미변경.
+
+## 2026-10-19 Stage 8 후속: 연구 실행 전 Coverage Preflight / CI 784
+
+- 선택한 연구 자료를 48개 스크리닝 조건으로 평가하기 전에 외부 CSV 대조 상태를 계산하고 `coverage_quality`로 저장합니다.
+- 상태 구분: `NOT_CHECKED`=독립 대조 미실시, `ALERT`=참조 기록에서 누락/하한 미달/급감/정규화 제외 또는 저장 날짜 대비 외부 근거 없음, `REFERENCE_FLOOR_MET`=입력한 최소 기준에서만 문제 미발견.
+- 세션 동안 선택된 외부 CSV 경로는 프로그램 설정이나 저장 보고서에 포함하지 않습니다. 소스 전환 시 해제, 연구 실행 때마다 디스크 파일·DB의 최신 상태로 재검사.
+- 수동 연구는 경고 상태를 붙여 탐색 계산을 계속할 수 있으나 정상 실증/자동 적용으로 격상하지 않음. GUI 자동 KRX 연구는 해당 KRX 참조 상태가 `ALERT`면 결과 저장 및 연구 실행 보류. 참조 미설정 자동 연구는 기존 정책 유지+ `NOT_CHECKED` 표시.
+- 관련 코드 `app/research_preflight.py`, `app/gui.py`; 합성 회귀 `tests/test_research_preflight.py` 총 9개 테스트 추가. 상세 `docs/RESEARCH_PREFLIGHT.md`.
+- 전체 오프라인 CI 성공: **784 passed in 15.99s**, https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39237697971, SHA `5f118ed52d7df7766453f9e82b13a1669f37ce77`.
+- `tests/test_scan_ui.py` 제외, 실제 Windows PySide6 GUI/개인 DB/실제 외부 KRX 거래일·종목 수 출처/실제 키움 모의체결·HTS 대조는 미검증. 실제 시장/주문/인증정보 사용 없음. `main`은 유지, Draft PR에서 검토.
