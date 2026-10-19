@@ -220,11 +220,13 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
 
 
 def export_report(report,path):
+    from app.research_comparison import compare_variants
     root=Path(path);root.mkdir(parents=True,exist_ok=True)
     with (root/'summary.csv').open('w',encoding='utf-8-sig',newline='') as f:
         fields=['id','name','market','train_days','train_signals','train_return3','train_excess3','train_ic','train_win_days_pct',
-                'test_days','test_signals','test_return3','test_excess3','test_ic','test_win_days_pct']
-        wr=csv.DictWriter(f,fields,extrasaction='ignore');wr.writeheader();wr.writerows(report['variants'])
+                'test_days','test_signals','test_return3','test_excess3','test_ic','test_win_days_pct',
+                'holdout_gap3','data_quality_label','comparison_note','adequate_train_days','adequate_test_days']
+        wr=csv.DictWriter(f,fields,extrasaction='ignore');wr.writeheader();wr.writerows(compare_variants(report))
     with (root/'signals.csv').open('w',encoding='utf-8-sig',newline='') as f:
         fields=['strategy','split','day','code','name','market','rank','score','r1','r3','r5']
         wr=csv.DictWriter(f,fields);wr.writeheader();wr.writerows(report['top_signals'])
