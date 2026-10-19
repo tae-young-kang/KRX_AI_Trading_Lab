@@ -775,6 +775,8 @@ class MainWindow(QMainWindow):
     def research_source_changed(self):
         self.research_report=None
         self.research_run_id=None
+        # The external evidence applies ONLY to the source the user audited.
+        self.research_reference=None
         self.refresh_research()
 
     def save_auto_research(self,checked):
@@ -813,12 +815,25 @@ class MainWindow(QMainWindow):
             result=self.history.fetch_range(KRXDailyClient(key),start,today)
             bars=self.history.load_bars('KRX')
             if len(bars)<100:return result,None
+            from app.research_preflight import check_research_coverage
+            selected_reference=getattr(self,'research_reference',None)
+            reference_path=(selected_reference[1] if selected_reference and selected_reference[0]=='KRX' else None)
+            quality=check_research_coverage(self.history,'KRX',bars,reference_path=reference_path)
+            if quality['state']=='ALERT':
+                # Automatic research must never silently promote suspect evidence.
+                return result,('COVERAGE_ALERT',quality)
             report=evaluate_research(bars,topk=5)
+            report['coverage_quality']=quality
             rid=self.history.save_run('KRX',{'source':'KRX','topk':5,'auto':True},report)
             return result,(rid,report)
         def finish(output):
             self.cfg['research_last_update']=today
             self.settings.save()
+            if output[1] is not None and output[1][0]=='COVERAGE_ALERT':
+                from app.research_preflight import preflight_notice
+                self.statusBar().showMessage('자동 조건 연구 보류 · '+preflight_notice(output[1][1]))
+                self.research_status.setText('자동 연구 보류: '+preflight_notice(output[1][1]))
+                return
             if output[1] is not None:
                 self.research_source.setCurrentText('KRX')
                 self.research_run_id=output[1][0]
@@ -848,9 +863,17 @@ class MainWindow(QMainWindow):
         from app.market_coverage import audit_coverage, render_audit
         source=self.research_source.currentText()
         history=self.history
+        def done(message):
+            if self.research_source.currentText()==source:
+                # Session-only selection. Do not persist local paths/contents.
+                # The CSV and database are both checked again before research.
+                self.research_reference=(source,path)
+            QMessageBox.information(
+                self,'저장 시세 누락 대조',
+                message+'\n\n이 출처의 다음 48개 조건 검증에도 이 대조 자료를 다시 적용해요.')
         self.run_task(
             lambda: render_audit(audit_coverage(history,source,path)),
-            lambda message: QMessageBox.information(self,'저장 시세 누락 대조',message),
+            done,
             '외부 입력과 저장 일봉의 누락 대조 완료')
 
     def import_research_csv(self):
@@ -944,10 +967,16 @@ class MainWindow(QMainWindow):
         source=self.research_source.currentText()
         self.research_report=None
         topk=self.research_k.value()
+        selected_reference=getattr(self,'research_reference',None)
+        reference_path=(selected_reference[1] if selected_reference and selected_reference[0]==source else None)
         def run():
+            from app.research_preflight import check_research_coverage
             bars=self.history.load_bars(source)
             if len(bars)<100:raise ValueError('자료가 부족합니다. CSV 또는 KRX 데이터를 먼저 수집하세요.')
+            # Check BEFORE research, and carry the result into the saved report.
+            quality=check_research_coverage(self.history,source,bars,reference_path=reference_path)
             report=evaluate_research(bars,topk=topk)
+            report['coverage_quality']=quality
             run_id=self.history.save_run(source,{'topk':topk,'source':source},report)
             return run_id,report
         def done(output):
@@ -967,13 +996,17 @@ class MainWindow(QMainWindow):
                     states.get(r['id'], ('표본 부족' if r['train_days']<12 or r['test_days']<5 else '관찰 중'))]
             for j,t in enumerate(values):self.research_table.setItem(i,j,cell(t))
         chosen=next((x for x in report['variants'] if x['id']==report['chosen_on_train_only']),None)
-        self.research_result.setText('학습 구간 우선 후보: '+(chosen['name'] if chosen else '표본 부족으로 선정하지 않음'))
+        from app.research_preflight import preflight_notice
+        self.research_result.setText(
+            '학습 구간 우선 후보: '+(chosen['name'] if chosen else '표본 부족으로 선정하지 않음')
+            +'\n'+preflight_notice(report.get('coverage_quality')))
         self.research_status.setText(f'{report["data_begin"]} ~ {report["data_end"]} | '
                      f'{report["symbols"]}종목, {report["data_rows"]:,}행, {len(report["variants"])}개 조건 | '
                      'TRAIN으로 조건 순위 선정 / TEST는 미사용 기간 평가')
         if show_message:
             QMessageBox.information(self,'조건 검증 완료',
                 '조건별 일별 추천·검증 수익을 DB에 기록했습니다.\n'
+                +preflight_notice(report.get('coverage_quality'))+'\n'
                 '이 결과는 연구용이며 적용이나 실제 주문으로 이어지지 않습니다.')
 
     def research_detail(self):
