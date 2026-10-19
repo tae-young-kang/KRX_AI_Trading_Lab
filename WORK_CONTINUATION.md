@@ -82,3 +82,13 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - `.github/workflows/offline-checks.yml`: PR 변경 시 Python 3.11 환경에서 문법 검사와 `tests/test_scan_ui.py`를 제외한 오프라인 테스트를 실행하도록 CI 구성했습니다. 의존성 설치 뒤 테스트 단계의 일반적인 HTTP 프록시를 차단합니다. **GitHub Actions 실제 실행 결과는 확인 후 기록해야 합니다.**
 - Work는 PR #1 GitHub 체크 결과를 먼저 확인하고 오류가 있으면 변경 범위를 한정해 수정하세요. Actions 성공도 사용자 PC Windows GUI/실제 모의 체결 검증을 대신하지 않습니다.
 - 현재 변경사항은 여전히 Draft PR #1의 별도 브랜치에만 있고 실계좌 주문 잠금 및 민감정보 금지는 유지됩니다.
+
+## 2026-10-19 최신 검증 완료 — 평가일 분모 보완 및 전체 CI
+
+- 추천 정확도 품질 표시: 집계 내 `complete_days / selected_days`는 가격 관측이 **0건인 추천일도 분모에 포함**합니다. 조건이 같은 최초 추천들의 모든 선택 날짜를 기준으로 계산합니다. `observed_days` 및 기존 평균은 별도 보존합니다.
+- 새 회귀 검사 `test_total_day_denominator_includes_dates_without_any_observations`를 추가했습니다.
+- 개인 키/시장/증권사/텔레그램 연결 없이 **로컬 격리 Pytest 10개 통과 + compileall 통과**.
+- GitHub Actions 전체 오프라인 테스트: 최초 **755 통과, 1 실패** (기존 텔레그램 경고 문구 호환성). 안내 문구 복구 후 `757 passed` 및 CI **success** 확인.
+- **성공한 검증된 코드 SHA:** `3bf1b166bf2489242dada48fad9f03da79ef4d80`. 문서만 수정한 SHA `de23c00da8a67be965cf2aa041ed82efc2fddd58`의 CI도 success. 검증 링크: https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39223146708
+- CI는 `tests/test_scan_ui.py`를 제외한 Python 3.11 오프라인 검증이며, **Windows 실 GUI 동선·실 키움 모의서버/체결·HTS 대조·복구 실증·실계좌는 여전히 미검증**.
+- 최종 PR 검토 시 현재 원격 SHA, 열린 PR #1, AGENTS.md, DEVELOPMENT_ROADMAP.md, DEVELOPMENT_HANDOFF.md와 이 파일을 함께 읽고, 최신 전체 CI 상태를 다시 확인하세요.

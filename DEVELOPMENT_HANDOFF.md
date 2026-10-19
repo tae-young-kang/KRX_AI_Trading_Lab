@@ -706,3 +706,13 @@ b90f606에서는 계좌 패턴 검사의 산술식 오탐을 확인하기 전에
 - `.github/workflows/offline-checks.yml` PR·수동 시작 워크플로 추가: Python 3.11, 모듈 문법 확인, `test_scan_ui.py`를 제외한 오프라인 pytest, 일반 HTTP 프록시 차단. 의존성 다운로드 단계는 프록시 차단 대상 아님.
 - GitHub Actions의 서버 측 실행·결과를 아직 검증하지 않은 경우, 이를 성공 처리하지 마세요. 워크플로 실패나 범위 내 충돌을 해결 후 PR 리뷰/병합.
 - 모든 후속 소목표에서 `AGENTS.md`, `DEVELOPMENT_ROADMAP.md`, `WORK_CONTINUATION.md`와 실제 SHA/미커밋 변경을 먼저 대조하세요. 실제 주문·키 업로드 금지.
+
+## 2026-10-19 단계7 검증 완료: 날짜별 관측 집계 품질/CI
+
+- 부분 관측 추천일의 평균을 완전 관측일 평균과 명확히 분리했습니다. 전체 선택 추천일 수 `selected_days`는 가격 확인이 전혀 없는 날짜도 포함합니다.
+- 기존 `mean`, `daily_mean`, `observed_days`를 보존하고 `complete_days`, `complete_daily_mean`, `selected_days` 보조 지표를 함께 표기합니다. 최근 3,000개로 잘린 선택 내에서만 성립하고 시장 전체 완전성 증명이 아닙니다.
+- 새 회귀 검사에서 관측 1일 / 선택 2일 상황을 만들어 `완전 관측일 1/2일`과 미관측 데이터의 0% 대체 없음 확인했습니다.
+- 2026-10-19 GitHub Actions `offline-checks.yml`: 최초 경고 문구 호환성 오류 1개 발견하여 복구. 이후 **전체 오프라인 757개 통과**, 결과 https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39223146708
+- 분리된 소규모 테스트 **10개 통과**, 소규모 검사 모듈 compileall 통과.
+- CI는 GUI 조작/실제 텔레그램/장중 키움 모의 체결/HTS 잔고 일치/실계좌 주문/실제 데이터 수익률을 검증하지 않았습니다. 단계5 실제 검증 및 단계7~9 독립 실데이터 검증은 아직 미완료.
+- Draft PR #1 별도 분기 유지. 병합 전 보안 diff·전체 CI·사용자 작업 충돌 확인. 후속 단계에서 기록/자료 품질 개선과 단계5 모의 실증 준비를 원래 우선순위대로 계속하세요.
