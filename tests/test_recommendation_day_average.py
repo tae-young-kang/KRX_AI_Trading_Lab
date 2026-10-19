@@ -112,3 +112,16 @@ def test_other_source_or_unreviewed_pick_prevents_full_date_status():
         assert h['observed'] == 1 and h['observed_days'] == 1
         assert h['complete_days'] == 0
         assert h['complete_daily_mean'] is None
+
+
+def test_total_day_denominator_includes_dates_without_any_observations():
+    with sample_db() as db:
+        add_pick(db, 1, '2026-10-15', 'A', change=10.0)
+        add_pick(db, 2, '2026-10-16', 'B', state='NOT_DUE')
+        data, _ = groups(db, 'DEMO')
+        horizon = data[0]['horizons'][1]
+        assert horizon['observed_days'] == 1
+        assert horizon['selected_days'] == 2
+        assert horizon['complete_days'] == 1
+        assert horizon['complete_daily_mean'] == 10.0
+        assert '집계 내 완전 관측일 1/2일' in summary(db, 'DEMO')
