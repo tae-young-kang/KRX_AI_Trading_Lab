@@ -68,3 +68,47 @@ def test_empty_daily_observations_unavailable_not_zero():
         assert horizon['daily_mean'] is None
         assert horizon['mean'] is None
         assert '날짜별 평균 미확인' in summary(db,'DEMO')
+
+
+def test_partial_observation_days_do_not_masquerade_as_complete_days():
+    with sample_db() as db:
+        for code in ('A', 'B'):
+            add_pick(db, 1, '2026-10-15', code, change=10.0)
+        add_pick(db, 1, '2026-10-15', 'C', state='PRICE_MISSING')
+        add_pick(db, 2, '2026-10-16', 'D', change=-10.0)
+        data, _ = groups(db, 'DEMO')
+        horizon = data[0]['horizons'][1]
+        assert horizon['observed'] == 3
+        assert horizon['observed_days'] == 2
+        assert round(horizon['mean'], 7) == round(10 / 3, 7)
+        assert horizon['daily_mean'] == 0.0
+        assert horizon['complete_days'] == 1
+        assert horizon['complete_daily_mean'] == -10.0
+        assert '집계 내 완전 관측일 1/2일' in summary(db, 'DEMO')
+
+
+def test_unreviewed_or_pending_pick_marks_day_as_incomplete():
+    with sample_db() as db:
+        add_pick(db, 1, '2026-10-15', 'A', change=8.0)
+        add_pick(db, 1, '2026-10-15', 'B', state='NOT_DUE')
+        result, _ = groups(db, 'DEMO')
+        h = result[0]['horizons'][1]
+        assert h['observed_days'] == 1
+        assert h['complete_days'] == 0
+        assert h['complete_daily_mean'] is None
+        assert '완전 관측일 평균 미확인' in summary(db, 'DEMO')
+
+
+def test_other_source_or_unreviewed_pick_prevents_full_date_status():
+    with sample_db() as db:
+        add_pick(db, 1, '2026-10-15', 'A', change=10.0)
+        # Same condition/day but no price review: placed in the NONE
+        # source group; this must still prevent DEMO claiming completeness.
+        db.execute('INSERT INTO recommendations VALUES (?,?,?,?)',
+                   (1, 'B', 'KOSPI', 2))
+        data, _ = groups(db, 'DEMO')
+        demo = next(group for group in data if group['source'] == 'DEMO')
+        h = demo['horizons'][1]
+        assert h['observed'] == 1 and h['observed_days'] == 1
+        assert h['complete_days'] == 0
+        assert h['complete_daily_mean'] is None
