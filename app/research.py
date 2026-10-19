@@ -135,6 +135,7 @@ def mean_or_none(a):return mean(a) if a else None
 
 
 def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,min_train_days=12,minimum_history=20):
+    from app.research_stability import split_test_stability
     if not 1<=topk<=50:raise ValueError('Top-K는 1~50만 지원합니다.')
     if not .5<=train_fraction<=.85:raise ValueError('학습 비율은 50~85%만 지원합니다.')
     if cost_roundtrip_pct<0 or cost_roundtrip_pct>=10:raise ValueError('비용 설정이 올바르지 않습니다.')
@@ -197,6 +198,11 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
                 f'{prefix}_ic':round(mean([x['rank_ic'] for x in d if x['rank_ic'] is not None]),4) if any(x['rank_ic'] is not None for x in d) else None,
                 f'{prefix}_win_days_pct':round(100*sum(x['net3']>0 for x in d)/len(d),1) if d else None,
                 f'{prefix}_signal_win_pct':round(100*sum(x['wins'] for x in d)/sum(x['wins']+x['losers'] for x in d),1) if d else None})
+        # TEST diagnostic, split at the same *market-session* midpoint for all
+        # variants. Never use it in the TRAIN-only ranking or candidate choice.
+        sessions=[day for day in market_days[market] if day>cut]
+        summary.update(split_test_stability(
+            sessions, outcomes.get((v['id'],'TEST'), [])))
         rows_summary.append(summary)
     # Critical: choose by TRAIN only. TEST labels may be displayed but are
     # never used to rank/select/adjust candidates. Do not automatically apply.
@@ -216,7 +222,8 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
         'symbols':quality['symbols'],'data_rows':len(bars),'invalid_history':quality['invalid_history'],
         'topk':topk,'cost_pct':cost_roundtrip_pct,'chosen_on_train_only':winner,
         'variants':ranked,'top_signals':signals,
-        'method':'Daily close signal → next day OPEN entry → day+1/3/5 CLOSE. Equal-weight per signal day; NOT compounded. Avg daily excess vs same-market eligible stocks. No intraday execution/stop. Holdout exploratory only.'}
+        'method':'Daily close signal → next day OPEN entry → day+1/3/5 CLOSE. Equal-weight per signal day; NOT compounded. Avg daily excess vs same-market eligible stocks. No intraday execution/stop. Holdout exploratory only.',
+        'stability_method':'TEST market sessions split into chronological early/late halves, identical date boundary for same-market variants. Per-day 3-session benchmark-relative excess averaged only over matured observations; no 0% fills, no selection/ranking by TEST. Repeated adjacent holding periods and same market are correlated.'}
 
 
 def export_report(report,path):
@@ -225,7 +232,9 @@ def export_report(report,path):
     with (root/'summary.csv').open('w',encoding='utf-8-sig',newline='') as f:
         fields=['id','name','market','train_days','train_signals','train_return3','train_excess3','train_ic','train_win_days_pct',
                 'test_days','test_signals','test_return3','test_excess3','test_ic','test_win_days_pct',
-                'holdout_gap3','data_quality_label','comparison_note','adequate_train_days','adequate_test_days']
+                'holdout_gap3','data_quality_label','comparison_note','adequate_train_days','adequate_test_days',
+                'test_early_days','test_late_days','test_early_excess3','test_late_excess3',
+                'test_late_gap3','test_stability_note']
         wr=csv.DictWriter(f,fields,extrasaction='ignore');wr.writeheader();wr.writerows(compare_variants(report))
     with (root/'signals.csv').open('w',encoding='utf-8-sig',newline='') as f:
         fields=['strategy','split','day','code','name','market','rank','score','r1','r3','r5']
