@@ -76,6 +76,20 @@ def order_plan(request):
     ))
 
 
+def market_order_plan(*,code,side,quantity,venue='KRX'):
+    """Official market-order shape, prepared offline only.
+
+    No placeholder limit price. MockTransport intentionally does not accept
+    this shape until market-specific funds and confirmation gates are wired.
+    """
+    if side not in ('BUY','SELL') or venue!='KRX':
+        raise ContractError('시장가 계약 준비는 KRX 매수·매도만 지원합니다.')
+    return MockPlan('kt10000' if side=='BUY' else 'kt10001',(
+        ('dmst_stex_tp','KRX'),('stk_cd',_code(code)),
+        ('ord_qty',_number(quantity)),('trde_tp','3'),
+    ))
+
+
 def amend_plan(code, original_order_no, *, remaining_quantity, limit_price):
     """Explicit broker remaining quantity, NEVER engine's total quantity.
 

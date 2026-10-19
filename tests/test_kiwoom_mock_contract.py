@@ -60,6 +60,28 @@ def test_market_and_query_separation():
         query_plan('live')
 
 
+@pytest.mark.parametrize('side,api',[('BUY','kt10000'),('SELL','kt10001')])
+def test_market_contract_has_no_invented_price_and_cannot_enter_transport(side,api):
+    from app.kiwoom_mock_contract import market_order_plan
+    from app.kiwoom_mock_transport import validated_plan
+    market=market_order_plan(code='0115E0',side=side,quantity=2)
+    assert market.api_id==api and market.url=='https://mockapi.kiwoom.com/api/dostk/ordr'
+    assert market.body()==dict(dmst_stex_tp='KRX',stk_cd='0115E0',ord_qty='2',trde_tp='3')
+    assert 'ord_uv' not in market.body() and 'cond_uv' not in market.body()
+    with pytest.raises(ContractError):validated_plan(market)
+    limit=order_plan(OrderRequest('0115E0',side,2,1000))
+    assert validated_plan(limit).body()['trde_tp']=='0'
+    assert limit.body()['ord_uv']=='1000'
+
+
+@pytest.mark.parametrize('changes',[{'quantity':0},{'quantity':True},{'quantity':1.5},
+    {'quantity':10**12},{'venue':'NXT'},{'venue':'SOR'},{'side':'buy'},{'code':'KR7005930003'}])
+def test_market_contract_rejects_unsupported_or_malformed_intents(changes):
+    from app.kiwoom_mock_contract import market_order_plan
+    with pytest.raises(ContractError):
+        market_order_plan(**dict(dict(code='900001',side='BUY',quantity=1),**changes))
+
+
 def test_page_whitelist_continuation_and_incomplete_are_distinct():
     row = dict(ord_no='0000012', orig_ord_no='0000000', stk_cd='900001',
                ord_qty='00002', oso_qty='00001', acnt_no='PRIVATE_ACCOUNT')
