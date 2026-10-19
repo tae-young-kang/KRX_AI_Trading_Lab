@@ -67,7 +67,9 @@ def collect_theme(history,client,mode,*,now=None,selection=None,progress=None,ca
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',[
             (source,b.date,b.market,b.code,b.name,b.open,b.high,b.low,b.close,b.volume,b.trade_value_eok,b.cap_eok,stamp)
             for b in buffered])
-    record_nxt(history,mode,stocks,now=moment)
+    # Listing observations arrive after the frozen request time. Validate them
+    # against completion time; the request date still controls daily selection.
+    record_nxt(history,mode,stocks,now=datetime.now(KST))
     scope=dict(universe_count=plan['universe_count'],candidate_count=len(plan['candidates']),
                excluded_count=len(plan['excluded']),unknown_count=len(plan['unknown_history']),missing_symbols=missing,
                markets=sorted({m for m,_,_ in plan['candidates']}))

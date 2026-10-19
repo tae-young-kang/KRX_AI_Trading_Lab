@@ -215,3 +215,22 @@ def test_invalid_symbol_does_not_block_valid_alert(tmp_path):
     transport=Transport()
     request.send_notice(transport,22,active=True)
     assert len(transport.messages)==2 and '900001' in transport.messages[-1]
+
+
+def test_nxt_observation_after_request_is_checked_at_completion(tmp_path,monkeypatch):
+    from dataclasses import replace
+    from datetime import timedelta
+    import app.theme_kiwoom as module
+    class Clock(datetime):
+        @classmethod
+        def now(cls,tz=None):return NOW+timedelta(seconds=20)
+    monkeypatch.setattr(module,'datetime',Clock)
+    # Keep the request a datetime of the patched class for input validation.
+    requested=Clock(2026,10,19,21,tzinfo=KST)
+    class Observed(Client):
+        def scan(self,*args,**kwargs):
+            return [replace(s,nxt_source='KIWOOM_KA10099',nxt_eligible=True,
+                nxt_observed_at=(requested+timedelta(seconds=5)).isoformat())
+                for s in super().scan(*args,**kwargs)]
+    result=collect_theme(HistoryStore(tmp_path/'history.db'),Observed(),'REAL_QUOTES',now=requested)
+    assert result['matched']==2
