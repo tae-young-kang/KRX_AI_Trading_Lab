@@ -5,6 +5,20 @@ from fractions import Fraction
 import re
 from app.recommendation_outcomes import session_day
 
+RULES_TEXT=('테마1 · 종목을 찾는 조건\n'
+    '대상: 코스피·코스닥 종목\n'
+    '최근 6거래일 중 아래 두 조건을 같은 날 만족한 날이 3일 이상이면 감지해요.\n'
+    '① 하루 거래대금 100억원 이상\n'
+    '② 전일 종가 대비 당일 고가 +5% 이상\n'
+    '고가 상승률 = (당일 고가 ÷ 전일 종가 − 1) × 100\n'
+    '휴장일은 제외해요. 새 거래일이 들어오면 가장 오래된 거래일을 빼요.\n'
+    '전일 종가 계산 때문에 판정에는 최소 7거래일의 일봉이 필요해요.\n'
+    '조건을 만족한 날짜는 4일 이상이어도 모두 표시해요. 날짜·요일, 고가 상승률, 거래대금을 보여줘요.\n'
+    '만족한 모든 날짜의 고가 상승률을 더해 65% 이상 / 65% 미만으로 표시해요.\n'
+    '65%는 분류 기준이며, 합계가 미만이어도 위 조건에 맞으면 감지해요. 투자 수익률이 아니에요.\n'
+    '종목명·시장·감지일 시가총액·NXT 거래 가능 여부도 함께 안내해요. 확인 근거가 없으면 미확인으로 표시해요.\n'
+    '일반 추천 조건과 별도의 발굴 방법이에요. /조건변경으로 테마1 기준이 바뀌지는 않아요.')
+
 
 def detect(*, code, market, bars, sessions, through, mode, price_source):
     """Require six confirmed sessions plus the preceding close, never weekday guesses."""

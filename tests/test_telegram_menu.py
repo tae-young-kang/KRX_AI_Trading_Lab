@@ -78,3 +78,13 @@ def test_condition_buttons_preview_confirm_and_preserve_other_settings(sandbox, 
     assert '중지' in service.handle(update(sandbox, 7, 'ETF: 포함'))
     assert service.handle(update(sandbox, 8, '메뉴로 돌아가기')).startswith(telegram_menu.HEADER)
     assert broker.calls == []
+
+
+def test_theme_conditions_are_visible_without_saved_result_or_orders(sandbox):
+    from app.theme_one import RULES_TEXT
+    service,broker,_,_=sandbox
+    service.orders_enabled=False
+    assert service.handle(update(sandbox,1,'테마1 조건'))==RULES_TEXT
+    service.handle(update(sandbox,2,'/중지'))
+    assert service.handle(update(sandbox,3,'/테마1조건'))==RULES_TEXT
+    assert broker.calls==[]

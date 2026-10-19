@@ -13,6 +13,7 @@ from app.order_engine import OrderEngine, OrderRequest, OrderError, connect
 from app.trading_clock import KST
 from app import order_safety
 from app import telegram_menu
+from app.theme_one import RULES_TEXT as THEME_ONE_RULES
 
 HELP = ('[가짜 서버 주문 연습 · 실제 돈 사용 안 함]\n'
         '/매수 900001 1 1000 또는 /매도 900001 1 1000\n'
@@ -214,6 +215,8 @@ class TelegramOrderService:
                                if match[5] else self.theme_budget(*args))
                     except ValueError:
                         reply='테마1 판정과 총예산·수수료·가격 여유·익절/손절 비율을 확인해 주세요. 주문하지 않았어요.'
+            elif text=='/테마1조건':
+                reply=THEME_ONE_RULES
             elif text in ('/테마1검색','/테마1검색상태'):
                 if self.theme_request is None:
                     reply='테마1 검색 연결이 없어요. PC에서 수신을 다시 시작해 주세요.'

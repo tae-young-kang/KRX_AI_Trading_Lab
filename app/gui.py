@@ -30,6 +30,7 @@ from app.theme_input import selection_from_days, prepare_days as prepare_theme_d
 from app.theme_input import prepare_confirmed
 from app.theme_request import ThemeRequest
 from app.theme_collection import collect_and_prepare
+from app.theme_one import RULES_TEXT as THEME_ONE_RULES
 from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
 from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text
@@ -309,6 +310,18 @@ class MainWindow(QMainWindow):
         live.setEnabled(False)
         shortcuts.addWidget(live)
         v.addLayout(shortcuts)
+        telegram_controls=QHBoxLayout()
+        self.home_telegram_start=QPushButton('텔레그램으로 추천 받기 시작',objectName='Primary')
+        self.home_telegram_start.clicked.connect(self.start_telegram_orders)
+        self.home_telegram_stop=QPushButton('텔레그램 수신 중지')
+        self.home_telegram_stop.setEnabled(False)
+        self.home_telegram_stop.clicked.connect(self.stop_telegram_orders)
+        telegram_controls.addWidget(self.home_telegram_start)
+        telegram_controls.addWidget(self.home_telegram_stop)
+        v.addLayout(telegram_controls)
+        self.home_telegram_status=lbl('수신 중지 · 위의 시작 버튼을 누른 뒤 봇 대화방에 /메뉴를 보내세요.','Muted')
+        self.home_telegram_status.setWordWrap(True)
+        v.addWidget(self.home_telegram_status)
         history_button = QPushButton('지난 추천 확인하기 · 기록과 이후 가격')
         history_button.clicked.connect(self.show_recommendation_history)
         v.addWidget(history_button)
@@ -345,6 +358,9 @@ class MainWindow(QMainWindow):
         view=QTextEdit()
         view.setReadOnly(True)
         layout.addWidget(view)
+        rules=QPushButton('테마1 조건 보기 · 6거래일 중 3일 이상 / 100억원 / 고가 +5%')
+        rules.clicked.connect(lambda:QMessageBox.information(self,'테마1 판정 조건',THEME_ONE_RULES))
+        layout.addWidget(rules)
         page=QSpinBox()
         page.setPrefix('페이지 ')
         page.setRange(1,999999)
@@ -925,6 +941,7 @@ class MainWindow(QMainWindow):
         collect=choice=='KRX 수집 후 판정'
         source='KRX' if choice.startswith('KRX') else choice
         dates,ok=QInputDialog.getMultiLineText(self,'2/2 · 확인한 거래일',
+            '테마1: 최근 6거래일 중 거래대금 100억원 이상 + 전일 종가 대비 고가 +5% 이상인 날이 3일 이상\n'
             '휴장일을 뺀 실제 거래일을 오래된 순서대로 한 줄에 하나씩 입력하세요 (YYYY-MM-DD).\n'
             '마지막 날짜가 감지 기준일이에요. 최근 6거래일과 전일 종가용 1일, 총 7거래일 이상이 필요해요.\n'
             '저장된 날짜를 거래일로 자동 간주하지 않아요. 거래소 달력에서 빠진 거래일이 없는지 확인하세요.')
@@ -1619,7 +1636,9 @@ class MainWindow(QMainWindow):
         self.telegram_order_worker = worker
         worker.status.connect(self.telegram_orders_status)
         worker.finished.connect(self.telegram_orders_finished)
-        self.telegram_order_status.setText('연결 확인 중 · '+current_mode(self.cfg).title)
+        self.set_telegram_status('연결 확인 중 · '+current_mode(self.cfg).title)
+        self.home_telegram_start.setEnabled(False)
+        self.home_telegram_stop.setEnabled(True)
         self.telegram_order_start.setEnabled(False)
         self.telegram_order_stop.setEnabled(True)
         worker.start()
@@ -1630,10 +1649,15 @@ class MainWindow(QMainWindow):
         self.telegram_order_stop.setEnabled(False)
         self.telegram_emergency.setEnabled(False)
         self.telegram_resume.setEnabled(False)
-        self.telegram_order_status.setText('수신 중지 요청 · 확인 대기 철회 · 이미 접수한 주문 취소는 별도입니다.')
+        self.home_telegram_stop.setEnabled(False)
+        self.set_telegram_status('수신 중지 요청 · 확인 대기 철회 · 이미 접수한 주문 취소는 별도입니다.')
+
+    def set_telegram_status(self,text):
+        self.telegram_order_status.setText(text)
+        self.home_telegram_status.setText(text)
 
     def telegram_orders_status(self, text):
-        self.telegram_order_status.setText(text)
+        self.set_telegram_status(text)
         worker = self.telegram_order_worker
         ready = bool(worker and worker.service is not None and worker.isRunning()
                      and not worker.isInterruptionRequested() and text.startswith('수신 중 ·'))
@@ -1646,10 +1670,10 @@ class MainWindow(QMainWindow):
             return
         try:
             report = worker.emergency_stop()
-            self.telegram_order_status.setText(report)
+            self.set_telegram_status(report)
             QMessageBox.information(self, '긴급 중지 · 가짜 서버만 연결', report)
         except Exception:
-            self.telegram_order_status.setText('긴급 중지 기록·주문 상태 확인이 필요합니다. 수신을 중지하고 재시작해 복구 확인하세요.')
+            self.set_telegram_status('긴급 중지 기록·주문 상태 확인이 필요합니다. 수신을 중지하고 재시작해 복구 확인하세요.')
 
     def resume_telegram_orders(self):
         worker = self.telegram_order_worker
@@ -1660,20 +1684,22 @@ class MainWindow(QMainWindow):
                 '실제 계좌에 주문하지 않습니다. 계속할까요?') != QMessageBox.StandardButton.Yes:
             return
         try:
-            self.telegram_order_status.setText(worker.resume_after_review())
+            self.set_telegram_status(worker.resume_after_review())
         except ValueError as exc:
             QMessageBox.information(self, '재개하지 않음', str(exc))
         except Exception:
             QMessageBox.information(self, '재개하지 않음', '복구 기록을 확인하지 못했습니다. 수신을 중지하세요.')
 
     def telegram_orders_finished(self):
+        self.home_telegram_start.setEnabled(True)
+        self.home_telegram_stop.setEnabled(False)
         self.telegram_order_start.setEnabled(True)
         self.telegram_order_stop.setEnabled(False)
         self.telegram_emergency.setEnabled(False)
         self.telegram_resume.setEnabled(False)
         if ('확인하세요' not in self.telegram_order_status.text()
                 and not self.telegram_order_status.text().startswith('수신 중지 ·')):
-            self.telegram_order_status.setText('수신 중지 · 자동으로 다시 시작하지 않습니다.')
+            self.set_telegram_status('수신 중지 · 자동으로 다시 시작하지 않습니다.')
 
     def run_task(self, fn, ok, success_text='완료', with_progress=False):
         if self.work is not None and self.work.isRunning():
