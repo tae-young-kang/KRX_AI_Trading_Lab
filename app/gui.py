@@ -815,11 +815,11 @@ class MainWindow(QMainWindow):
             result=self.history.fetch_range(KRXDailyClient(key),start,today)
             bars=self.history.load_bars('KRX')
             if len(bars)<100:return result,None
-            from app.research_preflight import check_research_coverage
+            from app.research_preflight import check_research_coverage, auto_research_blocked
             selected_reference=getattr(self,'research_reference',None)
             reference_path=(selected_reference[1] if selected_reference and selected_reference[0]=='KRX' else None)
             quality=check_research_coverage(self.history,'KRX',bars,reference_path=reference_path)
-            if quality['state']=='ALERT':
+            if auto_research_blocked(quality):
                 # Automatic research must never silently promote suspect evidence.
                 return result,('COVERAGE_ALERT',quality)
             report=evaluate_research(bars,topk=5)
