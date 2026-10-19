@@ -7,14 +7,22 @@ import csv
 import re
 from collections import Counter
 from pathlib import Path
+from datetime import datetime
 
 from app.recommendation_outcomes import session_day
+from app.trading_clock import KST
 
 MARKETS = ('KOSPI', 'KOSDAQ')
 SOURCES = ('KRX', 'CSV_USER', 'DEMO_SYNTHETIC')
 HEADERS = ['market', 'day', 'min_symbols']
 MAX_FILE_BYTES = 1024 * 1024
 MAX_REFERENCE_ROWS = 10000
+STATUS_LABELS = {
+    'MISSING_DAY': '저장 일봉 없음',
+    'BELOW_REFERENCE': '최소 종목 수 미달',
+    'COUNT_DROP': '직전 입력일 대비 급감 의심',
+    'NORMALIZATION_OMISSIONS': '정규화에서 일부 제외',
+}
 
 
 def read_reference(path):
@@ -37,7 +45,8 @@ def read_reference(path):
                 market, day, floor = (row[key] for key in HEADERS)
                 if market not in MARKETS or not isinstance(day, str):
                     raise ValueError()
-                session_day(day)
+                if session_day(day) > datetime.now(KST).date():
+                    raise ValueError()
                 if not isinstance(floor, str) or not re.fullmatch(r'[0-9]+', floor):
                     raise ValueError()
                 minimum = int(floor)
@@ -107,12 +116,12 @@ def render_audit(report, *, max_rows=8):
         '[외부 확인 거래일·최소 종목 수 대조]',
         f"저장 출처: {report['source']} · 외부 입력 {report['reference_days']}개 시장/날짜",
         f"저장 자료 없는 날 {c.get('MISSING_DAY',0)} · 최소 종목 수 미달 {c.get('BELOW_REFERENCE',0)}",
-        f"전일 대비 종목 수 30% 초과 급감 의심 {c.get('COUNT_DROP',0)} · 정규화 제외 관측 {c.get('NORMALIZATION_OMISSIONS',0)}",
+        f"직전 입력 거래일 대비 종목 수 30% 초과 급감 의심 {c.get('COUNT_DROP',0)} · 정규화 제외 관측 {c.get('NORMALIZATION_OMISSIONS',0)}",
         '표시 항목은 중복 경고할 수 있어요. 종목 수 하한을 넘겨도 완전 수집을 보증하지 않아요.',
     ]
     for item in report['flagged'][:max_rows]:
         lines.append(f"{item['day']} {item['market']}: 저장 {item['stored']}개 / 외부 최소 {item['minimum']}개 · "
-                     + ','.join(item['statuses']))
+                     + ','.join(STATUS_LABELS[s] for s in item['statuses']))
     remaining = len(report['flagged']) - max_rows
     if remaining > 0:
         lines.append(f'그 외 확인 필요 {remaining}개 시장/날짜 (최대 {max_rows}개만 표시)')
