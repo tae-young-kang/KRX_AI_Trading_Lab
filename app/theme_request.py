@@ -61,7 +61,9 @@ class ThemeRequest:
                 return None
             if busy:return None
             self.state='RUNNING'
-            self.message=f'기준일 {self.data["through"]} · 저장 시세로 테마1 판정 중이에요.'
+            action=('키움 시세를 조회하고 테마1 종목을 찾고 있어요.'
+                    if self.data['source'] in KIWOOM_SOURCES.values() else '저장 시세로 테마1 판정 중이에요.')
+            self.message=f'기준일 {self.data["through"]} · '+action
             return self.data
 
     def finish(self,*,success,result=None):
@@ -77,7 +79,7 @@ class ThemeRequest:
                 return
             self.message=(f'기준일 {self.data["through"]} · 감지 {result["matched"]}개 · 자료 부족 '
                           f'{result["states"].get("PRICE_MISSING",0)}개\n/테마1에서 결과를 보세요. 전체 시장 수집 완료는 미확인이에요.'
-                          if success else '테마1 판정을 완료하지 못했어요. PC에서 저장 시세·거래일 설정을 확인하세요.')
+                          if success else '테마1 검색을 완료하지 못했어요. PC의 오류 안내를 확인한 뒤 /테마1검색으로 다시 요청하세요.')
             self._notice=dict(message=self.message,run_id=result.get('run_id') if success else None)
 
     def send_notice(self,transport,chat_id,*,active,stopped=lambda:False):
