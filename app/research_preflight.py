@@ -56,3 +56,9 @@ def preflight_notice(quality):
         return ('자료 품질: 입력한 외부 최소 기준에 대한 경고 없음 · '
                 '공식 전체 종목/거래일/기업행동/시세 검증 완료는 아니에요.')
     return '자료 품질을 확인할 수 없어요. 조건 검증 결과는 연구용으로만 보세요.'
+
+
+def auto_research_blocked(quality):
+    """Fail closed on alerts/unknown states, without promoting unchecked data."""
+    return (not isinstance(quality, dict) or
+            quality.get('state') not in ('NOT_CHECKED', 'REFERENCE_FLOOR_MET'))
