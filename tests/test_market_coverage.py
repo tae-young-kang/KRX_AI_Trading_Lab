@@ -40,6 +40,7 @@ def test_detects_whole_missing_market_day_and_count_drop_without_cross_source_fi
     assert store.count('CSV_USER')[0]==original_count
     assert '저장 자료 없는 날 1' in render_audit(report)
     assert '외부 CSV의 진위' in render_audit(report)
+    assert '최소 종목 수 미달' in render_audit(report)
 
 
 def test_ingest_omissions_counted_but_not_hidden_behind_minimum_floor(tmp_path):
@@ -65,6 +66,7 @@ def test_ingest_omissions_counted_but_not_hidden_behind_minimum_floor(tmp_path):
     'market,day,min_symbols\nKOSPI,2026-10-13,1\nKOSPI,2026-10-13,2\n',
     'market,day,min_symbols\nWRONG,2026-10-13,1\n',
     'market,day,min_symbols\nKOSPI,2026-10-13,1,extra\n',
+    'market,day,min_symbols\\nKOSPI,2999-01-01,1\\n',
 ])
 def test_bad_external_reference_is_rejected(tmp_path,data):
     path=tmp_path/'x.csv'
