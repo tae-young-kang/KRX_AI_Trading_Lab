@@ -517,6 +517,9 @@ class MainWindow(QMainWindow):
         backup_button=QPushButton('현재 모드 기록 백업하기')
         backup_button.clicked.connect(self.backup_current_records)
         row.addWidget(backup_button)
+        verify_button=QPushButton('저장한 백업 확인하기')
+        verify_button.clicked.connect(self.inspect_saved_backup)
+        row.addWidget(verify_button)
         detail = QPushButton('선택 매매의 당시 조건 보기')
         detail.clicked.connect(self.show_trade_conditions)
         row.addWidget(detail)
@@ -2094,6 +2097,27 @@ class MainWindow(QMainWindow):
             self.timer.start()
             self.auto_button.setText('자동 검색 중지')
             self.scan()
+
+    def inspect_saved_backup(self):
+        """Inspect an explicitly selected snapshot; never overwrite or restore."""
+        if self.work and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 백업을 확인해 주세요.')
+            return
+        mode=current_mode(self.cfg)
+        folder=QFileDialog.getExistingDirectory(self,mode.title+' · 확인할 백업 폴더 선택')
+        if not folder: return
+        from app.record_backup import inspect_backup
+        self.run_task(
+            lambda:inspect_backup(folder,expected_mode=mode.key),
+            lambda info:QMessageBox.information(
+                self,'백업 검증 완료',
+                f"{mode.title} 기록 사본을 확인했어요.\\n"
+                f"저장 시각: {info['created_at']}\\n"
+                f"검색 기록: {info['scan_count']}건\\n"
+                f"매매 기록: {info['trade_count']}건\\n"
+                f"추천 묶음: {info['recommendation_count']}건\\n"
+                '현재 데이터는 변경하지 않았어요. 실제 복원·주문은 하지 않았어요.'),
+            '현재 모드 기록 백업 검증 완료')
 
     def backup_current_records(self):
         if self.work and self.work.isRunning():
