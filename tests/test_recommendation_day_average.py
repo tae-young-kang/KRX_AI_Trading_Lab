@@ -125,3 +125,32 @@ def test_total_day_denominator_includes_dates_without_any_observations():
         assert horizon['complete_days'] == 1
         assert horizon['complete_daily_mean'] == 10.0
         assert '집계 내 완전 관측일 1/2일' in summary(db, 'DEMO')
+
+
+def test_coverage_separates_complete_partial_unobserved_days():
+    with sample_db() as db:
+        add_pick(db, 1, '2026-10-15', 'A', change=10.0)
+        add_pick(db, 1, '2026-10-15', 'B', state='PRICE_MISSING')
+        add_pick(db, 2, '2026-10-16', 'C', state='NOT_DUE')
+        add_pick(db, 3, '2026-10-17', 'D', change=-5.0)
+        data, _ = groups(db, 'DEMO')
+        h = data[0]['horizons'][1]
+        assert (h['selected_days'], h['observed_days'], h['complete_days']) == (3, 2, 1)
+        assert (h['partial_days'], h['unobserved_days']) == (1, 1)
+        assert h['partial_days'] + h['unobserved_days'] + h['complete_days'] == h['selected_days']
+        message = summary(db, 'DEMO')
+        assert '완전 관측일 1/3일 · 부분 관측 1일 · 이 출처에서 미관측 1일' in message
+        assert len(message) < 4096
+
+
+def test_zero_observation_source_still_shows_coverage_denominator():
+    with sample_db() as db:
+        add_pick(db, 1, '2026-10-15', 'A', state='NOT_DUE')
+        add_pick(db, 2, '2026-10-16', 'B', state='PRICE_MISSING')
+        data, _ = groups(db, 'DEMO')
+        h = data[0]['horizons'][1]
+        assert (h['selected_days'], h['complete_days'], h['partial_days'], h['unobserved_days']) == (2, 0, 0, 2)
+        message = summary(db, 'DEMO')
+        assert '완전 관측일 0/2일 · 부분 관측 0일 · 이 출처에서 미관측 2일' in message
+        assert '완전 관측일 평균 미확인' in message
+        assert '가격 변화는 비용' in message
