@@ -3,7 +3,7 @@ import pytest
 
 from app.backtest import Bar
 from app.krx_history import HistoryStore
-from app.research_preflight import check_research_coverage, preflight_notice
+from app.research_preflight import check_research_coverage, preflight_notice, auto_research_blocked
 
 
 def bar(day, market='KOSPI', code='900001'):
@@ -94,3 +94,29 @@ def test_stale_local_reference_cannot_be_silently_accepted(tmp_path):
     ref.unlink()
     with pytest.raises(ValueError):
         check_research_coverage(history, 'KRX', rows, reference_path=ref)
+
+
+
+def test_auto_research_quality_gate_blocks_alerts_and_unknown_states():
+    assert auto_research_blocked({'state': 'ALERT'})
+    assert auto_research_blocked({'state': 'UNKNOWN'})
+    assert auto_research_blocked(None)
+    assert not auto_research_blocked({'state': 'NOT_CHECKED'})
+    assert not auto_research_blocked({'state': 'REFERENCE_FLOOR_MET'})
+
+
+def test_coverage_quality_persisted_with_research_run_not_local_csv_path(tmp_path):
+    history = HistoryStore(tmp_path / 'hist.db')
+    rows = [bar('2026-10-13')]
+    history.insert_bars(rows, 'CSV_USER')
+    ref = reference(tmp_path, 'market,day,min_symbols\nKOSPI,2026-10-13,1\n')
+    quality = check_research_coverage(history, 'CSV_USER', rows, reference_path=ref)
+    report = {
+        'data_begin': '2026-10-13', 'data_end': '2026-10-13',
+        'symbols': 1, 'top_signals': [], 'coverage_quality': quality,
+    }
+    run_id = history.save_run('CSV_USER', {'topk': 5}, report)
+    loaded = history.last_run('CSV_USER')
+    assert loaded[0] == run_id
+    assert loaded[2]['coverage_quality'] == quality
+    assert str(ref) not in str(loaded[2])
