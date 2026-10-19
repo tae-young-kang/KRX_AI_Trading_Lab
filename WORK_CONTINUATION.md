@@ -136,3 +136,15 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - GitHub Actions Python 3.11 오프라인 회귀 **784 passed in 15.99s** (환경에 의존하는 `tests/test_scan_ui.py` 제외). https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39237697971 (검증 코드 SHA `5f118ed52d7df7766453f9e82b13a1669f37ce77`).
 - 외부 대조 CSV는 사용자 제공이므로 공식 KRX 거래일/전체 상장 종목의 출처 인증·기업행동/수정주가/생존편향·실제 수익의 독립 실증이 아닙니다. Windows GUI 실제 클릭, 개인 이력, 키움 실모의 체결/HTS 대조, 실계좌 주문은 **실행하지 않았습니다**.
 - Work 인수인계: 최신 Draft PR #1의 브랜치 SHA·CI를 재확인하고 Windows GUI의 외부 대조→수동 연구 품질 경고/상태 저장→자동 보류 경로를 합성 자료로 확인해 주세요. 기존 main은 변경하지 않았고 강제 푸시/실주문/비밀키 업로드 금지 유지.
+
+## 2026-10-19 추가 개발: 48개 조건 학습→검증 차이와 자료 품질 분석
+
+- `app/research_comparison.py`: TRAIN/TEST의 3일 평균 초과수익 차이(`holdout_gap3=test_excess3-train_excess3`, %p)와 자료 전체 `coverage_quality`, 학습·검증 평가일 수(경고용 12/5일)로 각 조건의 **해석/주의 문구**를 계산합니다.
+- **절대 재정렬/자동 승격하지 않음**: 원래 `evaluate_research`가 TRAIN 결과로만 결정한 후보·순서 및 `chosen_on_train_only`를 보존하고, TEST는 기술통계 분석용으로만 사용합니다. 48개 조건이 같은 시기/시장 자료에 기반해 독립 검증이 아님을 안내합니다.
+- `app/gui.py` 연구 화면: `학습→검증 차이(%p)`, `자료/결과 해석` 2개 컬럼 추가. 선택한 조건 세부 설명과 상단 연구 요약에도 자료 확인/표본/다중조건 해석 한계 반영.
+- `app/research.py` `export_report`: `summary.csv`에 `holdout_gap3`, `data_quality_label`, `comparison_note`, `adequate_train_days`, `adequate_test_days` 추가. 이전 컬럼·행 순서 유지.
+- `tests/test_research_comparison.py`: 가상의 TRAIN 양수→TEST 음수, 검증이 좋은 다른 후보에 의해 **원래 TRAIN 순서가 바뀌지 않음**, 자료 이상 우선 안내, 과거 품질 필드 없는 리포트, 표본 부족, 비정상/극단적 수치, CSV 내보내기 등 검사 추가.
+- `docs/RESEARCH_COMPARISON.md`: 지표 정의, 품질 상태, 다중조건 과적합·통계적 비독립성·누적수익이 아님을 설명.
+- GitHub Actions **806 passed in 29.46s**, 성공 검증 코드 SHA `378d0b8e7e0981abdb5cc6f441aa792a5da7d97d`, https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39239155394 . 이후 문서만 추가되었음.
+- 환경: Python 3.11 오프라인 pytest (`tests/test_scan_ui.py` 제외). 실 Windows GUI, 사용자 원본 시세의 신뢰도, 키움 실제 모의 체결/HTS 대조, 실계좌 주문, 개인 인증정보는 **사용·검증하지 않았음**.
+- 다음 Work 목표: 실제 Windows 합성 데이터 GUI에서 연구 표·선택 변경/품질 없는 과거 리포트/CSV 내보내기를 검증하고, 단계 7~8의 **정확한 실제 데이터로 독립 전략 성능 검증**과 단계 5의 모의 체결 준비를 순차 진행. PR #1 리뷰 전 `main`에 병합하지 마세요.

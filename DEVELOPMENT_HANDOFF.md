@@ -754,3 +754,13 @@ b90f606에서는 계좌 패턴 검사의 산술식 오탐을 확인하기 전에
 - 관련 코드 `app/research_preflight.py`, `app/gui.py`; 합성 회귀 `tests/test_research_preflight.py` 총 9개 테스트 추가. 상세 `docs/RESEARCH_PREFLIGHT.md`.
 - 전체 오프라인 CI 성공: **784 passed in 15.99s**, https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39237697971, SHA `5f118ed52d7df7766453f9e82b13a1669f37ce77`.
 - `tests/test_scan_ui.py` 제외, 실제 Windows PySide6 GUI/개인 DB/실제 외부 KRX 거래일·종목 수 출처/실제 키움 모의체결·HTS 대조는 미검증. 실제 시장/주문/인증정보 사용 없음. `main`은 유지, Draft PR에서 검토.
+
+## 2026-10-19 연속 개발: 48개 후보 비교 / TRAIN→TEST 격차 (CI 806 통과)
+
+- `app/research_comparison.py`에서 3거래일 평균 초과수익의 `TEST-TRAIN` 변화량(percentage points) 계산, 표본 경고/외부 자료 대조 상태/학습 양수→검증 비양수 경고 등의 **비교 진단만** 추가.
+- `app/gui.py` 연구 조건 표에 학습→검증 차이와 자료/결과 해석 추가. 조건 상세와 상단에 공통 자료 품질·48조건 검증 구간 과적합 위험을 안내.
+- `app/research.py` CSV 내보내기 `summary.csv`에 진단 5개 필드 추가; 기존 정렬 순서와 학습 구간 기반 `chosen_on_train_only`는 불변.
+- 값의 유효성 검사/극단적 유한수 차이 overflow 방지/부족 관측/구버전 보고서 대응/CSV 컬럼 포함 신규 회귀 테스트.
+- GitHub Actions Python 3.11 오프라인 전체 **806개 통과** https://github.com/tae-young-kang/KRX_AI_Trading_Lab/actions/runs/39239155394 (변경 코드 SHA `378d0b8e7e0981abdb5cc6f441aa792a5da7d97d`).
+- 개별 조건별 품질 인증/실제 투자수익 보장이 아닌 **같은 실험 자료의 출처 전체 상태**, TRAIN/TEST 수치 비교는 다중 비교/보유기간 중첩으로 독립 표본이 아님. 12/5일은 경고 기준이지 유의성/통계적 신뢰구간 아님.
+- 실제 Windows GUI, 실 원본 시세/기업행동/상장폐지 데이터, 실제 체결 실증 미완료. 실제 시장 API/계좌/비밀키 접속 및 실주문 없음. Draft PR #1 유지, main 미병합.
