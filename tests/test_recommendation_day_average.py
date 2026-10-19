@@ -10,7 +10,7 @@ def sample_db():
     db.row_factory = sqlite3.Row
     db.executescript("""
         CREATE TABLE recommendation_batches (
-            scan_id INTEGER, created_at TEXT, conditions_json TEXT, mode TEXT);
+            scan_id INTEGER PRIMARY KEY, created_at TEXT, conditions_json TEXT, mode TEXT);
         CREATE TABLE recommendations (
             scan_id INTEGER, code TEXT, market TEXT, rank INTEGER);
         CREATE TABLE recommendation_reviews (
