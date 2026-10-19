@@ -38,7 +38,7 @@ from app.theme_sources import KIWOOM_SOURCES
 from app.theme_one import RULES_TEXT as THEME_ONE_RULES
 from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
-from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text
+from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text,plan_text as theme_plan_text
 from app.nxt_evidence import record as record_nxt_evidence
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
@@ -1700,6 +1700,7 @@ class MainWindow(QMainWindow):
                                      recommendation_request=self.remote_scan,
                                      theme_request=self.remote_theme,
                                      outcome_request=self.remote_outcome,
+                                     theme_plan=lambda text,history=self.history,mode=current_mode(self.cfg).key:theme_plan_text(history,mode,text),
                                      recommendation_status=lambda db=self.db, mode=current_mode(self.cfg).key: recommendation_schedule_summary(db,mode,enabled=self.cfg.get('recommendation_auto_evaluate'),now=datetime.now(KST),automatic_source=recommendation_calendar_source(self.cfg,mode)),
                                      watch_status=self.mock_watch_status.summary,
                                      watch_refresh=self.mock_watch_status.request_refresh,

@@ -5,6 +5,74 @@ from app.krx_history import HistoryStore
 from app.recommendation_outcomes import SessionEvidence
 from app.theme_store import prepare
 from app.theme_budget import preview_latest,preview_text
+from test_telegram_orders import sandbox,update
+
+
+def test_single_name_quantity_and_amount_plan_uses_frozen_selection(tmp_path):
+    from app.theme_budget import plan_text
+    from test_theme_delivery import setup
+    history,args=setup(tmp_path)
+    shares=plan_text(history,'DEMO','/테마1계획 연습 10주 익절 4.25 손절 1.75')
+    assert '요청 10주' in shares and '예상 10주' in shares
+    assert '예상 확보액 1,030원' in shares and '익절 +4.25%' in shares
+    money=plan_text(history,'DEMO','/테마1계획 900001 1,000원')
+    assert '예상 9주' in money and '남는 예산 73원' in money
+    with history.connect() as db:db.execute('UPDATE daily_bars SET close=105')
+    assert plan_text(history,'DEMO','/테마1계획 900001 1000원')==money
+    assert '총금액' in plan_text(history,'DEMO','/테마1계획 전체 10주')
+    assert '사용법' in plan_text(history,'DEMO','/테마1계획 연습 1,00원')
+    with pytest.raises(ValueError,match='없는 종목'):
+        plan_text(history,'DEMO','/테마1계획 다른종목 10주')
+
+
+def test_whole_theme_plan_pages_keep_the_same_budget(tmp_path):
+    from app.theme_budget import plan_text
+    from test_theme_delivery import setup
+    history,args=setup(tmp_path)
+    with history.connect() as db:original=db.execute('SELECT * FROM daily_bars').fetchall()
+    for index in range(2,7):
+        history.insert_bars([Bar(r['day'],f'90000{index}',f'종목{index}','KOSPI',100,110,99,100,1000,100,4000)
+                            for r in original],'DEMO')
+    prepare(history,**args)
+    first=plan_text(history,'DEMO','/테마1계획 전체 1만원')
+    second=plan_text(history,'DEMO','/테마1계획 전체 1만원 페이지 2')
+    assert '총예산 10,000원 · 종목당 1,666원' in first and '총예산 10,000원 · 종목당 1,666원' in second
+    assert '900006' not in first and '900006' in second
+    assert '/테마1계획 전체 10000원 페이지 2' not in first
+    assert '/테마1계획 전체 1만원 페이지 2' in first
+
+
+def test_theme_plan_command_is_authorized_replayable_and_never_orders(tmp_path,sandbox):
+    from app.theme_budget import plan_text
+    from test_theme_delivery import setup
+    history,_=setup(tmp_path)
+    service,broker,_,_=sandbox
+    service.orders_enabled=False;service.theme_plan=lambda text:plan_text(history,'DEMO',text)
+    bad=update(sandbox,1,'/테마1계획 연습 10주');bad['message']['from']['id']=99
+    assert service.handle(bad) is None
+    event=update(sandbox,2,'/테마1계획 연습 10주')
+    reply=service.handle(event)
+    assert '예상 10주' in reply and reply==service.handle(event)
+    assert '주문 안 함' in reply and broker.calls==[]
+
+
+def test_same_name_requires_code_and_missing_reference_cannot_be_guessed(tmp_path):
+    from app.theme_budget import plan_text
+    from test_theme_delivery import setup
+    history,args=setup(tmp_path)
+    with history.connect() as db:original=db.execute('SELECT * FROM daily_bars').fetchall()
+    history.insert_bars([Bar(r['day'],'900002','연습','KOSPI',100,110,99,100,1000,100,4000) for r in original],'DEMO')
+    prepare(history,**args)
+    with pytest.raises(ValueError,match='같은 이름'):
+        plan_text(history,'DEMO','/테마1계획 연습 10주')
+    assert '예상 10주' in plan_text(history,'DEMO','/테마1계획 900001 10주')
+    with history.connect() as db:
+        rows=db.execute('SELECT id,result_json FROM theme_alerts').fetchall()
+        for row in rows:
+            payload=json.loads(row['result_json']);payload['result'].pop('reference_close',None)
+            db.execute('UPDATE theme_alerts SET result_json=? WHERE id=?',(json.dumps(payload),row['id']))
+    with pytest.raises(ValueError,match='기준 가격'):
+        plan_text(history,'DEMO','/테마1계획 900001 10주')
 
 
 def test_budget_uses_frozen_run_close_not_mutated_cache(tmp_path):

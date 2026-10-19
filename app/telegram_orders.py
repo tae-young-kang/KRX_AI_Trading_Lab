@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -56,6 +56,7 @@ class TelegramOrderService:
         self.outcome_request=outcome_request
         self.theme_status = theme_status
         self.theme_budget = theme_budget
+        self.theme_plan=theme_plan
         self.practice_daily = practice_daily
         self.recommendation_request = recommendation_request
         self.recommendation_status = recommendation_status
@@ -202,6 +203,11 @@ class TelegramOrderService:
                         reply=self.practice_daily(day) if page==1 else self.practice_daily(day,page=page)
                     except (ValueError,TypeError,OverflowError):
                         reply='날짜와 연습 결산 기록을 확인해야 해요. 실제 계좌 결산은 아닙니다.'
+            elif text.split(' ',1)[0]=='/테마1계획':
+                if not self.theme_plan:reply='테마1 계획 연결이 없어요. PC 프로그램을 업데이트하고 다시 실행해 주세요.'
+                else:
+                    try:reply=self.theme_plan(text)
+                    except ValueError as error:reply=str(error)
             elif text.split(' ',1)[0] == '/테마1예산':
                 match=re.fullmatch(r'/테마1예산 ([1-9][0-9]{0,14}) ([0-9]{1,3}(?:\.[0-9]{1,2})?) ([0-9]{1,3}(?:\.[0-9]{1,2})?)(?: ([1-9][0-9]{0,5}))?(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
                 if not match:
@@ -331,6 +337,7 @@ class TelegramOrderService:
                 reply += '\n/평가상태: 추천 성적 자동 갱신 상태'
                 reply += '\n/성적갱신: 저장 자료로 추천 성적 다시 계산 · /성적갱신상태: 진행 확인'
                 reply += '\n/성적자료보완: 빠진 KRX 일봉 수집 후 다시 평가 (별도 KRX 키 필요)'
+                reply += '\n/테마1계획 종목명 10주 또는 전체 100만원: 매수 계획 보기 (주문 안 함)'
                 reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
                 reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
