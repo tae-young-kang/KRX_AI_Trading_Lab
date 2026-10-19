@@ -27,6 +27,8 @@ from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
 from app.theme_input import prepare_selection as prepare_theme_selection
 from app.theme_input import selection_from_days, prepare_days as prepare_theme_days
+from app.theme_input import prepare_confirmed
+from app.theme_request import ThemeRequest
 from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
 from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text
@@ -151,6 +153,8 @@ class MainWindow(QMainWindow):
         self.scanning = False
         self.remote_scan = None
         self.remote_scan_active = False
+        self.remote_theme = None
+        self.remote_theme_active = False
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
         self.resize(1390, 860)
         self.setMinimumSize(1100, 690)
@@ -1564,12 +1568,14 @@ class MainWindow(QMainWindow):
             return
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
         self.condition_commands.sync(self.cfg, self.settings.save, now=datetime.now().timestamp(), busy=True)
-        if self.remote_scan_active:
+        if self.remote_scan_active or self.remote_theme_active:
             return
         self.remote_scan = RecommendationRequest(current_mode(self.cfg).key)
+        self.remote_theme = ThemeRequest(self.history,current_mode(self.cfg).key)
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
                                      recommendation_request=self.remote_scan,
+                                     theme_request=self.remote_theme,
                                      recommendation_status=lambda db=self.db, mode=current_mode(self.cfg).key: recommendation_schedule_summary(db,mode,enabled=self.cfg.get('recommendation_auto_evaluate'),now=datetime.now(KST)),
                                      watch_status=self.mock_watch_status.summary,
                                      watch_refresh=self.mock_watch_status.request_refresh,
@@ -1672,6 +1678,11 @@ class MainWindow(QMainWindow):
             self.task_failed(str(ex))
 
     def task_failed(self, message):
+        if self.remote_theme_active:
+            self.remote_theme.finish(success=False)
+            self.remote_theme_active=False
+            self.statusBar().showMessage('테마1 판정 미완료 · 저장 자료를 확인하세요.')
+            return
         if self.remote_scan_active:
             self.remote_scan.finish(success=False)
             self.remote_scan_active = False
@@ -1698,9 +1709,21 @@ class MainWindow(QMainWindow):
                       and not worker.isInterruptionRequested())
         if active:
             active = worker.service.accepts_search_requests()
+        if self.remote_theme is not None:
+            data=self.remote_theme.take(current_mode(self.cfg).key,
+                busy=bool(self.work and self.work.isRunning()),active=active)
+            if data is not None:
+                self.remote_theme_active=True
+                self.run_task(lambda:prepare_confirmed(self.history,data,self.remote_theme.mode,remember=False),
+                              self.remote_theme_done,'테마1 판정 저장 완료')
+                return
         if self.remote_scan.take(current_mode(self.cfg).key,
                                  busy=bool(self.work and self.work.isRunning()), active=active):
             self.scan(remote=True)
+
+    def remote_theme_done(self,result):
+        self.remote_theme.finish(success=True,result=result)
+        self.remote_theme_active=False
 
     def scan(self, remote=False):
         if self.work and self.work.isRunning():

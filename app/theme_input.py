@@ -44,7 +44,7 @@ def parse_selection(raw, mode, *, today=None, minimum_sessions=7):
 
 def prepare_selection(history,path,mode,*,today=None):
     data,sessions=load_selection(path,mode,today=today)
-    return prepare(history,sessions=sessions,through=data['through'],mode=mode,source=data['source'])
+    return prepare_confirmed(history,data,mode,today=today)
 
 
 def selection_from_days(text, mode, source, *, today=None):
@@ -63,4 +63,26 @@ def selection_from_days(text, mode, source, *, today=None):
 
 def prepare_days(history,text,mode,source,*,today=None):
     data,sessions=selection_from_days(text,mode,source,today=today)
-    return prepare(history,sessions=sessions,through=data['through'],mode=mode,source=data['source'])
+    return prepare_confirmed(history,data,mode,today=today)
+
+
+def prepare_confirmed(history,data,mode,*,today=None,remember=True):
+    data,sessions=parse_selection(json.dumps(data).encode('utf-8'),mode,today=today)
+    result=prepare(history,sessions=sessions,through=data['through'],mode=mode,source=data['source'])
+    if not remember:
+        return result
+    with history.connect() as db:
+        db.execute('CREATE TABLE IF NOT EXISTS theme_selections(mode TEXT PRIMARY KEY,payload TEXT NOT NULL)')
+        db.execute('INSERT OR REPLACE INTO theme_selections VALUES(?,?)',
+                   (mode,json.dumps(data,ensure_ascii=False)))
+    return result
+
+
+def saved_selection(history,mode,*,today=None):
+    with history.connect() as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_selections'").fetchone():
+            raise ValueError('PC 홈에서 테마1 판정을 먼저 만들어 거래일과 자료 출처를 확인해 주세요.')
+        row=db.execute('SELECT payload FROM theme_selections WHERE mode=?',(mode,)).fetchone()
+    if row is None:
+        raise ValueError('이 모드의 테마1 거래일 설정이 없어요. PC에서 먼저 판정해 주세요.')
+    return parse_selection(row['payload'].encode('utf-8'),mode,today=today)[0]

@@ -30,7 +30,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -51,6 +51,7 @@ class TelegramOrderService:
         self.recommendation_overview = recommendation_overview
         self.practice_sales = practice_sales
         self.theme_report = theme_report
+        self.theme_request = theme_request
         self.theme_status = theme_status
         self.theme_budget = theme_budget
         self.practice_daily = practice_daily
@@ -213,6 +214,15 @@ class TelegramOrderService:
                                if match[5] else self.theme_budget(*args))
                     except ValueError:
                         reply='테마1 판정과 총예산·수수료·가격 여유·익절/손절 비율을 확인해 주세요. 주문하지 않았어요.'
+            elif text in ('/테마1검색','/테마1검색상태'):
+                if self.theme_request is None:
+                    reply='테마1 검색 연결이 없어요. PC에서 수신을 다시 시작해 주세요.'
+                elif text=='/테마1검색상태':
+                    reply=self.theme_request.summary()
+                elif not owner['active']:
+                    reply='새 테마1 검색 요청을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
+                else:
+                    reply=self.theme_request.request()
             elif text == '/테마1알림상태':
                 reply=self.theme_status(self.theme_destination) if self.theme_status else '테마1 알림 상태 연결이 없어요. 집 PC에서 확인해 주세요.'
             elif text.split(' ',1)[0] == '/테마1':

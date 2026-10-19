@@ -157,7 +157,7 @@ def test_gui_handoff_and_saved_result_skip_trade_side_effects():
     bridge = RecommendationRequest('MOCK')
     bridge.request()
     calls = []
-    fake = SimpleNamespace(remote_scan=bridge, remote_scan_active=False, work=None, cfg={},
+    fake = SimpleNamespace(remote_scan=bridge, remote_scan_active=False, remote_theme=None, work=None, cfg={},
                            telegram_order_worker=SimpleNamespace(isRunning=lambda: True,
                                isInterruptionRequested=lambda: False,
                                service=SimpleNamespace(accepts_search_requests=lambda: True)),
