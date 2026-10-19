@@ -118,3 +118,29 @@ def test_research_variants_preserve_train_only_ranking_with_test_half_diagnostic
         assert v['test_early_sessions']+v['test_late_sessions'] > 0
     chosen=next((v['id'] for v in result['variants'] if v['train_days']>=12),None)
     assert result['chosen_on_train_only']==chosen
+
+
+def test_csv_export_preserves_test_half_fields_and_train_order(tmp_path):
+    import csv
+    from app.research import export_report
+
+    items=[]
+    for code,train,test in [('TRAIN_FIRST',2,-1),('TRAIN_SECOND',1,10)]:
+        items.append({'id':code, 'name':code, 'market':'KOSPI',
+                      'train_days':18,'test_days':10,
+                      'train_excess3':train,'test_excess3':test,
+                      'test_early_days':5,'test_late_days':5,
+                      'test_early_excess3':1.0,'test_late_excess3':-2.0,
+                      'test_late_gap3':-3.0,
+                      'test_stability_note':'후반 초과수익 비양수 전환'})
+    report={'variants':items,'chosen_on_train_only':'TRAIN_FIRST',
+            'top_signals':[],'coverage_quality':{'state':'NOT_CHECKED'}}
+    export_report(report,tmp_path/'summary')
+    with (tmp_path/'summary'/'summary.csv').open(encoding='utf-8-sig',newline='') as file:
+        data=list(csv.DictReader(file))
+    assert [row['id'] for row in data]==['TRAIN_FIRST','TRAIN_SECOND']
+    assert data[0]['test_late_excess3']=='-2.0'
+    assert data[0]['test_late_gap3']=='-3.0'
+    assert data[0]['test_early_days']=='5'
+    assert data[0]['test_stability_note']=='후반 초과수익 비양수 전환'
+    assert report['chosen_on_train_only']=='TRAIN_FIRST'
