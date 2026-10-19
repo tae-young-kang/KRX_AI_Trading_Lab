@@ -22,7 +22,7 @@ from app.strategy import evaluate, auto_paper_exit, create_proposals
 from app.practice_quotes import fresh_practice_price
 from app.recommendation_request import RecommendationRequest
 from app.quote_batch_profile import QuoteBatchProfile
-from app.recommendation_schedule import summary as recommendation_schedule_summary
+from app.recommendation_schedule import summary as recommendation_schedule_summary,calendar_source as recommendation_calendar_source
 from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
 from app.theme_store import missing_data_notice
@@ -851,7 +851,8 @@ class MainWindow(QMainWindow):
             elif result['state']=='ALREADY_ATTEMPTED':
                 labels={'SUCCEEDED':'완료','FAILED':'실패 · 수동 재평가 필요','RUNNING':'종료 미확인 · 수동 확인 필요'}
                 self.recommendation_auto_status.setText('오늘 자동 평가 기록: '+labels.get(result['previous'],'확인 필요'))
-        self.run_task(lambda:run_due(db,history,mode,enabled=True,now=datetime.now(KST)),finish,'추천 성적 자동 갱신 점검 완료')
+        source=recommendation_calendar_source(self.cfg,mode)
+        self.run_task(lambda:run_due(db,history,mode,enabled=True,now=datetime.now(KST),automatic_source=source),finish,'추천 성적 자동 갱신 점검 완료')
 
     def maybe_daily_research(self):
         # Runs ONLY while GUI is alive; no hidden service. Does not send real orders.
@@ -1049,17 +1050,23 @@ class MainWindow(QMainWindow):
         if mode=='DEMO':
             QMessageBox.information(self,'실제 시세 기록 확인','연결 설정에서 실제 시세 또는 키움 모의 시세 모드를 선택해 주세요. 가상 연습은 고급 자료 평가를 이용하세요.')
             return
-        source,ok=QInputDialog.getItem(self,'추천 후 가격 확인','저장된 일봉 자료를 고르세요. 없는 가격은 자료 없음으로 표시해요.',
+        source,ok=QInputDialog.getItem(self,'추천 후 가격 확인','저장된 일봉 자료를 고르세요. 없는 가격은 자료 없음으로 표시해요.\n저녁 자동 갱신을 켜면 이 자료로 새 거래일까지 평가해요.',
                                      ['거래소 일봉 · KRX','직접 넣은 일봉 · CSV'],0,False)
         if not ok:return
         source='KRX' if source=='거래소 일봉 · KRX' else 'CSV_USER'
         from app.recommendation_cache import evaluate_recent
         db,history=self.db,self.history
-        self.run_task(lambda:evaluate_recent(db,history,mode,source=source),
-            lambda result:QMessageBox.information(self,'추천 후 가격 확인',
+        def done(result):
+            sources=self.cfg.get('recommendation_calendar_sources',{})
+            sources=dict(sources) if isinstance(sources,dict) else {}
+            sources[mode]=source
+            self.cfg['recommendation_calendar_sources']=sources
+            self.settings.save()
+            QMessageBox.information(self,'추천 후 가격 확인',
                 f'추천 {result["recommendations"]}개 확인 · 새 평가 {result["added"]}개\n'
-                f'자료 확인일 {result["available_through"]}\n1·3·5거래일 뒤 가격은 /추천성적에서 확인하세요.\n실제 매매 수익률이 아니에요.'),
-            '추천 후 가격 확인 완료')
+                f'자료 확인일 {result["available_through"]}\n1·3·5거래일 뒤 가격은 /추천성적에서 확인하세요.\n'
+                '저녁 자동 갱신을 켠 경우 새 거래일까지 자동 계산해요. 실제 매매 수익률이 아니에요.')
+        self.run_task(lambda:evaluate_recent(db,history,mode,source=source),done,'추천 후 가격 확인 완료')
 
     def evaluate_cached_recommendations(self):
         if self.work is not None and self.work.isRunning():
@@ -1070,12 +1077,17 @@ class MainWindow(QMainWindow):
             return
         from app.recommendation_cache import evaluate_selection
         db,history,mode = self.db,self.history,current_mode(self.cfg).key
-        self.run_task(lambda:evaluate_selection(db,history,path,mode),
-            lambda result:QMessageBox.information(self,'저장 시세로 추천 평가',
+        def done(result):
+            sources=self.cfg.get('recommendation_calendar_sources',{})
+            sources=dict(sources) if isinstance(sources,dict) else {}
+            sources.pop(mode,None)
+            self.cfg['recommendation_calendar_sources']=sources
+            self.settings.save()
+            QMessageBox.information(self,'저장 시세로 추천 평가',
                 f"추천 {result['recommendations']}개 대조 · 새 평가 {result['added']}개\n"
                 f"자료 확인 완료일 {result['available_through']}\n"
-                '빠진 가격은 자료 없음으로 표시해요. /추천성적 에서 확인하세요.\n실제 거래 수익률이 아니에요.'),
-            '저장 시세 추천 평가 완료')
+                '빠진 가격은 자료 없음으로 표시해요. /추천성적 에서 확인하세요.\n선택 파일의 평가 기간을 유지해요. 실제 거래 수익률이 아니에요.')
+        self.run_task(lambda:evaluate_selection(db,history,path,mode),done,'저장 시세 추천 평가 완료')
 
     def repeat_cached_recommendations(self):
         if self.work is not None and self.work.isRunning():
@@ -1679,7 +1691,7 @@ class MainWindow(QMainWindow):
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
                                      recommendation_request=self.remote_scan,
                                      theme_request=self.remote_theme,
-                                     recommendation_status=lambda db=self.db, mode=current_mode(self.cfg).key: recommendation_schedule_summary(db,mode,enabled=self.cfg.get('recommendation_auto_evaluate'),now=datetime.now(KST)),
+                                     recommendation_status=lambda db=self.db, mode=current_mode(self.cfg).key: recommendation_schedule_summary(db,mode,enabled=self.cfg.get('recommendation_auto_evaluate'),now=datetime.now(KST),automatic_source=recommendation_calendar_source(self.cfg,mode)),
                                      watch_status=self.mock_watch_status.summary,
                                      watch_refresh=self.mock_watch_status.request_refresh,
                                      watch_result=self.mock_watch_status.refresh_result,
