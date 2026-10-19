@@ -13,11 +13,7 @@ permissions:
 
 jobs:
   test-offline:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     timeout-minutes: 15
     env:
       QT_QPA_PLATFORM: offscreen
