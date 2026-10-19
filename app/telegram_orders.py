@@ -161,6 +161,7 @@ class TelegramOrderService:
             return '연습 서버 연결이 달라져 수신을 중지했습니다. 주문하지 않았습니다.'
         uid, text = update['update_id'], update['message']['text'].strip()
         text=telegram_menu.COMMANDS.get(text,text)
+        text=telegram_menu.CONDITION_COMMANDS.get(text,text)
         action = None
         operation = None
         with connect(self.path) as db:
@@ -177,6 +178,8 @@ class TelegramOrderService:
                 reply=telegram_menu.text(practice=self.orders_enabled,active=bool(owner['active']))
             elif text=='/메뉴숨기기':
                 reply=telegram_menu.HIDDEN
+            elif text=='/조건바꾸기':
+                reply=telegram_menu.condition_text()
             elif not self.orders_enabled and mock_command:
                 reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                          if self.watch_orders and (owner['active'] or text.split(' ',1)[0] in ('/주문상태','/주문점검','/긴급중지','/주문목록','/미체결')) else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')

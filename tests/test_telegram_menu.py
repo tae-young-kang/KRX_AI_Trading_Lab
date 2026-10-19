@@ -44,3 +44,37 @@ def test_reply_keyboard_uses_existing_send_receipt_checks(message,kind):
             assert all(not command.startswith(('/매수','/매도','/확인')) for command in telegram_menu.COMMANDS.values())
     else:
         assert 'reply_markup' not in body
+
+
+def test_condition_buttons_preview_confirm_and_preserve_other_settings(sandbox, tmp_path):
+    from copy import deepcopy
+    import re
+    from app.config import DEFAULTS
+    from app.telegram_conditions import ConditionCommands
+    service, broker, _, now = sandbox
+    cfg = deepcopy(DEFAULTS)
+    controller = ConditionCommands(tmp_path/'conditions.db', cfg)
+    service.conditions, service.orders_enabled = controller, False
+    guide = service.handle(update(sandbox, 1, '조건 바꾸기'))
+    assert guide.startswith(telegram_menu.CONDITION_HEADER)
+    keyboard = telegram_menu.markup(guide)['keyboard']
+    assert [b['text'] for row in keyboard for b in row] == [x for row in telegram_menu.CONDITION_ROWS for x in row]
+    before = deepcopy(cfg)
+    event = update(sandbox, 2, '시장: 코스닥')
+    preview = service.handle(event)
+    assert preview == service.handle(event)
+    assert cfg == before
+    token = re.search(r'/조건확인 ([A-Za-z0-9_-]{16})', preview)[1]
+    assert '예약' in service.handle(update(sandbox, 3, '/조건확인 '+token))
+    assert controller.sync(cfg, lambda:None, now=now[0].timestamp()+1)
+    assert cfg['market'] == 'KOSDAQ'
+    assert all(cfg[k] == before[k] for k in before if k not in ('market','strategy_version'))
+    etf = service.handle(update(sandbox, 4, 'ETF: 제외'))
+    assert 'ETF 제외' in etf and cfg['include_etf'] == before['include_etf']
+    bad = update(sandbox, 5, '시장: 코스피')
+    bad['message']['from']['id'] = 99
+    assert service.handle(bad) is None
+    service.handle(update(sandbox, 6, '/중지'))
+    assert '중지' in service.handle(update(sandbox, 7, 'ETF: 포함'))
+    assert service.handle(update(sandbox, 8, '메뉴로 돌아가기')).startswith(telegram_menu.HEADER)
+    assert broker.calls == []
