@@ -2111,11 +2111,11 @@ class MainWindow(QMainWindow):
             lambda:inspect_backup(folder,expected_mode=mode.key),
             lambda info:QMessageBox.information(
                 self,'백업 검증 완료',
-                f"{mode.title} 기록 사본을 확인했어요.\\n"
-                f"저장 시각: {info['created_at']}\\n"
-                f"검색 기록: {info['scan_count']}건\\n"
-                f"매매 기록: {info['trade_count']}건\\n"
-                f"추천 묶음: {info['recommendation_count']}건\\n"
+                f"{mode.title} 기록 사본을 확인했어요.\n"
+                f"저장 시각: {info['created_at']}\n"
+                f"검색 기록: {info['scan_count']}건\n"
+                f"매매 기록: {info['trade_count']}건\n"
+                f"추천 묶음: {info['recommendation_count']}건\n"
                 '현재 데이터는 변경하지 않았어요. 실제 복원·주문은 하지 않았어요.'),
             '현재 모드 기록 백업 검증 완료')
 
