@@ -401,9 +401,9 @@ class TelegramOrderService:
                          else '모의 잔고 조회 결과가 없어요.')
             elif text in ('/프로그램상태','/모의상태') or (text == '/상태' and not self.orders_enabled):
                 reply = self.watch_status() if self.watch_status is not None else '프로그램이 켜져 있어요. 모의 알림 상태 연결은 아직 없어요. 주문은 보내지 않았어요.'
-            elif text.startswith('/조건') and self.conditions is not None:
+            elif (text.startswith('/조건') or text.startswith('/청산조건')) and self.conditions is not None:
                 reply = (self.conditions.handle(text, scope=self.scope, session=self.session, uid=uid, now=now)
-                         if owner['active'] or text in ('/조건','/조건도움말') or text.split(' ',1)[0]=='/조건기록' else '조건 변경을 중지했어요. 프로그램에서 수신을 다시 시작해 주세요.')
+                         if owner['active'] or text in ('/조건','/조건도움말','/청산조건') or text.split(' ',1)[0] in ('/조건기록','/청산조건기록') else '조건 변경을 중지했어요. 프로그램에서 수신을 다시 시작해 주세요.')
             elif not self.orders_enabled:
                 if text == '/중지':
                     if self.watch_cancel_orders:

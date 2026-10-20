@@ -11,6 +11,7 @@ import time
 
 from app.order_engine import connect
 from app.modes import current_mode
+from app import exit_policy_commands as exits
 
 NUMBERS = {
     '최저가': ('min_price', 0, 1000000), '최고가': ('max_price', 100, 10000000),
@@ -23,6 +24,7 @@ SWITCHES = {'가격사용': 'on_price', '시총사용': 'on_cap', '거래대금�
             '거래량사용': 'on_volratio', '등락사용': 'on_change'}
 KEYS = ('market', 'include_etf', *[v[0] for v in NUMBERS.values()], *SWITCHES.values())
 HELP = ('/조건: 지금 추천 기준 보기\n'
+        '/청산조건: 기본 가상 익절·손절 보기 · /청산조건기록: 변경 이력\n'
         '/조건기록: 이전 추천 조건 보기 · /조건복귀 기록번호: 확인 후 되돌리기\n'
         '/조건변경 시장=코스닥 ETF=제외 거래대금=100\n'
         '시장: 코스피/코스닥/전체 · ETF: 포함/제외\n'
@@ -35,7 +37,7 @@ HELP = ('/조건: 지금 추천 기준 보기\n'
 
 def state(config):
     return dict(mode=current_mode(config).key, version=config['strategy_version'],
-                conditions={key: config[key] for key in KEYS})
+                conditions={key: config[key] for key in KEYS},exit_policy={key:config[key] for key in exits.KEYS})
 
 
 def encode(value):
@@ -110,6 +112,11 @@ def record_version(db,current,now):
     if last is None or last['version']!=current['version'] or last['payload']!=payload:
         db.execute('INSERT INTO condition_versions(mode,version,payload,created) VALUES(?,?,?,?)',
             (current['mode'],current['version'],payload,now))
+    policy=encode(current['exit_policy'])
+    last=db.execute('SELECT version,payload FROM exit_policy_versions WHERE mode=? ORDER BY id DESC LIMIT 1',(current['mode'],)).fetchone()
+    if last is None or last['version']!=current['version'] or last['payload']!=policy:
+        db.execute('INSERT INTO exit_policy_versions(mode,version,payload,created) VALUES(?,?,?,?)',
+            (current['mode'],current['version'],policy,now))
 
 
 class ConditionCommands:
@@ -124,6 +131,7 @@ class ConditionCommands:
                 CREATE TABLE IF NOT EXISTS condition_replies(scope TEXT,session TEXT,uid INTEGER,reply TEXT,
                     PRIMARY KEY(scope,session,uid));
                 CREATE TABLE IF NOT EXISTS condition_versions(id INTEGER PRIMARY KEY,mode TEXT,version INTEGER,payload TEXT,created REAL);
+                CREATE TABLE IF NOT EXISTS exit_policy_versions(id INTEGER PRIMARY KEY,mode TEXT,version INTEGER,payload TEXT,created REAL);
             ''')
             record_version(db,self._state(config),time.time())
             db.execute('INSERT OR REPLACE INTO condition_current VALUES (?,?)', (self.owner,encode(self._state(config))))
@@ -144,12 +152,13 @@ class ConditionCommands:
                 return previous[0]
             current = json.loads(db.execute('SELECT payload FROM condition_current WHERE id=?', (self.owner,)).fetchone()[0])
             try:
-                if text == '/조건':
+                if text in ('/조건','/청산조건'):
                     last = db.execute('SELECT state FROM condition_requests WHERE scope=? AND session=? ORDER BY rowid DESC LIMIT 1',
                                       (scope,session)).fetchone()
                     status = {'QUEUED':'변경 반영 대기 중', 'APPLIED':'최근 변경 적용됨', 'REJECTED':'최근 변경 취소됨',
                               'EXPIRED':'이전 변경 만료', 'PREVIEW':'변경안 확인 대기'}.get(last[0], '') if last else ''
-                    reply = describe(current) + ('\n'+status if status else '')
+                    reply = (exits.describe(current) if text=='/청산조건' else describe(current)) + ('\n'+status if status else '')
+                    if text=='/청산조건':reply+='\n/청산조건변경 익절=2 손절=3 보유일=5\n/청산조건기록 · /청산조건복귀 기록번호'
                 elif text == '/조건도움말':
                     reply = HELP
                 elif text.split(' ',1)[0]=='/조건기록':
@@ -169,9 +178,36 @@ class ConditionCommands:
                         lines.append(f'되돌리기: /조건복귀 {row["id"]}')
                     if page<pages:lines.append(f'다음: /조건기록 {page+1}')
                     reply='\n'.join(lines)
-                elif text.startswith('/조건변경') or text.split(' ',1)[0]=='/조건복귀':
-                    restoring=text.split(' ',1)[0]=='/조건복귀'
-                    if restoring:
+                elif text.split(' ',1)[0]=='/청산조건기록':
+                    match=re.fullmatch(r'/청산조건기록(?: ([1-9][0-9]{0,5}))?',text)
+                    if not match:raise ValueError('사용법: /청산조건기록 [페이지]')
+                    page=int(match[1] or 1)
+                    count=db.execute('SELECT COUNT(*) FROM exit_policy_versions WHERE mode=?',(current['mode'],)).fetchone()[0]
+                    pages=max(1,(count+4)//5)
+                    if page>pages:raise ValueError(f'청산 조건 기록은 {pages}페이지까지 있어요.')
+                    rows=db.execute('SELECT * FROM exit_policy_versions WHERE mode=? ORDER BY id DESC LIMIT 5 OFFSET ?',
+                        (current['mode'],(page-1)*5)).fetchall()
+                    lines=[f'[이전 가상 익절·손절] {page}/{pages}페이지']
+                    for row in rows:
+                        lines.append(f'기록 {row["id"]} · '+exits.describe(dict(mode=current['mode'],version=row['version'],exit_policy=json.loads(row['payload']))))
+                        lines.append(f'되돌리기: /청산조건복귀 {row["id"]}')
+                    if page<pages:lines.append(f'다음: /청산조건기록 {page+1}')
+                    reply='\n'.join(lines)
+                elif text.startswith('/조건변경') or text.split(' ',1)[0] in ('/조건복귀','/청산조건변경','/청산조건복귀'):
+                    policy=text.split(' ',1)[0] in ('/청산조건변경','/청산조건복귀')
+                    restoring=text.split(' ',1)[0] in ('/조건복귀','/청산조건복귀')
+                    target = json.loads(encode(current))
+                    if policy:
+                        if restoring:
+                            match=re.fullmatch(r'/청산조건복귀 ([1-9][0-9]{0,8})',text)
+                            if not match:raise ValueError('사용법: /청산조건복귀 기록번호')
+                            row=db.execute('SELECT payload FROM exit_policy_versions WHERE id=? AND mode=?',(int(match[1]),current['mode'])).fetchone()
+                            if row is None:raise ValueError('현재 시세 모드의 청산 조건 기록에서 골라 주세요.')
+                            changes=json.loads(row['payload']);exits.validate(changes)
+                        else:changes=exits.patch(text[len('/청산조건변경'):].strip())
+                        target['exit_policy'].update(changes);exits.validate(target['exit_policy'])
+                        if target['exit_policy']==current['exit_policy']:raise ValueError('현재 기본 익절·손절과 같아요.')
+                    elif restoring:
                         match=re.fullmatch(r'/조건복귀 ([1-9][0-9]{0,8})',text)
                         if not match:raise ValueError('사용법: /조건복귀 기록번호 · 기록 찾기: /조건기록')
                         row=db.execute('SELECT payload FROM condition_versions WHERE id=? AND mode=?',(int(match[1]),current['mode'])).fetchone()
@@ -179,8 +215,7 @@ class ConditionCommands:
                         changes=json.loads(row['payload']);validate_conditions(changes)
                         if changes==current['conditions']:raise ValueError('현재 추천 조건과 같아요. 변경하지 않았어요.')
                     else:changes = patch(text[len('/조건변경'):].strip())
-                    target = json.loads(encode(current))
-                    target['conditions'].update(changes)
+                    if not policy:target['conditions'].update(changes)
                     for lower, upper in (('min_price','max_price'),('min_cap_eok','max_cap_eok'),('min_change_pct','max_change_pct')):
                         if target['conditions'][lower] > target['conditions'][upper]:
                             raise ValueError('최소값은 최대값보다 클 수 없어요.')
@@ -190,8 +225,9 @@ class ConditionCommands:
                     db.execute("UPDATE condition_requests SET state='EXPIRED' WHERE scope=? AND session=? AND state='PREVIEW'", (scope,session))
                     db.execute('INSERT INTO condition_requests VALUES (?,?,?,?,?,?,?)',
                                (digest,scope,session,encode(current),encode(target),now+120,'PREVIEW'))
-                    heading=('이전 추천 기준으로 되돌릴까요? 익절·손절·테마1은 바뀌지 않아요.\n' if restoring else '이렇게 바꿀까요?\n')
-                    reply = heading+describe(target)+f'\n2분 안에 /조건확인 {nonce}\n철회: /조건철회 {nonce}'
+                    heading=('기본 가상 익절·손절을 바꿀까요?\n' if policy else
+                        '이전 추천 기준으로 되돌릴까요? 익절·손절·테마1은 바뀌지 않아요.\n' if restoring else '이렇게 바꿀까요?\n')
+                    reply = heading+(exits.describe(target) if policy else describe(target))+f'\n2분 안에 /조건확인 {nonce}\n철회: /조건철회 {nonce}'
                 else:
                     match = re.fullmatch(r'/(조건확인|조건철회) ([A-Za-z0-9_-]{16})', text)
                     if not match:
@@ -206,7 +242,7 @@ class ConditionCommands:
                         raise ValueError('그사이 조건이나 모드가 바뀌었어요. /조건으로 확인 후 다시 요청해 주세요.')
                     next_state = 'QUEUED' if match[1] == '조건확인' else 'REJECTED'
                     db.execute('UPDATE condition_requests SET state=? WHERE token=?', (next_state,digest))
-                    reply = ('변경을 예약했어요. 현재 작업이 끝나면 반영해요. 화면에서 조건을 수정 중이면 먼저 저장해 주세요. /조건으로 결과를 확인해 주세요.'
+                    reply = ('변경을 예약했어요. 현재 작업이 끝나면 반영해요. 화면에서 조건을 수정 중이면 먼저 저장해 주세요. /조건 또는 /청산조건으로 결과를 확인해 주세요.'
                              if next_state == 'QUEUED' else '변경을 철회했어요.')
             except ValueError as error:
                 reply = str(error)
@@ -230,8 +266,10 @@ class ConditionCommands:
                         if encode(current) != row['base']:
                             db.execute("UPDATE condition_requests SET state='REJECTED' WHERE token=?", (row['token'],))
                             continue
+                        exits.validate(target['exit_policy'])
                         before = dict(config)
                         config.update(target['conditions'])
+                        config.update(target['exit_policy'])
                         config['strategy_version'] = target['version']
                         try:
                             save()
