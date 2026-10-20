@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -78,6 +78,8 @@ class TelegramOrderService:
         self.session = uuid.uuid4().hex
         self.catalog = dict(catalog)
         self.catalog.setdefault('900001', '연습종목')
+        from app.daily_report_delivery import DailyReportDelivery
+        self.daily_delivery=DailyReportDelivery(self.path,self.scope,daily_mode) if daily_mode else None
         with connect(self.path) as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS tg_sessions(scope TEXT PRIMARY KEY,session TEXT,active INTEGER,cursor INTEGER);
@@ -119,6 +121,21 @@ class TelegramOrderService:
             row = db.execute('SELECT active FROM tg_sessions WHERE scope=? AND session=?',
                              (self.scope, self.session)).fetchone()
             return bool(row and row['active'])
+
+    def send_daily_notice(self,transport):
+        if not self.daily_delivery:return 'DISABLED'
+        from app.daily_report_delivery import pages
+        def build(day):
+            if not self.actual_daily or not self.morning_setup:raise ValueError('결산 조회 연결이 없어요.')
+            return ([f'[20:30 저장 기록 결산] {day}\n실제 체결 입력과 아침 가상 기록을 분리해 보내요.\n'
+                '키움 모의계좌 하루 결산은 아직 자동 집계되지 않아요. /모의기록 · /잔고에서 별도로 확인하세요.\n'
+                '실제 기록은 사용자 입력이며 증권사 자동 대조 전, 가상은 공급된 시세 근거 계산이에요.']
+                +pages(lambda d,p:self.actual_daily(d,page=p),day,'/실제결산')
+                +pages(lambda d,p:self.morning_setup(f'/가상하루 {d} {p}'),day,'/가상하루'))
+        try:
+            return self.daily_delivery.tick(now=self.clock(),active=self.accepts_search_requests,build=build,
+                send=lambda text:transport.send(self.chat_id,text))
+        except Exception:return 'ERROR'
 
     def _authorized(self, update, now):
         if not isinstance(update, dict) or type(update.get('update_id')) is not int or update['update_id'] < 0:
@@ -213,6 +230,8 @@ class TelegramOrderService:
             elif text.split(' ',1)[0] == '/보호상태':
                 reply=(self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                        if not self.orders_enabled and self.watch_orders else '모의 보호 기록 연결이 없어요. 자동 매도는 아직 연결되지 않았어요.')
+            elif text=='/결산알림상태':
+                reply=self.daily_delivery.summary(self.clock()) if self.daily_delivery else '20:30 결산 알림 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
             elif text.split(' ',1)[0] in ('/가상추적','/가상추적상태','/가상하루'):
                 if not self.morning_setup:reply='가상 추적 목록 연결이 아직 없어요.'
                 elif text.split(' ',1)[0]=='/가상추적' and not owner['active']:reply='새 가상 목록 고정을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
@@ -384,6 +403,7 @@ class TelegramOrderService:
                 reply += '\n/실제결산: 입력한 실제 체결의 하루 기록 · 증권사 자동 대조 전'
                 reply += '\n/가상결산: 저장한 아침 추천 목록의 가상 성과'
                 reply += '\n/가상하루: 이전 아침 목록의 이월 보유까지 오늘 기준 조회'
+                reply += '\n/결산알림상태: 거래일20:30 저장 결산 발송 상태'
                 reply += '\n/가상추적 일반 100만원: 다음 아침 가상 목록 고정 · 실제 주문 안 함'
                 reply += '\n/테마1계획 종목명 10주 또는 전체 100만원: 매수 계획 보기 (주문 안 함)'
                 reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'

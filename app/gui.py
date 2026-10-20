@@ -1720,6 +1720,7 @@ class MainWindow(QMainWindow):
                                      theme_report=lambda page=1, history=self.history, mode=current_mode(self.cfg).key: theme_latest_report(history,mode=mode,page=page),
                                      practice_daily=lambda day, page=1, db=self.db: db.practice_daily_report(day,page=page),
                                      actual_daily=lambda day,page=1: actual_daily_text(data_dir()/'actual_fill_records.db',day,page=page),
+                                     daily_mode=current_mode(self.cfg).key,
                                      morning_daily=lambda day,page=1,mode=current_mode(self.cfg).key: morning_daily_text(data_dir(),mode,day,page=page),
                                      morning_setup=lambda text,db=self.db,history=self.history,mode=current_mode(self.cfg).key:
                                          morning_setup_text(data_dir(),db,history,mode,dict(self.cfg),text,now=datetime.now(KST)),
