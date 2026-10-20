@@ -138,14 +138,14 @@ def test_unknown_send_outcome_is_not_automatically_repeated(tmp_path):
     assert transport.calls==1 and '응답 미확인' in request.summary()
 
 
-def test_etf_switch_reaches_full_universe_query(tmp_path):
+def test_theme_excludes_etf_even_when_general_setting_includes_it(tmp_path):
     class EtfClient(Client):
         def scan(self,market,**kwargs):
-            assert kwargs['include_etf'] is True
+            assert kwargs['include_etf'] is False
             kwargs['include_etf']=False
             return super().scan(market,**kwargs)
     result=collect_theme(HistoryStore(tmp_path/'history.db'),EtfClient(),'REAL_QUOTES',now=NOW,include_etf=True)
-    assert result['search_scope']['include_etf'] is True and result['matched']==2
+    assert result['search_scope']['include_etf'] is False and result['matched']==2
 
 
 def test_pc_today_search_routes_to_same_pipeline_without_gui(tmp_path):

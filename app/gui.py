@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from app.config import Settings, Credentials, data_dir
 from app.actual_trade_records import daily_text as actual_daily_text
 from app.morning_virtual import report_saved as morning_daily_text
+from app.morning_request import setup_text as morning_setup_text
 from app.storage import Database
 from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
 from app.strategy import evaluate, auto_paper_exit, create_proposals
@@ -973,7 +974,7 @@ class MainWindow(QMainWindow):
             '오늘 종목은 첫 번째 키움 시세로 찾기를 선택하세요.\nKRX/CSV는 별도로 제공된 일봉 자료를 이용하는 방법이에요.',sources,0,False)
         if not ok:return
         if choice=='키움 시세로 찾기 · 당일 조회':
-            include_etf=bool(self.cfg.get('include_etf',False))
+            include_etf=False  # 테마1은 일반 추천 설정과 관계없이 ETF 제외
             if QMessageBox.question(self,'테마1 · 오늘 기준 검색',
                 '코스피·코스닥 전체를 조회한 뒤 테마1 조건으로 고릅니다.\n'
                 +('ETF 포함\n' if include_etf else 'ETF 제외\n')+
@@ -1720,6 +1721,8 @@ class MainWindow(QMainWindow):
                                      practice_daily=lambda day, page=1, db=self.db: db.practice_daily_report(day,page=page),
                                      actual_daily=lambda day,page=1: actual_daily_text(data_dir()/'actual_fill_records.db',day,page=page),
                                      morning_daily=lambda day,page=1,mode=current_mode(self.cfg).key: morning_daily_text(data_dir(),mode,day,page=page),
+                                     morning_setup=lambda text,db=self.db,history=self.history,mode=current_mode(self.cfg).key:
+                                         morning_setup_text(data_dir(),db,history,mode,dict(self.cfg),text,now=datetime.now(KST)),
                                      practice_sales=lambda trade_id=None, page=1, db=self.db: db.practice_sale_report(trade_id,page),
                                      recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_overview(mode),
@@ -1862,7 +1865,7 @@ class MainWindow(QMainWindow):
                 self.remote_theme_active=True
                 if data['source'] in KIWOOM_SOURCES.values():
                     mode=self.remote_theme.mode
-                    include_etf=bool(self.cfg.get('include_etf',False))
+                    include_etf=False  # 테마1은 일반 추천 설정과 관계없이 ETF 제외
                     key,secret=self.broker_keys('MOCK' if mode=='MOCK' else 'REAL')
                     def fetch(progress,cancelled):
                         client=KiwoomMarket(key,secret,'MOCK' if mode=='MOCK' else 'REAL',batch_profile=self.quote_batch_profile)

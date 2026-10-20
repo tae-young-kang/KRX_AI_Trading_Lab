@@ -43,7 +43,7 @@ class MorningVirtual:
             db.execute('CREATE TABLE IF NOT EXISTS morning_cohort(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS morning_marks(code TEXT,day TEXT,price INTEGER,at TEXT,evidence_hash TEXT,PRIMARY KEY(code,day))')
 
-    def prepare(self,*,day,mode,origin,targets,settings,total_won,now):
+    def prepare(self,*,day,mode,origin,targets,settings,total_won,now,selection_info=None):
         target_day=date.fromisoformat(day)
         if (target_day.isoformat()!=day or mode not in ('DEMO','MOCK','REAL_QUOTES') or not aware(now)
                 or not isinstance(origin,str) or not re.fullmatch('[A-Za-z0-9_-]{1,100}',origin)
@@ -77,6 +77,15 @@ class MorningVirtual:
         if len({r['code'] for r in chosen})!=len(chosen):raise ValueError('추천 종목이 중복됐어요.')
         payload=dict(version=1,kind='VIRTUAL_ONLY',day=day,mode=mode,origin=origin,frozen_at=now.astimezone(KST).isoformat(),
                      targets=chosen,settings=cfg,total_won=total_won)
+        if selection_info is not None:
+            if (not isinstance(selection_info,dict) or set(selection_info)!= {'kind','asof'}
+                    or selection_info['kind'] not in ('GENERAL','THEME1') or not isinstance(selection_info['asof'],str)):
+                raise ValueError('저장 추천의 출처·기준 시각을 확인해 주세요.')
+            if selection_info['kind']=='GENERAL':
+                stamp=datetime.fromisoformat(selection_info['asof'])
+                if not aware(stamp) or stamp>now:raise ValueError('저장 추천 시각이 미래이거나 불명확해요.')
+            elif date.fromisoformat(selection_info['asof'])>now.astimezone(KST).date():raise ValueError('테마1 기준일이 미래예요.')
+            payload['selection_info']=dict(selection_info)
         encoded=json.dumps(payload,ensure_ascii=False,sort_keys=True)
         with self.db.connect() as db:
             db.execute('BEGIN IMMEDIATE')

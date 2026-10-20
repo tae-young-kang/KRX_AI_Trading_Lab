@@ -30,7 +30,9 @@ def collect_theme(history,client,mode,*,now=None,selection=None,progress=None,ca
     def stopped():
         if cancelled and cancelled():raise ValueError('테마1 검색을 중단했어요. 새 판정은 저장하지 않았어요.')
     stopped()
-    stocks=client.scan('전체',progress=progress,cancelled=cancelled,include_etf=include_etf)
+    # Theme1 always excludes ETFs, independently of the general screener setting.
+    include_etf=False
+    stocks=client.scan('전체',progress=progress,cancelled=cancelled,include_etf=False)
     catalog={(s.market,s.code):s for s in stocks}
     if len(catalog)!=len(stocks) or not stocks:raise ValueError('전체 시장 종목 목록이 비었거나 중복됐어요.')
     baseline=history.load_bars('KRX',days[0],days[-2])

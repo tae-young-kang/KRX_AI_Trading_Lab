@@ -7,7 +7,7 @@ from app.recommendation_outcomes import session_day
 from app.theme_sources import valid_source
 
 RULES_TEXT=('테마1 · 종목을 찾는 조건\n'
-    '대상: 코스피·코스닥 종목\n'
+    '대상: 코스피·코스닥 종목 (ETF 제외)\n'
     '최근 6거래일 중 아래 두 조건을 같은 날 만족한 날이 3일 이상이면 감지해요.\n'
     '① 하루 거래대금 100억원 이상\n'
     '② 전일 종가 대비 당일 고가 +5% 이상\n'

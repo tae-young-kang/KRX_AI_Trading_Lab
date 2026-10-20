@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -60,6 +60,7 @@ class TelegramOrderService:
         self.practice_daily = practice_daily
         self.actual_daily=actual_daily
         self.morning_daily=morning_daily
+        self.morning_setup=morning_setup
         self.recommendation_request = recommendation_request
         self.recommendation_status = recommendation_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
@@ -212,6 +213,13 @@ class TelegramOrderService:
             elif text.split(' ',1)[0] == '/보호상태':
                 reply=(self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                        if not self.orders_enabled and self.watch_orders else '모의 보호 기록 연결이 없어요. 자동 매도는 아직 연결되지 않았어요.')
+            elif text.split(' ',1)[0] in ('/가상추적','/가상추적상태'):
+                if not self.morning_setup:reply='가상 추적 목록 연결이 아직 없어요.'
+                elif text.split(' ',1)[0]=='/가상추적' and not owner['active']:reply='새 가상 목록 고정을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
+                else:
+                    try:reply=self.morning_setup(text)
+                    except ValueError as error:reply=str(error)
+                    except Exception:reply='저장 추천·시세 모드·가상 추적 기록을 확인해 주세요. 실제 주문은 하지 않았어요.'
             elif text.split(' ',1)[0]=='/가상결산':
                 match=re.fullmatch(r'/가상결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
                 if not match:reply='사용법: /가상결산 또는 /가상결산 아침목록날짜 [페이지]'
@@ -375,6 +383,7 @@ class TelegramOrderService:
                 reply += '\n/성적자료보완: 빠진 KRX 일봉 수집 후 다시 평가 (별도 KRX 키 필요)'
                 reply += '\n/실제결산: 입력한 실제 체결의 하루 기록 · 증권사 자동 대조 전'
                 reply += '\n/가상결산: 저장한 아침 추천 목록의 가상 성과'
+                reply += '\n/가상추적 일반 100만원: 다음 아침 가상 목록 고정 · 실제 주문 안 함'
                 reply += '\n/테마1계획 종목명 10주 또는 전체 100만원: 매수 계획 보기 (주문 안 함)'
                 reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
