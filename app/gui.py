@@ -2478,8 +2478,15 @@ class MainWindow(QMainWindow):
 
 def main():
     import sys
+    from app.runtime_lock import ReceiverLock,ReceiverAlreadyRunning
     app = QApplication(sys.argv)
     app.setFont(QFont('Malgun Gothic',10))
-    win = MainWindow()
-    win.show()
-    sys.exit(app.exec())
+    try:
+        with ReceiverLock(data_dir()/'application.lock'):
+            win = MainWindow()
+            win.show()
+            result=app.exec()
+    except ReceiverAlreadyRunning:
+        QMessageBox.information(None,'프로그램 사용 중','이미 프로그램이 켜져 있거나 운영 기록을 백업 중이에요. 기존 창이나 백업을 먼저 종료해 주세요.')
+        return
+    sys.exit(result)
