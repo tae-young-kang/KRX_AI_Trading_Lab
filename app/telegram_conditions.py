@@ -7,6 +7,7 @@ import json
 import math
 import re
 import secrets
+import time
 
 from app.order_engine import connect
 from app.modes import current_mode
@@ -22,6 +23,7 @@ SWITCHES = {'가격사용': 'on_price', '시총사용': 'on_cap', '거래대금�
             '거래량사용': 'on_volratio', '등락사용': 'on_change'}
 KEYS = ('market', 'include_etf', *[v[0] for v in NUMBERS.values()], *SWITCHES.values())
 HELP = ('/조건: 지금 추천 기준 보기\n'
+        '/조건기록: 이전 추천 조건 보기 · /조건복귀 기록번호: 확인 후 되돌리기\n'
         '/조건변경 시장=코스닥 ETF=제외 거래대금=100\n'
         '시장: 코스피/코스닥/전체 · ETF: 포함/제외\n'
         '거래대금·시총: 억원, 가격: 원, 거래량비율·등락: %\n'
@@ -88,6 +90,28 @@ def patch(text):
     return result
 
 
+def validate_conditions(c):
+    if not isinstance(c,dict) or set(c)!=set(KEYS):raise ValueError('이전 추천 조건의 항목을 확인해 주세요.')
+    if c['market'] not in ('전체','KOSPI','KOSDAQ') or type(c['include_etf']) is not bool:
+        raise ValueError('이전 시장·ETF 조건을 확인해 주세요.')
+    if any(type(c[key]) is not bool for key in SWITCHES.values()):raise ValueError('이전 조건 사용 여부를 확인해 주세요.')
+    for key,low,high in NUMBERS.values():
+        if (type(c[key]) not in (int,float) or not math.isfinite(c[key]) or not low<=c[key]<=high
+                or key=='recommend_count' and type(c[key]) is not int):
+            raise ValueError('이전 추천 조건의 숫자 범위를 확인해 주세요.')
+    for lower,upper in (('min_price','max_price'),('min_cap_eok','max_cap_eok'),('min_change_pct','max_change_pct')):
+        if c[lower]>c[upper]:raise ValueError('이전 조건의 최소·최대 값을 확인해 주세요.')
+
+
+def record_version(db,current,now):
+    """Explicit recommendation whitelist only, shared across process restarts."""
+    payload=encode(current['conditions'])
+    last=db.execute('SELECT version,payload FROM condition_versions WHERE mode=? ORDER BY id DESC LIMIT 1',(current['mode'],)).fetchone()
+    if last is None or last['version']!=current['version'] or last['payload']!=payload:
+        db.execute('INSERT INTO condition_versions(mode,version,payload,created) VALUES(?,?,?,?)',
+            (current['mode'],current['version'],payload,now))
+
+
 class ConditionCommands:
     def __init__(self, path, config):
         self.path = path
@@ -99,7 +123,9 @@ class ConditionCommands:
                     base TEXT,target TEXT,expires REAL,state TEXT);
                 CREATE TABLE IF NOT EXISTS condition_replies(scope TEXT,session TEXT,uid INTEGER,reply TEXT,
                     PRIMARY KEY(scope,session,uid));
+                CREATE TABLE IF NOT EXISTS condition_versions(id INTEGER PRIMARY KEY,mode TEXT,version INTEGER,payload TEXT,created REAL);
             ''')
+            record_version(db,self._state(config),time.time())
             db.execute('INSERT OR REPLACE INTO condition_current VALUES (?,?)', (self.owner,encode(self._state(config))))
 
     def _state(self, config):
@@ -126,8 +152,33 @@ class ConditionCommands:
                     reply = describe(current) + ('\n'+status if status else '')
                 elif text == '/조건도움말':
                     reply = HELP
-                elif text.startswith('/조건변경'):
-                    changes = patch(text[len('/조건변경'):].strip())
+                elif text.split(' ',1)[0]=='/조건기록':
+                    match=re.fullmatch(r'/조건기록(?: ([1-9][0-9]{0,5}))?',text)
+                    if not match:raise ValueError('사용법: /조건기록 또는 /조건기록 페이지')
+                    page=int(match[1] or 1)
+                    count=db.execute('SELECT COUNT(*) FROM condition_versions WHERE mode=?',(current['mode'],)).fetchone()[0]
+                    pages=max(1,(count+4)//5)
+                    if page>pages:raise ValueError(f'조건 기록은 {pages}페이지까지 있어요.')
+                    rows=db.execute('SELECT * FROM condition_versions WHERE mode=? ORDER BY id DESC LIMIT 5 OFFSET ?',
+                        (current['mode'],(page-1)*5)).fetchall()
+                    lines=[f'[이전 추천 조건] {page}/{pages}페이지 · 현재 시세 모드만 표시',
+                        '복귀는 추천 기준만 바꿔요. 익절·손절·비용·모드·테마1 기준은 바꾸지 않아요.']
+                    for row in rows:
+                        conditions=json.loads(row['payload']);validate_conditions(conditions)
+                        lines.append(f'기록 {row["id"]} · '+describe(dict(mode=current['mode'],version=row['version'],conditions=conditions)))
+                        lines.append(f'되돌리기: /조건복귀 {row["id"]}')
+                    if page<pages:lines.append(f'다음: /조건기록 {page+1}')
+                    reply='\n'.join(lines)
+                elif text.startswith('/조건변경') or text.split(' ',1)[0]=='/조건복귀':
+                    restoring=text.split(' ',1)[0]=='/조건복귀'
+                    if restoring:
+                        match=re.fullmatch(r'/조건복귀 ([1-9][0-9]{0,8})',text)
+                        if not match:raise ValueError('사용법: /조건복귀 기록번호 · 기록 찾기: /조건기록')
+                        row=db.execute('SELECT payload FROM condition_versions WHERE id=? AND mode=?',(int(match[1]),current['mode'])).fetchone()
+                        if row is None:raise ValueError('현재 시세 모드에 없는 조건 기록이에요. /조건기록에서 골라 주세요.')
+                        changes=json.loads(row['payload']);validate_conditions(changes)
+                        if changes==current['conditions']:raise ValueError('현재 추천 조건과 같아요. 변경하지 않았어요.')
+                    else:changes = patch(text[len('/조건변경'):].strip())
                     target = json.loads(encode(current))
                     target['conditions'].update(changes)
                     for lower, upper in (('min_price','max_price'),('min_cap_eok','max_cap_eok'),('min_change_pct','max_change_pct')):
@@ -139,7 +190,8 @@ class ConditionCommands:
                     db.execute("UPDATE condition_requests SET state='EXPIRED' WHERE scope=? AND session=? AND state='PREVIEW'", (scope,session))
                     db.execute('INSERT INTO condition_requests VALUES (?,?,?,?,?,?,?)',
                                (digest,scope,session,encode(current),encode(target),now+120,'PREVIEW'))
-                    reply = '이렇게 바꿀까요?\n'+describe(target)+f'\n2분 안에 /조건확인 {nonce}\n철회: /조건철회 {nonce}'
+                    heading=('이전 추천 기준으로 되돌릴까요? 익절·손절·테마1은 바뀌지 않아요.\n' if restoring else '이렇게 바꿀까요?\n')
+                    reply = heading+describe(target)+f'\n2분 안에 /조건확인 {nonce}\n철회: /조건철회 {nonce}'
                 else:
                     match = re.fullmatch(r'/(조건확인|조건철회) ([A-Za-z0-9_-]{16})', text)
                     if not match:
@@ -168,6 +220,7 @@ class ConditionCommands:
             db.execute('BEGIN IMMEDIATE')
             db.execute("UPDATE condition_requests SET state='EXPIRED' WHERE state IN ('PREVIEW','QUEUED') AND expires<=?", (now,))
             current = self._state(config)
+            record_version(db,current,now)
             if not busy:
                 for row in db.execute("SELECT * FROM condition_requests WHERE state='QUEUED' ORDER BY rowid").fetchall():
                     target = json.loads(row['target'])
@@ -187,6 +240,7 @@ class ConditionCommands:
                             config.update(before)
                             raise
                         current, changed = self._state(config), True
+                    record_version(db,current,now)
                     db.execute("UPDATE condition_requests SET state='APPLIED' WHERE token=?", (row['token'],))
             db.execute('INSERT OR REPLACE INTO condition_current VALUES (?,?)', (self.owner,encode(self._state(config))))
         return changed
