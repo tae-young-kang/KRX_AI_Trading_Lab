@@ -92,3 +92,51 @@ def test_delivery_is_scope_bound_and_crashed_claim_is_not_retried(tmp_path,sandb
     assert cmd.notice_delivery('claim',**context) is None
     with connect(cmd.path) as db:assert db.execute('SELECT state FROM result_delivery').fetchone()[0]=='UNKNOWN'
     cmd.disarm();session.close()
+
+
+def refresh_fills(cmd,session,http,kind):
+    data=wire()
+    for row in data[2]['acnt_ord_cntr_prst_array']:row['ord_no']='0000013'
+    if kind in ('open','missing'):data[2]['acnt_ord_cntr_prst_array']=[]
+    if kind in ('partial','unconfirmed'):
+        data[2]['acnt_ord_cntr_prst_array']=data[2]['acnt_ord_cntr_prst_array'][1:2]
+    if kind in ('open','partial'):
+        data[-1]['oso']=[dict(ord_no='13',orig_ord_no='0',stk_cd='900001',ord_qty='3',
+                              oso_qty='3' if kind=='open' else '2')]
+    add_capture(http,data)
+    session.refresh();cmd.observe(session._last_capture)
+
+
+def test_partial_then_full_fill_feedback_uses_observed_gross_and_deduplicates(tmp_path,sandbox):
+    service,cmd,session,http=processed(tmp_path,sandbox)
+    sent=[]
+    class Sender:
+        def send(self,chat,text):sent.append(text);return len(sent)
+    sender=Sender()
+    service.send_order_notice(sender) # Receipt notice, not a fill.
+    refresh_fills(cmd,session,http,'partial')
+    service.send_order_notice(sender);service.send_order_notice(sender)
+    assert len(sent)==2 and '부분체결 조회' in sent[-1]
+    assert '1/3주' in sent[-1] and '체결금액 1,000원' in sent[-1]
+    refresh_fills(cmd,session,http,'filled')
+    service.send_order_notice(sender);service.send_order_notice(sender)
+    assert len(sent)==3 and '전량 체결 수량 조회 일치' in sent[-1]
+    assert '3/3주' in sent[-1] and '체결금액 2,980원' in sent[-1]
+    assert '평균 체결가 약 993.33원' in sent[-1]
+    assert '실현손익·결제 완료는 별도 확인' in sent[-1]
+    assert len(mutations(http))==1
+    cmd.disarm();session.close()
+
+
+@pytest.mark.parametrize('kind',['open','missing','unconfirmed'])
+def test_no_fill_notice_without_reconciled_positive_fill(tmp_path,sandbox,kind):
+    service,cmd,session,http=processed(tmp_path,sandbox)
+    sent=[]
+    class Sender:
+        def send(self,chat,text):sent.append(text);return 7
+    sender=Sender()
+    service.send_order_notice(sender)
+    refresh_fills(cmd,session,http,kind)
+    service.send_order_notice(sender)
+    assert len(sent)==1
+    cmd.disarm();session.close()

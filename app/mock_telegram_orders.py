@@ -562,3 +562,6 @@ class MockTelegramOrders:
                             state='부분체결·남은 주문 조회' if qty else '접수·미체결 조회'
                     db.execute('INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?)',
                         (row['id'],state,qty,req.quantity,capture.finished_at.astimezone(KST).strftime('%m/%d %H:%M:%S')))
+                    if valid and 0<qty<=req.quantity and qty+remaining<=req.quantity:
+                        db.execute('INSERT OR REPLACE INTO fill_evidence VALUES (?,?,?)',
+                            (row['id'],qty,sum(x.gross for x in fills)))

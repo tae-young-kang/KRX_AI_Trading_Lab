@@ -1,6 +1,7 @@
 """One-attempt result notices in the existing MOCK intent store."""
 import json
 import re
+from decimal import Decimal
 from app.order_engine import connect
 
 
@@ -8,6 +9,7 @@ def initialize(db):
     db.execute('''CREATE TABLE IF NOT EXISTS result_delivery (
         id TEXT PRIMARY KEY, scope TEXT, session TEXT, state TEXT)''')
     db.execute("UPDATE result_delivery SET state='UNKNOWN' WHERE state='SENDING'")
+    db.execute('CREATE TABLE IF NOT EXISTS fill_evidence (id TEXT PRIMARY KEY,filled INTEGER,gross INTEGER)')
 
 
 def delivery(path, action, *, scope, session, key=None, delivered=False):
@@ -23,7 +25,7 @@ def delivery(path, action, *, scope, session, key=None, delivered=False):
             AND i.state IN ('ACKNOWLEDGED','REJECTED','FAILED','UNKNOWN')
             AND NOT EXISTS (SELECT 1 FROM result_delivery d WHERE d.id=i.id)
             ORDER BY i.rowid LIMIT 1''',(scope,session)).fetchone()
-        if row is None:return None
+        if row is None:return fill_delivery(db,scope,session)
         payload=json.loads(row['payload'])
         code=payload.get('code')
         size=payload.get('quantity')
@@ -43,3 +45,31 @@ def delivery(path, action, *, scope, session, key=None, delivered=False):
             text+='\n취소 접수 응답이며 최종 취소 완료는 아직 미확인이에요.'
         db.execute('INSERT INTO result_delivery VALUES(?,?,?,?)',(row['id'],scope,session,'SENDING'))
         return dict(key=row['id'],text=text)
+
+
+def fill_delivery(db,scope,session):
+    row=db.execute('''SELECT i.id,i.payload,o.filled,o.quantity,o.checked_at,o.state,f.gross
+        FROM intents i JOIN observations o ON o.id=i.id JOIN fill_evidence f ON f.id=i.id
+        WHERE i.scope=? AND i.session=? AND i.state='ACKNOWLEDGED'
+        AND o.filled>0 AND o.filled=f.filled AND o.filled<=o.quantity
+        AND o.state IN ('부분체결·남은 주문 조회','체결 수량 조회 일치 · 비용/결제 별도 확인')
+        AND NOT EXISTS (SELECT 1 FROM result_delivery d WHERE d.id=i.id||':fill:'||o.filled)
+        ORDER BY i.rowid LIMIT 1''',(scope,session)).fetchone()
+    if row is None:return None
+    payload=json.loads(row['payload'])
+    code=payload.get('code')
+    if (not isinstance(code,str) or not re.fullmatch(r'[A-Za-z0-9]{6}',code)
+            or type(row['gross']) is not int or row['gross']<=0):
+        raise ValueError('체결 알림의 종목·금액 근거를 확인해 주세요.')
+    side={'BUY':'매수','SELL':'매도'}.get(payload.get('side'),'방향 확인 필요')
+    label='전량 체결 수량 조회 일치' if row['filled']==row['quantity'] else '부분체결 조회'
+    average=Decimal(row['gross'])/Decimal(row['filled'])
+    text=(f'[키움 모의투자 · {label}]\n실제 돈 사용 안 함\n'
+          f'{code} · {side} · 조회된 체결 {row["filled"]:,}/{row["quantity"]:,}주\n'
+          f'누적 체결금액 {row["gross"]:,}원 · 평균 체결가 약 {average:,.2f}원\n'
+          f'조회 시각 {row["checked_at"]} (한국 시각)\n'
+          '수수료·세금 차감 전 금액이에요. 실현손익·결제 완료는 별도 확인이 필요해요.\n'
+          '익절/손절 자동 매도는 아직 연결되지 않았어요. /주문상태 · /잔고')
+    key=row['id']+':fill:'+str(row['filled'])
+    db.execute('INSERT INTO result_delivery VALUES(?,?,?,?)',(key,scope,session,'SENDING'))
+    return dict(key=key,text=text)
