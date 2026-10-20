@@ -6,6 +6,7 @@ from math import isfinite
 from app.theme_calendar import request_selection
 from app.theme_sources import KIWOOM_SOURCES
 from app.theme_candidates import plan_candidates
+from app.theme_pruning_cache import load as load_pruning, retain as retain_pruning
 from app.kiwoom_daily import read_daily
 from app.krx_history import validate_bars
 from app.theme_input import prepare_confirmed
@@ -36,7 +37,12 @@ def collect_theme(history,client,mode,*,now=None,selection=None,progress=None,ca
     catalog={(s.market,s.code):s for s in stocks}
     if len(catalog)!=len(stocks) or not stocks:raise ValueError('전체 시장 종목 목록이 비었거나 중복됐어요.')
     baseline=history.load_bars('KRX',days[0],days[-2])
+    # Prefer same-server completed-day observations; never mix mock and real.
+    indexed={(b.market,b.code,b.date):b for b in baseline}
+    indexed.update({(b.market,b.code,b.date):b for b in load_pruning(history,source,days[:-1],moment)})
+    baseline=list(indexed.values())
     plan=plan_candidates([(s.market,s.code,s.name) for s in stocks],baseline,days[:-1])
+    if progress:progress(f'ETF 제외 {plan["universe_count"]:,}종목 · 과거 조건 미달 {len(plan["excluded"]):,}종목 건너뜀 · 일봉 조회 {len(plan["candidates"]):,}종목')
     buffered=[]
     missing=invalid=0
     for index,(market,code,name) in enumerate(plan['candidates'],1):
@@ -63,6 +69,7 @@ def collect_theme(history,client,mode,*,now=None,selection=None,progress=None,ca
     stamp=moment.isoformat(timespec='seconds')
     with history.connect() as db:
         db.execute('BEGIN IMMEDIATE')
+        retain_pruning(db,source,buffered,stamp)
         db.execute('DELETE FROM daily_bars WHERE source=? AND day BETWEEN ? AND ?', (source,days[0],days[-1]))
         db.executemany('''INSERT INTO daily_bars
             (source,day,market,code,name,open,high,low,close,volume,trade_value_eok,cap_eok,fetched_at)
