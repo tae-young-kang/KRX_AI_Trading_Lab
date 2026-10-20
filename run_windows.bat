@@ -8,5 +8,10 @@ if errorlevel 1 (
  pause
  exit /b 1
 )
+%PY% -m app.credential_check
+if errorlevel 1 (
+ pause
+ exit /b 1
+)
 %PY% main.py
 if errorlevel 1 pause
