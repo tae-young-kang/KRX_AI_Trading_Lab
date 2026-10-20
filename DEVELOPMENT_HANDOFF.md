@@ -1198,3 +1198,6 @@ PC 자료 선택의 KRX 수집 후 판정: 최근7개 확인 거래일×두 시�
 
 ### 2026-10-21 E 가상 청산 기본값 이력/복귀
 /청산조건에서 기본 가상 익절·손절·보유일을 개인 확인큐로 변경/이력/복귀. 기존 보유·목록/테마1기본/주문 권한은 불변이며 새 일반 가상 목록 반영까지 검사. 전체1184 passed/1 skipped 및 compileall/diff 검사 통과,실제 GUI/서버/Telegram 미실행. 비용/전체정책복귀·AI독립검증 및 원래B~F남은 범위 유지. 이전ec13de1 push/원격SHA 확인.
+
+### 2026-10-21 F 화면 없이 설치/준비 확인
+install_windows.bat 설치 전용과 environment_check의 필수패키지/모듈·보안구성·달력 진단 연결. 실제 개발 Python에서 누락된 websockets15.0.1 설치 후점검9항목 통과. 배치/GUI·클라이언트 실제 실행은 안 했으며 전체1195 passed/1 skipped/compileall/diff 통과. 새PC·exe·GUI/키저장/연결/실운영 검증과 원래B~F나머지는 남는다. 이전1f72876 push/원격SHA 확인.

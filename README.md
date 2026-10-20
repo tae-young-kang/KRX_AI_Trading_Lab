@@ -28,6 +28,10 @@
 
 ## 설치 · GUI 3분 테스트
 
+**설치만 하고 화면을 열지 않으려면** 프로젝트 폴더에서 `install_windows.bat`를 실행하세요.
+설치 후 `python -m app.environment_check`로 패키지·Windows 보안 저장 구성·거래일 달력을 점검할 수 있습니다.
+점검은 키/계좌정보를 읽거나 시세·텔레그램·주문을 실행하지 않습니다. 사용법은 [설치 준비 점검](docs/WINDOWS_SETUP_CHECK.md)을 참고하세요.
+
 1. Windows에 **Python 3.11+** 설치하고 ZIP 압축 해제.
 2. `run_windows.bat` 더블클릭 (PySide6·requests·keyring 설치 후 실행).
 3. 좌측 **[종목 선정 연구]** → **[합성 예제 가져오기]** → **[48개 조건 검증]**.
