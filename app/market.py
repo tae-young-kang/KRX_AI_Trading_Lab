@@ -228,13 +228,19 @@ class KiwoomMarket:
             rows = list(received.values()) + self._quote_rows(missing, cancelled, notify)
         return rows
 
-    def scan(self, market='전체', progress=None, cancelled=None, include_etf=True):
+    def scan_theme(self, selector, *, progress=None, cancelled=None):
+        """List every non-ETF symbol before selecting the required quote subset."""
+        if not callable(selector):raise ValueError('테마1 조회 대상 선택을 확인해 주세요.')
+        return self.scan('전체',progress=progress,cancelled=cancelled,include_etf=False,
+                         _candidate_selector=selector)
+
+    def scan(self, market='전체', progress=None, cancelled=None, include_etf=True, *, _candidate_selector=None):
         started=time.monotonic()
         self._scan_http_calls=self._scan_fallbacks=0
         self._measuring_scan=True
         completed=False
         try:
-            rows=self._scan(market,progress,cancelled,include_etf)
+            rows=self._scan(market,progress,cancelled,include_etf,_candidate_selector)
             completed=True
             return rows
         finally:
@@ -242,7 +248,7 @@ class KiwoomMarket:
                                         http_calls=self._scan_http_calls,fallbacks=self._scan_fallbacks)
             self._measuring_scan=False
 
-    def _scan(self, market='전체', progress=None, cancelled=None, include_etf=True):
+    def _scan(self, market='전체', progress=None, cancelled=None, include_etf=True, candidate_selector=None):
         """Enumerate the selected markets before screening every listed symbol.
 
         Official specs: ka10099 (0=KOSPI, 10=KOSDAQ), ka10095
@@ -283,6 +289,13 @@ class KiwoomMarket:
             raise RuntimeError('ETF 분류 목록이 비어 있습니다. 포함 여부를 확인할 수 없습니다.')
         if not include_etf:
             universe = {code: meta for code, meta in universe.items() if code not in etfs}
+        if candidate_selector is not None:
+            self._check_cancelled(cancelled)
+            selected=candidate_selector(tuple((meta[0],code,meta[1]) for code,meta in universe.items()))
+            if not isinstance(selected,(set,frozenset)) or not selected.issubset(universe):
+                raise ValueError('테마1 조회 대상이 전체 종목 목록과 달라요.')
+            notify(f'ETF 제외 전체 {len(universe):,}개 확인 · 시세 조회 대상 {len(selected):,}개')
+            universe={code:meta for code,meta in universe.items() if code in selected}
         codes = list(universe)
         found = {}
         notify(f'ETF {"포함" if include_etf else "제외"} · 전체 대상 {len(codes):,}개 · 시세 조회 0개')

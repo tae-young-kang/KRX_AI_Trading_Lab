@@ -33,15 +33,29 @@ def collect_theme(history,client,mode,*,now=None,selection=None,progress=None,ca
     stopped()
     # Theme1 always excludes ETFs, independently of the general screener setting.
     include_etf=False
-    stocks=client.scan('전체',progress=progress,cancelled=cancelled,include_etf=False)
-    catalog={(s.market,s.code):s for s in stocks}
-    if len(catalog)!=len(stocks) or not stocks:raise ValueError('전체 시장 종목 목록이 비었거나 중복됐어요.')
     baseline=history.load_bars('KRX',days[0],days[-2])
     # Prefer same-server completed-day observations; never mix mock and real.
     indexed={(b.market,b.code,b.date):b for b in baseline}
     indexed.update({(b.market,b.code,b.date):b for b in load_pruning(history,source,days[:-1],moment)})
     baseline=list(indexed.values())
-    plan=plan_candidates([(s.market,s.code,s.name) for s in stocks],baseline,days[:-1])
+    plan=None
+    def select_quotes(universe):
+        nonlocal plan
+        if not universe:raise ValueError('전체 시장 종목 목록이 비었어요.')
+        plan=plan_candidates(universe,baseline,days[:-1])
+        return {code for _,code,_ in plan['candidates']}
+    scan_theme=getattr(client,'scan_theme',None)
+    if callable(scan_theme):
+        stocks=scan_theme(select_quotes,progress=progress,cancelled=cancelled)
+        if plan is None:raise ValueError('전체 시장 종목 목록 확인이 완료되지 않았어요.')
+        if {(s.market,s.code) for s in stocks}!={(m,c) for m,c,_ in plan['candidates']}:
+            raise ValueError('테마1 후보 시세가 누락되거나 요청 대상과 달라요.')
+    else:
+        stocks=client.scan('전체',progress=progress,cancelled=cancelled,include_etf=False)
+        if not stocks:raise ValueError('전체 시장 종목 목록이 비었어요.')
+        plan=plan_candidates([(s.market,s.code,s.name) for s in stocks],baseline,days[:-1])
+    catalog={(s.market,s.code):s for s in stocks}
+    if len(catalog)!=len(stocks):raise ValueError('전체 시장 종목 목록이 중복됐어요.')
     if progress:progress(f'ETF 제외 {plan["universe_count"]:,}종목 · 과거 조건 미달 {len(plan["excluded"]):,}종목 건너뜀 · 일봉 조회 {len(plan["candidates"]):,}종목')
     buffered=[]
     missing=invalid=0
