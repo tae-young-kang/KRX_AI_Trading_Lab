@@ -40,7 +40,7 @@ def test_reply_keyboard_uses_existing_send_receipt_checks(message,kind):
         assert kind in body['reply_markup']
         if kind=='keyboard':
             labels=[button['text'] for row in body['reply_markup']['keyboard'] for button in row]
-            assert labels==list(telegram_menu.COMMANDS)
+            assert labels==[label for row in telegram_menu.ROWS for label in row]
             assert all(not command.startswith(('/매수','/매도','/확인')) for command in telegram_menu.COMMANDS.values())
     else:
         assert 'reply_markup' not in body
@@ -88,3 +88,35 @@ def test_theme_conditions_are_visible_without_saved_result_or_orders(sandbox):
     service.handle(update(sandbox,2,'/중지'))
     assert service.handle(update(sandbox,3,'/테마1조건'))==RULES_TEXT
     assert broker.calls==[]
+
+
+def test_theme_menu_describes_current_collection_and_preserves_old_button():
+    guide=telegram_menu.text(practice=False,active=True)
+    assert '새 수집은 안 함' not in guide
+    assert '요청 날짜 기준' in guide and '키움 연결이면 새 시세를 조회' in guide
+    assert '그 외 출처는 저장 자료' in guide
+    assert telegram_menu.COMMANDS['테마1 종목 찾기']=='/테마1검색'
+    assert telegram_menu.COMMANDS['테마1 새 판정']=='/테마1검색'
+
+
+def test_theme_buttons_share_authorized_single_request_path(sandbox):
+    service,broker,_,_=sandbox
+    calls=[]
+    class Theme:
+        def request(self):
+            calls.append('request')
+            return '검색 요청 접수'
+    service.theme_request=Theme()
+    service.orders_enabled=False
+    event=update(sandbox,1,'테마1 종목 찾기')
+    assert service.handle(event)=='검색 요청 접수'
+    assert service.handle(event)=='검색 요청 접수'
+    assert calls==['request']
+    assert service.handle(update(sandbox,2,'테마1 새 판정'))=='검색 요청 접수'
+    assert calls==['request','request']
+    bad=update(sandbox,3,'테마1 종목 찾기')
+    bad['message']['from']['id']=99
+    assert service.handle(bad) is None
+    service.handle(update(sandbox,4,'/중지'))
+    assert '중지' in service.handle(update(sandbox,5,'테마1 종목 찾기'))
+    assert len(calls)==2 and broker.calls==[]
