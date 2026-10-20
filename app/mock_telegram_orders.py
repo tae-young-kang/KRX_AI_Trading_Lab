@@ -368,6 +368,7 @@ class MockTelegramOrders:
             if not match: return ('모의 주문 예: /매수 900001 1주 1000\n'
                 '금액으로 요청: /매수 900001 1만원 1000\n'
                 'KRX 시장가 매수: /매수 900001 3주 시장가\n'
+                'KRX 시장가 매도: /매도 900001 2주 시장가\n'
                 '마지막 숫자는 지정가(원)예요. 종목명은 오늘 같은 시세 모드에서 확인한 정확한 이름을 써 주세요.')
             side,code,quantity,unit,price,take,stop=match.groups()
             symbol_info=None
@@ -488,11 +489,10 @@ class MockTelegramOrders:
                     raise ContractError('매도 가능 수량 확인 필요')
                 if action=='NEW':
                     if payload.get('order_type')=='MARKET':
-                        if request.side!='BUY':raise ContractError('시장가 매수만 연결됐어요.')
                         quote,upper=session.transport.read_market_quote(request.code)
                         if upper.price_won!=request.limit_price or upper.day!=self.day:
                             raise ContractError('시장가 상한가가 바뀌었어요. 새 내용을 확인해 주세요.')
-                        plan=market_order_plan(code=request.code,side='BUY',quantity=request.quantity)
+                        plan=market_order_plan(code=request.code,side=request.side,quantity=request.quantity)
                     else:plan=order_plan(request)
                 session._guard()
                 if (self.emergency.event.is_set() or not self._open() or self.clock().timestamp()>row['expires']

@@ -67,6 +67,7 @@ def render(owner, text, scope, now):
                      '매수' if payload['side'] == 'BUY' else '매도')
             number = _number(receipts.get(row['id']), row['day'])
             price_label=('시장가 · 예산 상한가 ' if payload.get('order_type')=='MARKET' else '지정가 ')
+            if payload.get('order_type')=='MARKET' and payload.get('side')=='SELL':price_label='시장가 · 시험 한도 기준 상한가 '
             lines.append(f"{row['day']} {action} · {payload['code']} · {payload['quantity']}주 · {price_label}{payload['limit_price']:,}원")
             lines.append(LABELS.get(row['state'], '상태 확인 필요') +
                          (f' · 주문번호 {number}' if number else ' · 접수 번호 없음'))

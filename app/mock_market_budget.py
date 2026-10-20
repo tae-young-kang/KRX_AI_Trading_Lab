@@ -1,4 +1,4 @@
-"""MOCK market-buy budget evidence; no permission, transport or queue mutation."""
+"""MOCK market-order evidence; no permission, transport or queue mutation."""
 from dataclasses import dataclass
 from datetime import datetime,date
 import re
@@ -20,8 +20,7 @@ class UpperPrice:
     observed_at:datetime
 
 
-def preview_buy(capture,quote,upper,*,code,name,market,profile_id,auth_generation,account_tag,
-                now,fee_bps,quantity=None,budget_won=None):
+def _validate_evidence(capture,quote,upper,*,code,profile_id,auth_generation,account_tag,now,fee_bps):
     """Use broker upper-price evidence, not a fabricated current-price buffer.
 
     A final caller must obtain this evidence from independent live MOCK reads,
@@ -57,6 +56,12 @@ def preview_buy(capture,quote,upper,*,code,name,market,profile_id,auth_generatio
         raise ContractError('시세·상한가격·비용 기준을 확인해 주세요.')
     if capture.observations.unfilled:
         raise ContractError('미체결 주문 대조가 남아 있어 시장가 예산 계산을 보류해요.')
+
+
+def preview_buy(capture,quote,upper,*,code,name,market,profile_id,auth_generation,account_tag,
+                now,fee_bps,quantity=None,budget_won=None):
+    _validate_evidence(capture,quote,upper,code=code,profile_id=profile_id,auth_generation=auth_generation,
+        account_tag=account_tag,now=now,fee_bps=fee_bps)
     available=money_view(capture.observations,{}).order_money
     if available is None:raise ContractError('지금 주문에 쓸 수 있는 돈을 확인하지 못했어요.')
     if (quantity is None)==(budget_won is None):raise ContractError('수량 또는 금액 중 하나만 지정해 주세요.')
@@ -74,3 +79,29 @@ def preview_buy(capture,quote,upper,*,code,name,market,profile_id,auth_generatio
     result['contract_draft']=(market_order_plan(code=code,side='BUY',quantity=count)
                               if result['state']=='PREVIEW_ONLY' and count else None)
     return result
+
+
+def preview_sell(capture,quote,upper,*,code,name,market,profile_id,auth_generation,account_tag,
+                 now,quantity=None,budget_won=None):
+    """Freeze shares from the requested count or current-quote amount, never short."""
+    _validate_evidence(capture,quote,upper,code=code,profile_id=profile_id,auth_generation=auth_generation,
+        account_tag=account_tag,now=now,fee_bps=0)
+    if market not in ('KOSPI','KOSDAQ') or not isinstance(name,str) or not 1<=len(name)<=100:
+        raise ContractError('시장과 종목명을 확인해 주세요.')
+    if (quantity is None)==(budget_won is None):raise ContractError('수량 또는 금액 중 하나만 지정해 주세요.')
+    value=quantity if quantity is not None else budget_won
+    if type(value) is not int or not 0<value<10**15:raise ContractError('매도 수량·금액을 확인해 주세요.')
+    count=value if quantity is not None else value//quote.price_won
+    holdings=capture.observations.holdings
+    if any(not isinstance(row,tuple) or len(row)!=3 or any(type(v) is not int or v<0 for v in row[1:])
+           or row[2]>row[1] for row in holdings):raise ContractError('매도 가능 수량 근거를 확인해 주세요.')
+    rows=[row for row in holdings if row[0]==code]
+    if len(rows)>1:raise ContractError('중복 보유 종목을 확인해 주세요.')
+    available=rows[0][2] if rows else 0
+    state='BELOW_ONE_SHARE' if count==0 else 'INSUFFICIENT_SHARES' if count>available else 'PREVIEW_ONLY'
+    return dict(state=state,mode='MOCK',executable=False,quote_won=quote.price_won,
+        available_quantity=available,estimated_gross_won=count*quote.price_won,reserved_won=0,
+        quantity_basis='REQUESTED_SHARES' if quantity is not None else 'CURRENT_QUOTE',
+        price_asof=quote.quote_at.isoformat(),
+        targets=[dict(code=code,name=name,market=market,quantity=count,reference_won=upper.price_won)],
+        contract_draft=market_order_plan(code=code,side='SELL',quantity=count) if state=='PREVIEW_ONLY' else None)
