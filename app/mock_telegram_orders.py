@@ -305,7 +305,7 @@ class MockTelegramOrders:
         if text.split(' ',1)[0]=='/보호상태':
             match=re.fullmatch(r'/보호상태(?: ([1-9][0-9]{0,5}))?',text)
             if not match: return '사용법: /보호상태 또는 /보호상태 2'
-            return self.protection.summary(page=int(match[1] or 1)) if self.protection else '모의 보호 기록 연결 전이에요. 자동 매도는 연결되지 않았어요.'
+            return self.protection.summary(page=int(match[1] or 1),orders_linked=True) if self.protection else '모의 보호 기록 연결 전이에요. 자동 매도는 연결되지 않았어요.'
         if text.split(' ',1)[0] in ('/주문목록','/미체결'):
             from app.mock_order_views import render
             return render(self,text,scope,now)
@@ -364,13 +364,13 @@ class MockTelegramOrders:
             from app.mock_market_intents import request as request_market
             market_reply=request_market(self,db,text,scope,session,uid,now)
             if market_reply is not None:return market_reply
-            match=re.fullmatch(r'/(매수|매도) (.{1,100}?) ([1-9][0-9,]{0,18})(주|원|만원)? ([1-9][0-9,]{0,9})(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
+            match=re.fullmatch(r'/(매수|매도) (.{1,100}?) ([1-9][0-9,]{0,18})(주|원|만원)? ([1-9][0-9,]{0,9})(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?)(?: (자동매도))?)?',text)
             if not match: return ('모의 주문 예: /매수 900001 1주 1000\n'
                 '금액으로 요청: /매수 900001 1만원 1000\n'
                 'KRX 시장가 매수: /매수 900001 3주 시장가\n'
                 'KRX 시장가 매도: /매도 900001 2주 시장가\n'
                 '마지막 숫자는 지정가(원)예요. 종목명은 오늘 같은 시세 모드에서 확인한 정확한 이름을 써 주세요.')
-            side,code,quantity,unit,price,take,stop=match.groups()
+            side,code,quantity,unit,price,take,stop,automatic=match.groups()
             symbol_info=None
             if not re.fullmatch('[A-Za-z0-9]{6}',code):
                 if not self.symbol_lookup:return '종목명 조회가 연결되지 않았어요. 6자리 종목코드로 입력해 주세요.'
@@ -384,13 +384,10 @@ class MockTelegramOrders:
                     symbol_info={key:symbol_info[key] for key in ('code','name','market')}
                 except ValueError as error:return str(error)
                 except Exception:return '종목명을 확인하지 못했어요. 6자리 종목코드로 입력해 주세요.'
-            policy={}
-            if take is not None:
-                if side!='매수':return '익절·손절 감시 조건은 매수 요청에만 붙여 주세요.'
-                from app.protection_plan import validate_policy
-                policy=dict(take_bps=int(Decimal(take)*100),stop_bps=int(Decimal(stop)*100))
-                try:validate_policy(**policy)
-                except ValueError as error:return str(error)
+            from app.mock_auto_exit import policy as buy_policy,policy_text
+            try:policy=buy_policy(side,take,stop,automatic)
+            except ValueError as error:return str(error)
+            if policy.get('auto_exit') is True:policy['auto_exit_generation']=self.generation
             if not re.fullmatch(r'(?:[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)',quantity):
                 return '수량·금액의 쉼표 위치를 확인해 주세요.'
             if not re.fullmatch(r'(?:[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)',price):
@@ -429,7 +426,7 @@ class MockTelegramOrders:
             budget_note=(f'요청 금액 {requested_won:,}원 ÷ 지정가 → {request.quantity}주 (소수점 버림)\n'
                          f'지정가 기준 남는 금액 {requested_won-gross:,}원 · 수수료·세금 별도\n' if requested_won is not None else '')
             if policy:
-                budget_note+=f'체결 뒤 감시: 익절 +{take}% · 손절 -{stop}% (자동 매도 미연결)\n'
+                budget_note+=policy_text(policy)
             symbol_label=f'{symbol_info["name"]} ({request.code})' if symbol_info else request.code
             return (f'[키움 모의투자 주문 · 실제 돈 사용 안 함]\n{symbol_label} {side} {request.quantity}주 · 지정가 {request.limit_price:,}원\n'
                     +budget_note+
@@ -467,6 +464,9 @@ class MockTelegramOrders:
                 payload=json.loads(row['payload'])
                 request=self._request(payload)
                 request.validate()
+                if payload.get('protection_parent'):
+                    from app.mock_auto_exit import validate_dispatch
+                    validate_dispatch(self,row,payload,capture)
                 observed=capture.observations
                 action=payload.get('action','NEW')
                 if action!='CANCEL':
@@ -518,9 +518,10 @@ class MockTelegramOrders:
             return state
 
     def monitor_protection(self, session):
-        """One selected confirmed plan per 30 seconds, read-only owner IO.
+        """One selected confirmed plan per 30 seconds on the sole owner.
 
-        Explicit policy on a confirmed BUY opts into observation, not selling.
+        Policy alone observes. A separately explicit auto_exit permission may
+        enqueue one market sale after a persisted, reconciled trigger.
         """
         with self.lock:
             if not self.armed or not self._open() or self.emergency.event.is_set() or not self.protection:return
@@ -530,6 +531,8 @@ class MockTelegramOrders:
             plans=[row for row in rows if json.loads(row['payload']).get('take_bps') is not None
                    and json.loads(row['payload']).get('side')=='BUY'
                    and json.loads(row['payload']).get('action','NEW')=='NEW'
+                   and (json.loads(row['payload']).get('auto_exit') is not True
+                        or json.loads(row['payload']).get('auto_exit_generation')==self.generation)
                    and not self._canceled(row['scope'],row['session'])
                    and not self.protection.triggered(row['id'])]
             if not plans:return
@@ -549,10 +552,14 @@ class MockTelegramOrders:
                 capture=session.capture_for_order()
                 self.observe(capture)
                 if self._latched or not self.armed:return
-                quote,_=session.transport.read_market_quote(payload['code'])
+                quote,upper=session.transport.read_market_quote(payload['code'])
                 session._guard()
-                return self.protection.observe_mock(row['id'],self.ledger,capture,quote,
+                result=self.protection.observe_mock(row['id'],self.ledger,capture,quote,
                     code=payload['code'],buy_orders=(receipt['order_no'],),now=self.clock())
+                if payload.get('auto_exit') is True and result.get('new_trigger'):
+                    from app.mock_auto_exit import enqueue
+                    result['auto_exit_state']=enqueue(self,row,result,capture,upper)
+                return result
             except (ContractError,ValueError):
                 return dict(state='BLOCKED',executable=False)
 

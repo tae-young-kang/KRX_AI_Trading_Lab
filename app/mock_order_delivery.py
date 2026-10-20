@@ -43,6 +43,8 @@ def delivery(path, action, *, scope, session, key=None, delivered=False):
               '/주문상태로 상세 확인 · /잔고로 새 조회')
         if payload.get('action')=='CANCEL' and row['state']=='ACKNOWLEDGED':
             text+='\n취소 접수 응답이며 최종 취소 완료는 아직 미확인이에요.'
+        if row['state']=='FAILED' and payload.get('protection_block_reason'):
+            text+='\n보호 매도 보류: '+payload['protection_block_reason']
         db.execute('INSERT INTO result_delivery VALUES(?,?,?,?)',(row['id'],scope,session,'SENDING'))
         return dict(key=row['id'],text=text)
 
@@ -102,5 +104,19 @@ def protection_delivery(path,protection,*,scope,session):
                   f'관측 시각 {plan["last_at"]}\n'
                   '체결 평균가 기준 조건이에요. 매도 주문은 아직 보내지 않았어요.\n'
                   '현재 자동 매도 전송은 미연결입니다. /보호상태 · /잔고로 확인하세요.')
+            if request.get('auto_exit') is True:
+                from app.mock_auto_exit import exit_key
+                child=db.execute('SELECT state FROM intents WHERE id=? AND scope=? AND session=?',
+                    (exit_key(plan['plan_key']),scope,session)).fetchone()
+                labels={'QUEUED':'시장가 매도 전송 대기','CLAIMED':'시장가 매도 처리 중',
+                    'ACKNOWLEDGED':'시장가 매도 접수 응답 확인 · 체결은 별도',
+                    'FAILED':'시장가 매도 전송 전 차단 · 자동 재시도 안 함',
+                    'CANCELED':'시장가 매도 요청 취소됨','EXPIRED':'시장가 매도 요청 만료됨',
+                    'UNKNOWN':'시장가 매도 결과 미확인 · 재전송 금지'}
+                status=labels.get(child['state'],'요청 기록 확인 필요') if child else '자동 매도 요청 기록 없음 · 처리 성공 미확인'
+                text=(f'[키움 모의투자 · {label} 조건 도달]\n실제 돈 사용 안 함\n{code} · 당시 확인 수량 {quantity}주\n'
+                    f'체결 평균가 기준 · 익절 +{cfg["take_bps"]/100:.2f}% / 손절 -{cfg["stop_bps"]/100:.2f}%\n'
+                    f'관측 시각 {plan["last_at"]}\n자동매도 허용 요청: {status}\n'
+                    '관측·요청·접수·체결은 서로 달라요. /주문목록 · /주문상태 · /잔고로 확인하세요.')
             db.execute('INSERT INTO result_delivery VALUES(?,?,?,?)',(key,scope,session,'SENDING'))
             return dict(key=key,text=text)

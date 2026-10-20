@@ -71,6 +71,9 @@ def render(owner, text, scope, now):
             lines.append(f"{row['day']} {action} · {payload['code']} · {payload['quantity']}주 · {price_label}{payload['limit_price']:,}원")
             lines.append(LABELS.get(row['state'], '상태 확인 필요') +
                          (f' · 주문번호 {number}' if number else ' · 접수 번호 없음'))
+            if payload.get('protection_parent'):
+                reason={'TAKE_PROFIT':'익절','STOP_LOSS':'손절'}.get(payload.get('protection_reason'),'조건 확인 필요')
+                lines.append(f'사전 허용한 자동 보호 매도 · {reason} 도달 · 추가 확인 없이 만든 요청')
             if payload.get('action') == 'CANCEL' and row['state'] == 'ACKNOWLEDGED':
                 lines.append('최종 취소 완료는 미확인')
             if row['checked_at']:
