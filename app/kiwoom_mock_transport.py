@@ -14,7 +14,7 @@ from requests.adapters import HTTPAdapter
 
 from app.kiwoom_mock_contract import (
     MockPlan, ContractError, UncertainResponse, _success,
-    order_plan, amend_plan, cancel_plan, query_plan, query_page, market_quote_plan,
+    order_plan, amend_plan, cancel_plan, query_plan, query_page, market_quote_plan, market_order_plan,
 )
 from app.order_engine import OrderRequest
 from app.trading_clock import KST
@@ -27,9 +27,12 @@ def validated_plan(plan):
     try:
         body = plan.body()
         if plan.api_id in ('kt10000', 'kt10001'):
-            canonical = order_plan(OrderRequest(body['stk_cd'],
-                'BUY' if plan.api_id == 'kt10000' else 'SELL',
-                int(body['ord_qty']), int(body['ord_uv'])))
+            if body.get('trde_tp')=='3':
+                canonical=market_order_plan(code=body['stk_cd'],side='BUY' if plan.api_id=='kt10000' else 'SELL',quantity=int(body['ord_qty']))
+            else:
+                canonical = order_plan(OrderRequest(body['stk_cd'],
+                    'BUY' if plan.api_id == 'kt10000' else 'SELL',
+                    int(body['ord_qty']), int(body['ord_uv'])))
         elif plan.api_id == 'ka10095':
             canonical = market_quote_plan(body['stk_cd'])
         elif plan.api_id == 'kt10002':
@@ -67,6 +70,7 @@ class MockTransport:
         self._clock = clock or (lambda: datetime.now(KST))
         self.cancelled = cancelled or (lambda: False)
         self.mutation_allowed = lambda: True  # Explicit watch workers replace this gate.
+        self.market_mutation_allowed = lambda: False  # Only a confirmed owner queue may open this gate.
         self._monotonic = monotonic or time.monotonic
         self._pause = pause or time.sleep
         self._io_lock = threading.Lock()
@@ -92,6 +96,8 @@ class MockTransport:
                 if self.cancelled():
                     raise ValueError
                 if path.endswith('/ordr') and not self.mutation_allowed():
+                    raise ValueError
+                if path.endswith('/ordr') and body.get('trde_tp')=='3' and not self.market_mutation_allowed():
                     raise ValueError
                 if path.endswith('/ordr'):
                     self.ready()
@@ -138,6 +144,8 @@ class MockTransport:
 
     def exchange(self, plan, *, cursor=None):
         plan = validated_plan(plan)
+        if plan.api_id in ('kt10000','kt10001') and plan.body().get('trde_tp')=='3' and not self.market_mutation_allowed():
+            raise ContractError('시장가 주문은 재조회와 내용 확인을 마친 모의 소유 작업자만 전송할 수 있어요.')
         self.ready()
         if cursor is not None and (plan.api_id.startswith('kt100') or plan.api_id == 'ka10095'
                 or not isinstance(cursor, str) or not cursor or len(cursor) > 50

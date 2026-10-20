@@ -61,14 +61,16 @@ def test_market_and_query_separation():
 
 
 @pytest.mark.parametrize('side,api',[('BUY','kt10000'),('SELL','kt10001')])
-def test_market_contract_has_no_invented_price_and_cannot_enter_transport(side,api):
+def test_market_contract_has_no_invented_price_and_accepts_only_exact_wire_shape(side,api):
     from app.kiwoom_mock_contract import market_order_plan
     from app.kiwoom_mock_transport import validated_plan
     market=market_order_plan(code='0115E0',side=side,quantity=2)
     assert market.api_id==api and market.url=='https://mockapi.kiwoom.com/api/dostk/ordr'
     assert market.body()==dict(dmst_stex_tp='KRX',stk_cd='0115E0',ord_qty='2',trde_tp='3')
     assert 'ord_uv' not in market.body() and 'cond_uv' not in market.body()
-    with pytest.raises(ContractError):validated_plan(market)
+    assert validated_plan(market)==market
+    from app.kiwoom_mock_contract import MockPlan
+    with pytest.raises(ContractError):validated_plan(MockPlan(api,market.fields+(('ord_uv','1000'),)))
     limit=order_plan(OrderRequest('0115E0',side,2,1000))
     assert validated_plan(limit).body()['trde_tp']=='0'
     assert limit.body()['ord_uv']=='1000'

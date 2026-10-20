@@ -28,7 +28,9 @@ def test_quantity_uses_upper_price_and_does_not_authorize_transport():
     assert result['quote_won']==1000 and result['targets'][0]['market']=='KOSDAQ'
     assert result['available_won']==97010
     assert not result['executable'] and result['contract_draft'].body()['trde_tp']=='3'
-    with pytest.raises(ContractError):validated_plan(result['contract_draft'])
+    assert validated_plan(result['contract_draft']).body()['trde_tp']=='3'
+    # A canonical shape still carries no account permission or confirmed intent.
+    assert result['executable'] is False
 
 
 def test_amount_floors_at_upper_price_and_insufficient_funds_has_no_contract():

@@ -78,10 +78,10 @@ def order_plan(request):
 
 
 def market_order_plan(*,code,side,quantity,venue='KRX'):
-    """Official market-order shape, prepared offline only.
+    """Official MOCK KRX market shape; no placeholder limit price on the wire.
 
-    No placeholder limit price. MockTransport intentionally does not accept
-    this shape until market-specific funds and confirmation gates are wired.
+    The owner queue separately requires fresh upper-price/funds evidence and
+    confirmation. This contract alone is never permission to dispatch.
     """
     if side not in ('BUY','SELL') or venue!='KRX':
         raise ContractError('시장가 계약 준비는 KRX 매수·매도만 지원합니다.')

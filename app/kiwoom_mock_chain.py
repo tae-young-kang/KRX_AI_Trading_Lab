@@ -94,7 +94,8 @@ def project_chain(journal, ledger, root_key):
                 if fills:
                     raise ContractError('취소 접수 번호에 체결이 있습니다. 원자료 대조가 필요합니다.')
                 continue
-            limit = int(plan['ord_uv'] if key == root_key else plan['mdfy_uv'])
+            limit = (None if key==root_key and plan.get('trde_tp')=='3' else
+                     int(plan['ord_uv'] if key == root_key else plan['mdfy_uv']))
             cap = int(plan['ord_qty'] if key == root_key else plan['mdfy_qty'])
             subtotal = 0
             for fill in fills:
@@ -104,8 +105,8 @@ def project_chain(journal, ledger, root_key):
                 if (fill['code'] != body['stk_cd'] or fill['side'] != side
                         or (key == root_key and fill['original_no'] is not None)
                         or (key != root_key and fill['original_no'] not in allowed_parents)
-                        or (side == 'BUY' and fill['price'] > limit)
-                        or (side == 'SELL' and fill['price'] < limit)
+                        or (limit is not None and side == 'BUY' and fill['price'] > limit)
+                        or (limit is not None and side == 'SELL' and fill['price'] < limit)
                         or fill['fill_no'] in fill_ids):
                     raise ContractError('계보의 체결번호·종목·방향·원주문·지정가를 확인하세요.')
                 fill_ids.add(fill['fill_no'])

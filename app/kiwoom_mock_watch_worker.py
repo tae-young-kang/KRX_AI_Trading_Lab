@@ -117,7 +117,9 @@ class MockWatchWorker(QThread):
                 if self.orders and order_armed:
                     result = self.orders.process(session)
                     if result:
-                        if self.orders.needs_review:
+                        if result=='MARKET_PREPARED':
+                            self.notice.emit('시장가 준비 결과가 있어요. 텔레그램 /주문상태에서 내용을 확인하세요. 확인 전에는 주문하지 않아요.')
+                        elif self.orders.needs_review:
                             if self.status_store: self.status_store.order_warning()
                             self.notice.emit('모의 기록 충돌로 주문을 차단했어요. 텔레그램 /주문점검으로 확인해 주세요.')
                         else:
