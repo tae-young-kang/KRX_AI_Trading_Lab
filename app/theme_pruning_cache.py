@@ -3,6 +3,7 @@ from datetime import datetime,time
 from app.backtest import Bar
 from app.krx_history import validate_bars
 from app.trading_clock import KST
+from app.theme_sources import KIWOOM_SOURCES
 
 
 def load(history,source,days,now):
@@ -15,8 +16,9 @@ def load(history,source,days,now):
     records={}
     with history.connect() as db:
         tables=['daily_bars']
-        if db.execute("SELECT 1 FROM sqlite_master WHERE name='theme_pruning_bars' AND type='table'").fetchone():
-            tables.append('theme_pruning_bars')
+        for table in ('theme_pruning_bars','theme_pruning_checkpoints'):
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name=? AND type='table'",(table,)).fetchone():
+                tables.append(table)
         rows=[]
         for table in tables:
             rows.extend(dict(r) for r in db.execute(
@@ -39,6 +41,31 @@ def load(history,source,days,now):
     return list(records.values())
 
 
+def checkpoint(history,source,bars,stamp):
+    """Persist completed past-symbol hints independently of detection commits.
+
+    The collector passes only bars before its through day. This writer also
+    rejects today's data. Interrupted/failed searches never publish a new
+    detection window, run, alert or NXT observation through this table.
+    """
+    if source not in KIWOOM_SOURCES.values():raise ValueError('조회 참고 자료의 서버를 확인해 주세요.')
+    moment=datetime.fromisoformat(stamp)
+    if moment.tzinfo is None or moment.utcoffset() is None:raise ValueError('조회 참고 자료의 시간대를 확인해 주세요.')
+    records=validate_bars(bars)
+    today=moment.astimezone(KST).date().isoformat()
+    if any(bar.date>=today for bar in records):raise ValueError('과거 일봉만 조회 참고 자료로 저장할 수 있어요.')
+    if not records:return
+    with history.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('CREATE TABLE IF NOT EXISTS theme_pruning_checkpoints AS SELECT * FROM daily_bars WHERE 0')
+        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS ix_theme_pruning_checkpoint ON theme_pruning_checkpoints(source,day,market,code)')
+        db.executemany('''INSERT OR REPLACE INTO theme_pruning_checkpoints
+            (source,day,market,code,name,open,high,low,close,volume,trade_value_eok,cap_eok,fetched_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',[
+            (source,b.date,b.market,b.code,b.name,b.open,b.high,b.low,b.close,b.volume,b.trade_value_eok,None,stamp)
+            for b in records])
+
+
 def retain(db,source,bars,stamp):
     """Called inside the collector's existing transaction, after validation."""
     db.execute('CREATE TABLE IF NOT EXISTS theme_pruning_bars AS SELECT * FROM daily_bars WHERE 0')
@@ -50,3 +77,8 @@ def retain(db,source,bars,stamp):
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',[
         (source,b.date,b.market,b.code,b.name,b.open,b.high,b.low,b.close,b.volume,b.trade_value_eok,b.cap_eok,stamp)
         for b in bars])
+    # Freshly revalidated symbols now have a durable completed-search copy.
+    # Keep interrupted hints for symbols not queried on this completed search.
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='theme_pruning_checkpoints' AND type='table'").fetchone():
+        db.executemany('DELETE FROM theme_pruning_checkpoints WHERE source=? AND day=? AND market=? AND code=?',
+                       [(source,b.date,b.market,b.code) for b in bars])

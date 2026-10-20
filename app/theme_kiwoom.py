@@ -6,7 +6,7 @@ from math import isfinite
 from app.theme_calendar import request_selection
 from app.theme_sources import KIWOOM_SOURCES
 from app.theme_candidates import plan_candidates
-from app.theme_pruning_cache import load as load_pruning, retain as retain_pruning
+from app.theme_pruning_cache import load as load_pruning, retain as retain_pruning,checkpoint
 from app.kiwoom_daily import read_daily
 from app.krx_history import validate_bars
 from app.theme_input import prepare_confirmed
@@ -58,6 +58,7 @@ def collect_theme(history,client,mode,*,now=None,selection=None,progress=None,ca
     if len(catalog)!=len(stocks):raise ValueError('전체 시장 종목 목록이 중복됐어요.')
     if progress:progress(f'ETF 제외 {plan["universe_count"]:,}종목 · 과거 조건 미달 {len(plan["excluded"]):,}종목 건너뜀 · 일봉 조회 {len(plan["candidates"]):,}종목')
     buffered=[]
+    stamp=moment.isoformat(timespec='seconds')
     missing=invalid=0
     for index,(market,code,name) in enumerate(plan['candidates'],1):
         stopped()
@@ -71,6 +72,8 @@ def collect_theme(history,client,mode,*,now=None,selection=None,progress=None,ca
             if progress:progress(f'{name} · 일봉 확인 필요, 다른 종목을 계속 확인합니다.')
             continue
         missing+=bool(result['missing_days'])
+        # Hints survive interruption, while detection remains all-or-nothing.
+        checkpoint(history,source,[bar for bar in result['bars'] if bar.date<data['through']],stamp)
         stock=catalog[(market,code)]
         cap=stock.cap_eok
         if (not isinstance(stock.quote_stamp,str) or stock.quote_stamp[:10]!=data['through']
@@ -80,7 +83,6 @@ def collect_theme(history,client,mode,*,now=None,selection=None,progress=None,ca
     validate_bars(buffered)
     # Replace this isolated source/window in one transaction. A prior candidate
     # excluded on this run cannot reappear from a previous partial cache.
-    stamp=moment.isoformat(timespec='seconds')
     with history.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         retain_pruning(db,source,buffered,stamp)
