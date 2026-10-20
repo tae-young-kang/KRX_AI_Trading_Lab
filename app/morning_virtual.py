@@ -175,7 +175,7 @@ class MorningVirtual:
         plan=self.plan()
         report=self.db.practice_daily_report(day,page=page)
         with self.db.connect() as db:
-            count=db.execute('SELECT COUNT(*) FROM paper_trades').fetchone()[0]
+            count=db.execute('SELECT COUNT(*) FROM paper_trades WHERE substr(opened_at,1,10)<=?',(day,)).fetchone()[0]
         header=(f'[아침 추천 가상 추적] 목록 {plan["day"]} · {plan["mode"]}\n'
                 '실제 계좌·키움 모의계좌 주문/체결이 아닙니다. 공급된 거래 근거를 사용한 가상 계산입니다.\n'
                 f'고정 추천 {len(plan["targets"])}종목 · 진입 기록 {count}종목 · 미진입 {len(plan["targets"])-count}종목\n')
