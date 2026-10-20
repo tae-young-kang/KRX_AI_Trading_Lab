@@ -20,7 +20,7 @@ class TelegramOrderWorker(QThread):
     def __init__(self, root, token, user_id, chat_id, catalog, conditions=None, orders_enabled=True, watch_status=None,
                  watch_refresh=None, watch_result=None, watch_reconnect=None, watch_validation=None,
                  watch_orders=None, watch_cancel_orders=None, watch_history=None, watch_funds=None,
-                 recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None):
+                 recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None):
         super().__init__()
         self.root, self.token = Path(root), token
         self.user_id, self.chat_id, self.catalog = user_id, chat_id, dict(catalog)
@@ -42,6 +42,7 @@ class TelegramOrderWorker(QThread):
         self.theme_budget = theme_budget
         self.theme_plan=theme_plan
         self.practice_daily = practice_daily
+        self.actual_daily=actual_daily
         self.recommendation_request = recommendation_request
         self.recommendation_status = recommendation_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
@@ -86,7 +87,7 @@ class TelegramOrderWorker(QThread):
                                                 watch_history=self.watch_history, watch_funds=self.watch_funds,
                                                 recommendation_report=self.recommendation_report,
                                                 recommendation_request=self.recommendation_request,
-                                                theme_request=self.theme_request,outcome_request=self.outcome_request,theme_plan=self.theme_plan,watch_delivery=self.watch_delivery,
+                                                theme_request=self.theme_request,outcome_request=self.outcome_request,theme_plan=self.theme_plan,watch_delivery=self.watch_delivery,actual_daily=self.actual_daily,
                                                 recommendation_status=self.recommendation_status,
                                                 recommendation_overview=self.recommendation_overview, practice_sales=self.practice_sales, theme_report=self.theme_report, theme_status=self.theme_status, theme_budget=self.theme_budget, practice_daily=self.practice_daily)
             report = self.service.recovery_status(startup=True) if self.orders_enabled else None

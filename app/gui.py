@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.config import Settings, Credentials, data_dir
+from app.actual_trade_records import daily_text as actual_daily_text
 from app.storage import Database
 from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
 from app.strategy import evaluate, auto_paper_exit, create_proposals
@@ -1716,6 +1717,7 @@ class MainWindow(QMainWindow):
                                      theme_status=lambda destination, history=self.history, mode=current_mode(self.cfg).key: theme_delivery_summary(history,mode=mode,destination=destination),
                                      theme_report=lambda page=1, history=self.history, mode=current_mode(self.cfg).key: theme_latest_report(history,mode=mode,page=page),
                                      practice_daily=lambda day, page=1, db=self.db: db.practice_daily_report(day,page=page),
+                                     actual_daily=lambda day,page=1: actual_daily_text(data_dir()/'actual_fill_records.db',day,page=page),
                                      practice_sales=lambda trade_id=None, page=1, db=self.db: db.practice_sale_report(trade_id,page),
                                      recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_overview(mode),
