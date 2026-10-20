@@ -80,9 +80,12 @@ def setup_text(root,database,history,mode,settings,text,*,now):
         match=re.fullmatch(r'/가상하루(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
         if not match:return '사용법: /가상하루 또는 /가상하루 YYYY-MM-DD [페이지]'
         return report(root,mode,match[1] or now.astimezone(KST).date().isoformat(),now=now,page=int(match[2] or 1))
-    if text.split(' ',1)[0]=='/가상추적상태':
-        match=re.fullmatch(r'/가상추적상태(?: ([0-9]{4}-[0-9]{2}-[0-9]{2}))?',text)
-        if not match:return '사용법: /가상추적상태 또는 /가상추적상태 목록날짜'
+    if text.split(' ',1)[0] in ('/가상추적상태','/가상목록'):
+        listing=text.split(' ',1)[0]=='/가상목록'
+        pattern=(r'/가상목록(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?' if listing else
+                 r'/가상추적상태(?: ([0-9]{4}-[0-9]{2}-[0-9]{2}))?')
+        match=re.fullmatch(pattern,text)
+        if not match:return '사용법: /가상목록 또는 /가상목록 YYYY-MM-DD [페이지]' if listing else '사용법: /가상추적상태 또는 /가상추적상태 목록날짜'
         today=now.astimezone(KST).date().isoformat()
         day=match[1] or (today if record_path(root,mode,today).is_file() else next_day(now))
         path=record_path(root,mode,day)
@@ -90,6 +93,7 @@ def setup_text(root,database,history,mode,settings,text,*,now):
         tracker=MorningVirtual(Database(path,read_only=True))
         plan=tracker.plan()
         if plan['mode']!=mode or plan['day']!=day:raise ValueError('목록 날짜·시세 모드가 달라요.')
+        if listing:return list_text(plan,page=int(match[2] or 1))
     else:
         day=next_day(now)
         match=re.fullmatch(r'/가상추적 (일반|테마1) ([1-9][0-9]{0,14})(원|만원)(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
@@ -118,7 +122,31 @@ def setup_text(root,database,history,mode,settings,text,*,now):
         f'NXT/KRX 자격 미확인 {unknown}개 · 미확인은 KRX로 추정하지 않아요.\n'
         '추천 목록·설정만 고정했어요. 가상 진입/청산은 별도 첫 거래·시세 근거가 필요해요.\n'
         '현재 첫 거래 자동 수집·자동 진입은 미연결이에요. 실제 주문을 하지 않았어요.\n'
-        f'목록 확인: /가상추적상태 {day} · 기록 조회: /가상결산 {day}')
+        f'종목 보기: /가상목록 {day}\n목록 확인: /가상추적상태 {day} · 기록 조회: /가상결산 {day}')
+
+
+def list_text(plan,*,page=1):
+    """Render only frozen targets/settings; no current catalog, quotes or writes."""
+    if type(page) is not int or not 1<=page<=999999:raise ValueError('목록 페이지를 확인해 주세요.')
+    targets=plan['targets'];pages=max(1,(len(targets)+4)//5)
+    if page>pages:return f'가상 목록은 {pages}페이지까지 있어요.'
+    day=plan['day'];allocation,remainder=divmod(plan['total_won'],len(targets));cfg=plan['settings']
+    mode={'DEMO':'합성 연습 시세','MOCK':'키움 모의 시세','REAL_QUOTES':'실제 시세'}[plan['mode']]
+    source={'GENERAL':'일반 추천','THEME1':'테마1'}.get(plan.get('selection_info',{}).get('kind'),'저장 추천')
+    text=(f'[아침 가상 목록 · {source}] {day} · {page}/{pages}페이지\n'
+          f'{mode}로 가상 추적 · 실제 주문 안 함\n'
+          f'전체 {len(targets):,}종목 · 총 가상 예산 {plan["total_won"]:,}원\n'
+          f'종목당 {allocation:,}원 · 배분하지 않은 잔액 {remainder:,}원\n'
+          f'익절 +{cfg["exit_take_pct"]:g}% · 손절 -{cfg["exit_stop_pct"]:g}%\n')
+    for number,target in enumerate(targets[(page-1)*5:page*5],(page-1)*5+1):
+        market={'KOSPI':'코스피','KOSDAQ':'코스닥'}[target['market']]
+        venue={'NXT':'NXT 첫 거래','KRX':'KRX 시초가','UNKNOWN':'거래 시장 미확인 · 진입 대기'}[target['venue']]
+        name=' '.join(target['name'].split())
+        text+=f'\n{number}. {name} ({target["code"]})\n{market} · {venue}\n'
+    text+='\n고정 당시의 목록·조건이에요. 매수·체결 완료 목록이 아니에요.'
+    if page>1:text+=f'\n이전: /가상목록 {day} {page-1}'
+    if page<pages:text+=f'\n다음: /가상목록 {day} {page+1}'
+    return text
 
 
 def freeze_scheduled(root,database,history,mode,settings,day,text,*,now):

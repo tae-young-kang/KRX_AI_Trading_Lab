@@ -97,3 +97,42 @@ def test_invalid_policy_can_be_corrected_without_deleting_files(tmp_path):
     with pytest.raises(ValueError):call(tmp_path,db,history,cfg,'/가상추적 일반 1만원 익절 0 손절 3')
     text=call(tmp_path,db,history,cfg,'/가상추적 일반 1만원 익절 2 손절 3')
     assert '익절 +2%' in text
+
+
+def test_frozen_list_pages_cover_every_symbol_with_no_quote_or_database_mutation(tmp_path):
+    import re
+    db,history,cfg=rig(tmp_path)
+    path=record_path(tmp_path,'DEMO','2026-10-20')
+    tracker=MorningVirtual(Database(path))
+    targets=[dict(code=str(900000+i),name=f'목록{i}',market='KOSPI' if i%2==0 else 'KOSDAQ',
+                  nxt_eligible=(True if i==0 else False if i==1 else None)) for i in range(501)]
+    tracker.prepare(day='2026-10-20',mode='DEMO',origin='theme1_1',targets=targets,settings=cfg,
+                    total_won=501001,now=NOW,selection_info=dict(kind='THEME1',asof='2026-10-19'))
+    before=path.read_bytes();codes=[]
+    cfg.update(exit_take_pct=99)
+    for page in range(1,102):
+        text=call(tmp_path,db,history,cfg,f'/가상목록 2026-10-20 {page}')
+        codes.extend(re.findall(r'\(([0-9]{6})\)',text))
+        assert len(text)<3900 and '테마1' in text and '실제 주문 안 함' in text
+        assert '종목당 1,000원 · 배분하지 않은 잔액 1원' in text
+        if page==1:
+            assert 'NXT 첫 거래' in text and 'KRX 시초가' in text and '진입 대기' in text
+            assert '다음: /가상목록 2026-10-20 2' in text
+        if page==101:assert '목록500 (900500)' in text and '다음:' not in text
+    assert codes==[target['code'] for target in targets]
+    assert path.read_bytes()==before and tracker.db.trades()==[]
+    assert '101페이지까지' in call(tmp_path,db,history,cfg,'/가상목록 2026-10-20 102')
+    assert '사용법' in call(tmp_path,db,history,cfg,'/가상목록 2026-10-20 0')
+    assert '가상 목록이 없어요' in call(tmp_path,db,history,cfg,'/가상목록 2026-10-21')
+
+
+def test_private_frozen_list_command_remains_readable_when_stopped(tmp_path,sandbox):
+    db,history,cfg=rig(tmp_path);service,broker,_,clock=sandbox;clock[0]=NOW
+    service.morning_setup=lambda text:call(tmp_path,db,history,cfg,text,clock[0])
+    service.handle(update(sandbox,1,'/가상추적 일반 1만원'))
+    bad=update(sandbox,2,'/가상목록');bad['message']['from']['id']=99
+    assert service.handle(bad) is None
+    service.handle(update(sandbox,3,'/중지'))
+    reply=service.handle(update(sandbox,4,'/가상목록'))
+    assert '전체 2종목' in reply and '합성 연습 시세' in reply and '거래 시장 미확인' in reply
+    assert broker.calls==[]
