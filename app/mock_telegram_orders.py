@@ -57,12 +57,18 @@ class MockTelegramOrders:
                 db.execute("UPDATE intents SET state='CANCELED' WHERE state IN ('WAITING','QUEUED')")
                 db.execute('CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY,state TEXT,filled INTEGER,quantity INTEGER,checked_at TEXT)')
                 mock_order_safety.initialize(db)
+                from app.mock_order_delivery import initialize
+                initialize(db)
                 self._latched=mock_order_safety.load(db) is not None
         self.emergency=MockEmergencyStop(self.path,self.clock)
 
     @property
     def needs_review(self):
         return self._latched
+
+    def notice_delivery(self, action, **context):
+        from app.mock_order_delivery import delivery
+        return delivery(self.path,action,**context)
 
     def _latch(self,reason,db=None):
         self._latched=True
@@ -305,6 +311,10 @@ class MockTelegramOrders:
                     if receipt and receipt['order_no']: detail+='\n모의 주문번호 '+receipt['order_no']
                     seen=db.execute('SELECT * FROM observations WHERE id=?',(row['id'],)).fetchone()
                     if seen: detail+=f"\n{seen['checked_at']} 조회: {seen['state']} · 체결 {seen['filled']}/{seen['quantity']}주"
+                    delivery=db.execute('SELECT state FROM result_delivery WHERE id=?',(row['id'],)).fetchone()
+                    if delivery:
+                        detail+='\n처리 알림: '+{'SENDING':'발송 시도 기록 있음 · 응답 확인 전',
+                            'SENT':'텔레그램 발송 응답 확인','UNKNOWN':'발송 결과 미확인 · 자동 재발송 안 함'}[delivery['state']]
                 gate='오늘 모의 주문 허용 중' if self.armed and self._open() else '새 모의 주문 잠금'
                 if self._latched: gate='기록 충돌로 새 모의 주문 차단 · /주문점검으로 이유 확인'
                 return '[키움 모의투자 · 실제 돈 사용 안 함]\n'+gate+'\n'+(labels[row['state']] if row else '주문 기록 없음')+detail+'\n/잔고: 잔고·주문 상태 재조회 · 접수는 체결 완료가 아니에요.'

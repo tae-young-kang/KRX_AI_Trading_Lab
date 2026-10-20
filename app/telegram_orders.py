@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -61,6 +61,7 @@ class TelegramOrderService:
         self.recommendation_request = recommendation_request
         self.recommendation_status = recommendation_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
+        self.watch_delivery=watch_delivery
         from app.theme_delivery import destination_scope
         self.theme_destination = destination_scope(bot_id,chat_id)
         self.broker_identity = engine.broker.identity
@@ -155,6 +156,25 @@ class TelegramOrderService:
     def handle(self, update):
         with self._action_lock:
             return self._handle(update)
+
+    def send_order_notice(self, transport):
+        """Only to the configured private destination of the active receiver."""
+        if self.orders_enabled or self.watch_delivery is None:return
+        with self._action_lock:
+            with connect(self.path) as db:
+                owner=db.execute('SELECT session,active FROM tg_sessions WHERE scope=?',(self.scope,)).fetchone()
+            if not owner or owner['session']!=self.session or not owner['active']:return
+            context=dict(scope=self.scope,session=self.session)
+            notice=self.watch_delivery('claim',**context)
+            if notice is None:return
+            delivered=False
+            try:
+                receipt=transport.send(self.chat_id,notice['text'])
+                delivered=type(receipt) is int and receipt>0
+            except Exception:
+                pass
+            finally:
+                self.watch_delivery('finish',key=notice['key'],delivered=delivered,**context)
 
     def _handle(self, update):
         now = self.clock().timestamp()

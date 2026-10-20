@@ -1720,6 +1720,7 @@ class MainWindow(QMainWindow):
                                      recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_overview(mode),
                                      watch_orders=self.mock_watch_status.handle_orders,
+                                     watch_delivery=self.mock_watch_status.order_delivery,
                                      watch_cancel_orders=self.mock_watch_status.cancel_orders)
         self.telegram_order_worker = worker
         worker.status.connect(self.telegram_orders_status)

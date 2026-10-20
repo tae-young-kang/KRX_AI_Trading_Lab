@@ -64,6 +64,11 @@ class MockWatchStatus:
             orders = self._orders
         if orders: orders.cancel_session(scope,session)
 
+    def order_delivery(self, action, **context):
+        with self._lock:
+            orders=self._orders
+        return orders.notice_delivery(action,**context) if orders else None
+
     def validation_summary(self):
         with self._lock:
             return self._validation.summary()
