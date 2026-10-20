@@ -113,3 +113,63 @@ def test_preview_paging_keeps_full_budget_totals():
     assert '예상 확보액 합계' in first and '예상 확보액 합계' in second
     result.update(take_bps=425,stop_bps=175)
     assert '/테마1예산 6000 0.02 2.00 2 익절 4.25 손절 1.75' in preview_text(result,page=1)
+
+
+def test_plan_navigation_stays_on_same_run_after_new_search(tmp_path):
+    from app.theme_budget import plan_text
+    from test_theme_delivery import setup
+    history,args=setup(tmp_path)
+    with history.connect() as db:rows=db.execute('SELECT * FROM daily_bars').fetchall()
+    history.insert_bars([Bar(r['day'],f'90000{i}',f'종목{i}','KOSPI',100,110,99,100,1000,100,4000)
+                         for i in range(2,7) for r in rows],'DEMO')
+    original=prepare(history,**args)
+    first=plan_text(history,'DEMO','/테마1계획 전체 6000원 익절 4.25 손절 1.75')
+    command=next(line[4:] for line in first.splitlines() if line.startswith('다음: '))
+    assert command.endswith(f'판정 {original["run_id"]}')
+    with history.connect() as db:all_rows=db.execute('SELECT * FROM daily_bars').fetchall()
+    history.insert_bars([Bar(r['day'],r['code'],r['name'],'KOSPI',100,120,99,110,1000,100,4000) for r in all_rows]+
+        [Bar(r['day'],'900007','종목7','KOSPI',100,120,99,110,1000,100,4000) for r in rows],'DEMO')
+    newer=prepare(history,**args)
+    assert newer['run_id']!=original['run_id']
+    second=plan_text(history,'DEMO',command)
+    assert f'감지 목록 #{original["run_id"]}' in second and '종목당 1,000원' in second
+    assert '900006' in second and '900007' not in second
+    assert '익절 +4.25% · 손절 -1.75%' in second
+    fresh=plan_text(history,'DEMO','/테마1계획 전체 6000원')
+    assert f'감지 목록 #{newer["run_id"]}' in fresh and '종목당 857원' in fresh
+
+
+def test_budget_navigation_run_is_preserved_through_private_telegram_handler(tmp_path,sandbox):
+    from test_theme_delivery import setup
+    history,args=setup(tmp_path)
+    with history.connect() as db:rows=db.execute('SELECT * FROM daily_bars').fetchall()
+    history.insert_bars([Bar(r['day'],f'90000{i}',f'종목{i}','KOSPI',100,110,99,100,1000,100,4000)
+                         for i in range(2,7) for r in rows],'DEMO')
+    original=prepare(history,**args)
+    service,broker,_,_=sandbox
+    service.theme_budget=lambda total,fee,buffer,page,**kw:preview_text(preview_latest(history,
+        mode='DEMO',total_won=total,fee_bps=fee,buffer_bps=buffer,**kw),page=page)
+    first=service.handle(update(sandbox,1,'/테마1예산 6000 0.02 2 익절 4.25 손절 1.75'))
+    command=next(line[4:] for line in first.splitlines() if line.startswith('다음: '))
+    with history.connect() as db:db.execute("UPDATE daily_bars SET high=120,close=110 WHERE source='DEMO'")
+    prepare(history,**args)
+    second=service.handle(update(sandbox,2,command))
+    assert f'판정 번호 {original["run_id"]}' in second and '종목당 1,000원' in second
+    assert '900006' in second and '익절 +4.25% · 손절 -1.75%' in second
+    assert broker.calls==[]
+
+
+@pytest.mark.parametrize('run_id',[True,0,-1,999999])
+def test_invalid_or_missing_run_never_falls_back_to_latest(tmp_path,run_id):
+    from test_theme_delivery import setup
+    history,_=setup(tmp_path)
+    with pytest.raises(ValueError):
+        preview_latest(history,mode='DEMO',total_won=1000,fee_bps=0,buffer_bps=0,run_id=run_id)
+
+
+def test_plan_blocks_wrong_mode_source_even_with_explicit_run(tmp_path):
+    from test_theme_delivery import setup
+    history,_=setup(tmp_path)
+    with history.connect() as db:db.execute("UPDATE theme_runs SET source='KIWOOM_MOCK_KRX'")
+    with pytest.raises(ValueError,match='출처'):
+        preview_latest(history,mode='DEMO',total_won=1000,fee_bps=0,buffer_bps=0,run_id=1)

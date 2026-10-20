@@ -5,17 +5,21 @@ from decimal import Decimal
 from app.budget_preview import equal_budget_preview
 from app.protection_plan import validate_policy
 from app.theme_one import SETUP_GUIDANCE
+from app.theme_sources import valid_source
 
 
-def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps, take_bps=200, stop_bps=300,symbol=None):
+def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps, take_bps=200, stop_bps=300,symbol=None,run_id=None):
     validate_policy(take_bps,stop_bps)
+    if run_id is not None and (type(run_id) is not int or run_id<=0):raise ValueError('판정 번호를 확인해 주세요.')
     with history.connect() as db:
         db.execute('BEGIN')
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_runs'").fetchone():
             raise ValueError('먼저 테마1 판정을 만들어 주세요.'+SETUP_GUIDANCE)
-        run=db.execute('SELECT * FROM theme_runs WHERE mode=? ORDER BY id DESC LIMIT 1',(mode,)).fetchone()
+        run=(db.execute('SELECT * FROM theme_runs WHERE mode=? ORDER BY id DESC LIMIT 1',(mode,)).fetchone()
+             if run_id is None else db.execute('SELECT * FROM theme_runs WHERE mode=? AND id=?',(mode,run_id)).fetchone())
         if run is None:
             raise ValueError('현재 모드의 테마1 판정이 없어요.'+SETUP_GUIDANCE)
+        if not valid_source(mode,run['source']):raise ValueError('판정의 시세 모드·자료 출처를 확인해 주세요.')
         targets=[]
         for alert_id in json.loads(run['alert_ids_json']):
             row=db.execute('SELECT result_json FROM theme_alerts WHERE id=? AND mode=? AND source=?',
@@ -46,15 +50,16 @@ def plan_text(history,mode,text):
     usage=('사용법: /테마1계획 종목명 10주 또는 /테마1계획 종목명 100만원\n'
            '전체 예: /테마1계획 전체 100만원\n선택: 페이지 2 · 익절 4 손절 3\n주문 전송은 아직 연결되지 않았어요.')
     if not isinstance(text,str) or len(text)>300:return usage
-    match=re.fullmatch(r'/테마1계획 (.{1,100}?) ([1-9][0-9]{0,14}|[1-9][0-9]{0,2}(?:,[0-9]{3}){1,4})(주|원|만원)(?: 페이지 ([1-9][0-9]{0,5}))?(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
+    match=re.fullmatch(r'/테마1계획 (.{1,100}?) ([1-9][0-9]{0,14}|[1-9][0-9]{0,2}(?:,[0-9]{3}){1,4})(주|원|만원)(?: 페이지 ([1-9][0-9]{0,5}))?(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?(?: 판정 ([1-9][0-9]{0,8}))?',text)
     if not match:return usage
-    symbol,number,unit,page,take,stop=match.groups()
+    symbol,number,unit,page,take,stop,run_id=match.groups()
     number=int(number.replace(',',''));page=int(page or 1)
     if symbol=='전체' and unit=='주':return '전체 종목은 총금액을 지정해 주세요. 예: /테마1계획 전체 100만원'
     take_bps=int(Decimal(take)*100) if take else 200
     stop_bps=int(Decimal(stop)*100) if stop else 300
     preview=preview_latest(history,mode=mode,total_won=number*(10000 if unit=='만원' else 1),
-        fee_bps=2,buffer_bps=200,take_bps=take_bps,stop_bps=stop_bps,symbol=None if symbol=='전체' else symbol)
+        fee_bps=2,buffer_bps=200,take_bps=take_bps,stop_bps=stop_bps,symbol=None if symbol=='전체' else symbol,
+        run_id=int(run_id) if run_id else None)
     if unit=='주':
         target=preview['targets'][0];price=target['reference_won']
         if price is None:raise ValueError('저장된 기준 가격이 없어 예상 금액을 계산하지 못했어요. 테마1 자료를 다시 확인해 주세요.')
@@ -81,7 +86,7 @@ def plan_text(history,mode,text):
                   '시초가 주문·익절/손절 자동 매도는 실행 연결 전이에요.'])
     if page<pages:
         lines.append(f'다음: /테마1계획 {symbol} {number}{unit} 페이지 {page+1}'+
-                     (f' 익절 {take} 손절 {stop}' if take else ''))
+                     (f' 익절 {take} 손절 {stop}' if take else '')+f' 판정 {preview["run_id"]}')
     return '\n'.join(lines)
 
 
@@ -117,5 +122,5 @@ def preview_text(preview, *, page=None):
     if page is not None and page<pages:
         policy=(f' 익절 {preview["take_bps"]/100:.2f} 손절 {preview["stop_bps"]/100:.2f}'
                 if preview.get('take_bps',200)!=200 or preview.get('stop_bps',300)!=300 else '')
-        lines.append(f'다음: /테마1예산 {preview["total_won"]} {preview["fee_bps"]/100:.2f} {preview["buffer_bps"]/100:.2f} {page+1}{policy}')
+        lines.append(f'다음: /테마1예산 {preview["total_won"]} {preview["fee_bps"]/100:.2f} {preview["buffer_bps"]/100:.2f} {page+1}{policy} 판정 {preview["run_id"]}')
     return '\n'.join(lines)

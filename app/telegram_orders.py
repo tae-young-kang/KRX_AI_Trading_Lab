@@ -297,7 +297,7 @@ class TelegramOrderService:
                     try:reply=self.theme_plan(text)
                     except ValueError as error:reply=str(error)
             elif text.split(' ',1)[0] == '/테마1예산':
-                match=re.fullmatch(r'/테마1예산 ([1-9][0-9]{0,14}) ([0-9]{1,3}(?:\.[0-9]{1,2})?) ([0-9]{1,3}(?:\.[0-9]{1,2})?)(?: ([1-9][0-9]{0,5}))?(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
+                match=re.fullmatch(r'/테마1예산 ([1-9][0-9]{0,14}) ([0-9]{1,3}(?:\.[0-9]{1,2})?) ([0-9]{1,3}(?:\.[0-9]{1,2})?)(?: ([1-9][0-9]{0,5}))?(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?(?: 판정 ([1-9][0-9]{0,8}))?',text)
                 if not match:
                     reply='사용법: /테마1예산 총예산 수수료% 가격여유% [페이지] [익절 % 손절 %]\n예: /테마1예산 1000000 0.02 2 익절 4 손절 3\n기본 익절 2%·손절 3%. 예상 계획이며 주문하지 않아요.'
                 elif not self.theme_budget:
@@ -306,8 +306,10 @@ class TelegramOrderService:
                     from decimal import Decimal
                     try:
                         args=(int(match[1]),int(Decimal(match[2])*100),int(Decimal(match[3])*100),int(match[4] or 1))
-                        reply=(self.theme_budget(*args,take_bps=int(Decimal(match[5])*100),stop_bps=int(Decimal(match[6])*100))
-                               if match[5] else self.theme_budget(*args))
+                        options={}
+                        if match[5]:options.update(take_bps=int(Decimal(match[5])*100),stop_bps=int(Decimal(match[6])*100))
+                        if match[7]:options['run_id']=int(match[7])
+                        reply=self.theme_budget(*args,**options)
                     except ValueError:
                         reply='테마1 판정과 총예산·수수료·가격 여유·익절/손절 비율을 확인해 주세요. 주문하지 않았어요.'
             elif text=='/테마1조건':
