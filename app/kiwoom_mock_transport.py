@@ -14,7 +14,7 @@ from requests.adapters import HTTPAdapter
 
 from app.kiwoom_mock_contract import (
     MockPlan, ContractError, UncertainResponse, _success,
-    order_plan, amend_plan, cancel_plan, query_plan, query_page,
+    order_plan, amend_plan, cancel_plan, query_plan, query_page, market_quote_plan,
 )
 from app.order_engine import OrderRequest
 from app.trading_clock import KST
@@ -30,6 +30,8 @@ def validated_plan(plan):
             canonical = order_plan(OrderRequest(body['stk_cd'],
                 'BUY' if plan.api_id == 'kt10000' else 'SELL',
                 int(body['ord_qty']), int(body['ord_uv'])))
+        elif plan.api_id == 'ka10095':
+            canonical = market_quote_plan(body['stk_cd'])
         elif plan.api_id == 'kt10002':
             canonical = amend_plan(body['stk_cd'], body['orig_ord_no'],
                 remaining_quantity=int(body['mdfy_qty']), limit_price=int(body['mdfy_uv']))
@@ -137,7 +139,7 @@ class MockTransport:
     def exchange(self, plan, *, cursor=None):
         plan = validated_plan(plan)
         self.ready()
-        if cursor is not None and (plan.api_id.startswith('kt100')
+        if cursor is not None and (plan.api_id.startswith('kt100') or plan.api_id == 'ka10095'
                 or not isinstance(cursor, str) or not cursor or len(cursor) > 50
                 or any(ord(char) < 32 for char in cursor)):
             raise ContractError('연속 조회 정보를 확인하세요.')
@@ -145,11 +147,28 @@ class MockTransport:
             'authorization': 'Bearer ' + self._token, 'api-id': plan.api_id,
             'cont-yn': 'Y' if cursor else 'N', 'next-key': cursor or ''}
         payload, response_headers = self._post(
-            '/api/dostk/' + ('ordr' if plan.api_id.startswith('kt100') else 'acnt'), headers, plan.body())
+            plan.url.removeprefix('https://mockapi.kiwoom.com'), headers, plan.body())
         returned_api = {str(k).lower(): v for k, v in response_headers.items()}.get('api-id')
         if returned_api is not None and returned_api != plan.api_id:
             raise UncertainResponse('모의 응답 종류가 일치하지 않습니다.')
         return payload, response_headers
+
+    def read_market_quote(self, code):
+        """Read fresh KRX evidence, without authenticating or enabling orders."""
+        from app.mock_market_quote import parse_quote
+        plan = market_quote_plan(code)
+        if self.environment != 'MOCK':
+            raise ContractError('모의 전용 시세 연결이 필요해요.')
+        self.ready()
+        profile, generation = self.profile_id, self.auth_generation
+        started = self._clock()
+        payload, headers = self.exchange(plan)
+        finished = self._clock()
+        self.ready()
+        if (self.environment != 'MOCK' or self.profile_id != profile
+                or self.auth_generation != generation):
+            raise ContractError('모의 연결이 바뀌었어요. 시세를 다시 확인해 주세요.')
+        return parse_quote(payload, headers, code=code, started_at=started, fetched_at=finished)
 
     @property
     def auth_generation(self):

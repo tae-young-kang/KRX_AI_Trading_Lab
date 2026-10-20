@@ -29,7 +29,8 @@ class MockPlan:
 
     @property
     def url(self):
-        path = 'ordr' if self.api_id.startswith('kt100') else 'acnt'
+        path = ('stkinfo' if self.api_id == 'ka10095' else
+                'ordr' if self.api_id.startswith('kt100') else 'acnt')
         return 'https://mockapi.kiwoom.com/api/dostk/' + path
 
     def body(self):
@@ -108,6 +109,11 @@ def cancel_plan(code, original_order_no, *, remaining_quantity=0):
         ('dmst_stex_tp', 'KRX'), ('orig_ord_no', _order_no(original_order_no)),
         ('stk_cd', _code(code)), ('cncl_qty', _number(remaining_quantity, zero=True)),
     ))
+
+
+def market_quote_plan(code):
+    """One bare KRX code, read-only, using the existing MOCK connection."""
+    return MockPlan('ka10095', (('stk_cd', _code(code)),))
 
 
 def query_plan(kind, *, trade_date=None):
