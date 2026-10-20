@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -62,6 +62,7 @@ class TelegramOrderService:
         self.morning_daily=morning_daily
         self.morning_setup=morning_setup
         self.mock_daily=mock_daily
+        self.morning_freeze=morning_freeze
         self.recommendation_request = recommendation_request
         self.recommendation_status = recommendation_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
@@ -81,6 +82,8 @@ class TelegramOrderService:
         self.catalog.setdefault('900001', '연습종목')
         from app.daily_report_delivery import DailyReportDelivery
         self.daily_delivery=DailyReportDelivery(self.path,self.scope,daily_mode) if daily_mode else None
+        from app.morning_schedule import MorningSchedule
+        self.morning_schedule=MorningSchedule(self.path,self.scope,daily_mode) if daily_mode else None
         with connect(self.path) as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS tg_sessions(scope TEXT PRIMARY KEY,session TEXT,active INTEGER,cursor INTEGER);
@@ -139,6 +142,13 @@ class TelegramOrderService:
         try:
             return self.daily_delivery.tick(now=self.clock(),active=self.accepts_search_requests,build=build,
                 send=lambda text:transport.send(self.chat_id,text))
+        except Exception:return 'ERROR'
+
+    def run_morning_schedule(self,transport):
+        if not self.morning_schedule or not self.morning_freeze:return 'DISABLED'
+        try:
+            return self.morning_schedule.tick(now=self.clock(),clock=self.clock,active=self.accepts_search_requests,
+                prepare=self.morning_freeze,send=lambda text:transport.send(self.chat_id,text))
         except Exception:return 'ERROR'
 
     def _authorized(self, update, now):
@@ -236,6 +246,10 @@ class TelegramOrderService:
                        if not self.orders_enabled and self.watch_orders else '모의 보호 기록 연결이 없어요. 자동 매도는 아직 연결되지 않았어요.')
             elif text=='/결산알림상태':
                 reply=self.daily_delivery.summary(self.clock(),mock_available=self.mock_daily is not None) if self.daily_delivery else '20:30 결산 알림 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+            elif text.split(' ',1)[0] in ('/아침가상예약','/아침가상상태','/아침가상중지'):
+                if not self.morning_schedule or not self.morning_freeze:reply='아침 가상 예약 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                elif text.split(' ',1)[0]=='/아침가상예약' and not owner['active']:reply='새 아침 가상 예약을 중지했어요. PC에서 개인 수신을 다시 시작해 주세요.'
+                else:reply=self.morning_schedule.handle(text,now=self.clock(),database=db)
             elif text.split(' ',1)[0]=='/모의결산':
                 match=re.fullmatch(r'/모의결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
                 if not match:reply='사용법: /모의결산 또는 /모의결산 YYYY-MM-DD [페이지]'
@@ -417,6 +431,7 @@ class TelegramOrderService:
                 reply += '\n/모의결산: 개인 모의 요청의 저장된 체결·비용 근거 하루 기록'
                 reply += '\n/결산알림상태: 거래일20:30 저장 결산 발송 상태'
                 reply += '\n/가상추적 일반 100만원: 다음 아침 가상 목록 고정 · 실제 주문 안 함'
+                reply += '\n/아침가상예약 일반 100만원: 매일07:50 저장 추천의 가상 목록 고정 · 실제 주문 안 함'
                 reply += '\n/테마1계획 종목명 10주 또는 전체 100만원: 매수 계획 보기 (주문 안 함)'
                 reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'

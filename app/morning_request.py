@@ -117,5 +117,38 @@ def setup_text(root,database,history,mode,settings,text,*,now):
         f'익절 +{plan["settings"]["exit_take_pct"]:g}% · 손절 -{plan["settings"]["exit_stop_pct"]:g}%\n'
         f'NXT/KRX 자격 미확인 {unknown}개 · 미확인은 KRX로 추정하지 않아요.\n'
         '추천 목록·설정만 고정했어요. 가상 진입/청산은 별도 첫 거래·시세 근거가 필요해요.\n'
-        '현재 첫 거래 자동 수집·매일 실행 예약은 미연결이에요. 실제 주문을 하지 않았어요.\n'
+        '현재 첫 거래 자동 수집·자동 진입은 미연결이에요. 실제 주문을 하지 않았어요.\n'
         f'목록 확인: /가상추적상태 {day} · 기록 조회: /가상결산 {day}')
+
+
+def freeze_scheduled(root,database,history,mode,settings,day,text,*,now):
+    """Freeze recent stored selection only; never run a scan, feed or order."""
+    from app.theme_calendar import recent_sessions
+    if next_day(now)!=day or now.astimezone(KST).date().isoformat()!=day:
+        raise ValueError('오늘08:00 전 목록만 자동 고정할 수 있어요. 소급/다음날 대체는 하지 않아요.')
+    match=re.fullmatch(r'/가상추적 (일반|테마1) ([1-9][0-9]{0,14})(원|만원)(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
+    if not match:raise ValueError('예약한 가상 목록 형식을 확인해 주세요.')
+    kind,value,unit,take,stop=match.groups();cfg=dict(settings)
+    if take is not None:cfg.update(exit_take_pct=float(Decimal(take)),exit_stop_pct=float(Decimal(stop)))
+    elif kind=='테마1':cfg.update(exit_take_pct=2,exit_stop_pct=3)
+    origin,targets,cfg,info=latest_targets(database,history,mode,kind,cfg,now)
+    previous=recent_sessions(now.astimezone(KST).date()-timedelta(days=1))[-1]
+    asof=(datetime.fromisoformat(info['asof']).astimezone(KST).date().isoformat()
+          if info['kind']=='GENERAL' else info['asof'])
+    if asof<previous or (info['kind']=='THEME1' and asof!=previous):
+        raise ValueError('직전 거래일 이후의 저장 추천이 필요해요. 먼저 일반/테마1을 다시 검색해 주세요.')
+    if info['kind']=='THEME1':
+        with history.connect() as db:
+            row=db.execute('SELECT report_json FROM theme_runs WHERE id=?',(int(origin.split('_')[-1]),)).fetchone()
+        if not row or json.loads(row[0]).get('search_scope',{}).get('include_etf') is not False:
+            raise ValueError('ETF 제외를 확인한 테마1 검색 결과가 필요해요. 먼저 /테마1검색을 완료해 주세요.')
+    path=record_path(root,mode,day);frozen=now
+    if path.is_file():
+        reader=Database(path,read_only=True)
+        with reader.connect() as db:prior=db.execute('SELECT payload FROM morning_cohort WHERE id=1').fetchone()
+        if prior:frozen=datetime.fromisoformat(json.loads(prior[0])['frozen_at'])
+    tracker=MorningVirtual(Database(path))
+    plan=tracker.prepare(day=day,mode=mode,origin=origin,targets=targets,settings=cfg,
+        total_won=int(value)*(10000 if unit=='만원' else 1),now=frozen,selection_info=info)
+    return dict(day=plan['day'],mode=plan['mode'],frozen_at=plan['frozen_at'],
+        text=setup_text(root,database,history,mode,settings,'/가상추적상태 '+day,now=now))

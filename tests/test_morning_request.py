@@ -40,7 +40,7 @@ def test_saved_general_recommendations_and_exit_policy_are_frozen(tmp_path):
     assert plan['settings']['min_value_eok']==DEFAULTS['min_value_eok']
     assert plan['settings']['exit_take_pct']==2 and plan['total_won']==1000000
     assert plan['selection_info']['asof'].startswith('2026-10-19')
-    assert '목록·설정만 고정' in text and '자동 수집·매일 실행 예약은 미연결' in text
+    assert '목록·설정만 고정' in text and '자동 수집·자동 진입은 미연결' in text
     assert call(tmp_path,db,history,cfg,'/가상추적 일반 100만원 익절 2 손절 3',NOW+timedelta(seconds=5))==text
     assert '대상 거래일 2026-10-20' in call(tmp_path,db,history,cfg,'/가상추적상태',NOW.replace(hour=10))
     with pytest.raises(ValueError):call(tmp_path,db,history,cfg,'/가상추적 일반 200만원 익절 2 손절 3')

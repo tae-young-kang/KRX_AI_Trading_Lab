@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from app.config import Settings, Credentials, data_dir
 from app.actual_trade_records import daily_text as actual_daily_text
 from app.morning_virtual import report_saved as morning_daily_text
-from app.morning_request import setup_text as morning_setup_text
+from app.morning_request import setup_text as morning_setup_text,freeze_scheduled as morning_freeze_saved
 from app.storage import Database
 from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
 from app.strategy import evaluate, auto_paper_exit, create_proposals
@@ -1728,6 +1728,8 @@ class MainWindow(QMainWindow):
                                      morning_daily=lambda day,page=1,mode=current_mode(self.cfg).key: morning_daily_text(data_dir(),mode,day,page=page),
                                      morning_setup=lambda text,db=self.db,history=self.history,mode=current_mode(self.cfg).key:
                                          morning_setup_text(data_dir(),db,history,mode,dict(self.cfg),text,now=datetime.now(KST)),
+                                     morning_freeze=lambda day,text,db=self.db,history=self.history,mode=current_mode(self.cfg).key:
+                                         morning_freeze_saved(data_dir(),db,history,mode,dict(self.cfg),day,text,now=datetime.now(KST)),
                                      practice_sales=lambda trade_id=None, page=1, db=self.db: db.practice_sale_report(trade_id,page),
                                      recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_overview(mode),
