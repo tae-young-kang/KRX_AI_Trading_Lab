@@ -143,3 +143,49 @@ def test_read_only_database_never_initializes_or_allows_writes(tmp_path):
     before=tracker.db.path.read_bytes()
     with pytest.raises(sqlite3.OperationalError):reader.log('TEST','must not write')
     assert tracker.db.path.read_bytes()==before
+
+
+def test_full_cohort_over_500_preserves_equal_budget_and_last_symbol_result(tmp_path):
+    tracker=MorningVirtual(Database(tmp_path/'large.db'))
+    cfg=deepcopy(DEFAULTS)
+    cfg.update(exit_take_pct=2,exit_stop_pct=3,paper_fee_pct=0,paper_sell_tax_pct=0,paper_slippage_pct=0)
+    targets=[dict(code=str(900000+i),name=f'전체대상{i}',market='KOSPI',nxt_eligible=True) for i in range(501)]
+    args=dict(day=DAY,mode='DEMO',origin='theme1_501',targets=targets,settings=cfg,total_won=501000,now=PRE)
+    plan=tracker.prepare(**args)
+    assert len(plan['targets'])==501 and plan['targets'][-1]['code']=='900500'
+    assert tracker.prepare(**args)==plan
+    for code in ('900000','900500'):
+        evidence=trade(code=code)
+        assert tracker.enter(evidence,now=evidence.at)['quantity']==1
+    winner=trade(code='900500',price=1020,minute=1,kind='TRADE')
+    loser=trade(code='900000',price=970,minute=1,kind='TRADE')
+    assert tracker.mark(winner,now=winner.at)['pnl']==20
+    assert tracker.mark(loser,now=loser.at)['pnl']==-30
+    report=tracker.daily_text(DAY)
+    assert '고정 추천 501종목' in report and '미진입 499종목' in report
+    assert '실현손익 -10.00원' in report and '승 1 / 패 1' in report
+    assert '전체대상500' in report
+
+
+def test_full_saved_theme_selection_is_not_limited_to_500(tmp_path):
+    from app.morning_request import setup_text
+    from app.krx_history import HistoryStore
+    from app.theme_store import prepare
+    from app.recommendation_outcomes import SessionEvidence
+    from app.backtest import Bar
+    from app.morning_virtual import record_path
+    from test_kiwoom_daily import DAYS
+    root=tmp_path/'records';history=HistoryStore(tmp_path/'theme.db')
+    bars=[Bar(day,str(900000+i),f'전체대상{i}','KOSPI',100,110,99,100,1000,100,4000)
+          for i in range(501) for day in DAYS]
+    history.insert_bars(bars,'DEMO')
+    result=prepare(history,sessions=SessionEvidence(tuple(DAYS),DAYS[0],DAYS[-1],'DEMO'),
+        through=DAYS[-1],mode='DEMO',source='DEMO')
+    assert result['matched']==501
+    now=PRE.replace(hour=21)
+    text=setup_text(root,Database(tmp_path/'general.db'),history,'DEMO',deepcopy(DEFAULTS),
+                    '/가상추적 테마1 501만원',now=now)
+    assert '고정 종목 501개' in text
+    tracker=MorningVirtual(Database(record_path(root,'DEMO','2026-10-20'),read_only=True))
+    assert len(tracker.plan()['targets'])==501 and tracker.db.trades()==[]
+    assert tracker.plan()['total_won']==5010000

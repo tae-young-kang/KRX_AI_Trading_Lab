@@ -48,7 +48,7 @@ class MorningVirtual:
         if (target_day.isoformat()!=day or mode not in ('DEMO','MOCK','REAL_QUOTES') or not aware(now)
                 or not isinstance(origin,str) or not re.fullmatch('[A-Za-z0-9_-]{1,100}',origin)
                 or type(total_won) is not int or not 1<=total_won<=10**15
-                or not isinstance(targets,list) or not 1<=len(targets)<=500):
+                or not isinstance(targets,list) or not targets):
             raise ValueError('가상 추적 날짜·출처·예산·추천 목록을 확인해 주세요.')
         if day not in recent_sessions(target_day):raise ValueError('확인된 거래일이 아니에요.')
         if now.astimezone(KST)>=datetime.combine(target_day,time(8),KST):
