@@ -335,12 +335,21 @@ class MockTelegramOrders:
                 return '모의 주문 전송을 요청했어요. /주문상태로 확인해 주세요.' if state=='QUEUED' else '모의 주문 확인을 철회했어요.'
             if text.split(' ',1)[0] in ('/정정','/취소'):
                 return self._preview_action(text,db,scope,session,uid,now)
-            match=re.fullmatch(r'/(매수|매도) ([A-Za-z0-9]{6}) ([1-9][0-9]?) ([1-9][0-9,]{0,9})',text)
-            if not match: return '모의 주문 예: /매수 900001 1 1000\n순서: 종목코드 수량 지정가(원) · 종목명 대신 6자리 코드를 써 주세요.'
-            side,code,quantity,price=match.groups()
+            match=re.fullmatch(r'/(매수|매도) ([A-Za-z0-9]{6}) ([1-9][0-9,]{0,18})(주|원|만원)? ([1-9][0-9,]{0,9})',text)
+            if not match: return ('모의 주문 예: /매수 900001 1주 1000\n'
+                '금액으로 요청: /매수 900001 1만원 1000\n'
+                '마지막 숫자는 지정가(원)예요. 종목명 대신 6자리 코드를 써 주세요.')
+            side,code,quantity,unit,price=match.groups()
+            if not re.fullmatch(r'(?:[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)',quantity):
+                return '수량·금액의 쉼표 위치를 확인해 주세요.'
             if not re.fullmatch(r'(?:[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)',price):
                 return '가격의 쉼표 위치를 확인해 주세요.'
-            request=OrderRequest(code,'BUY' if side=='매수' else 'SELL',int(quantity),int(price.replace(',','')))
+            size,limit=int(quantity.replace(',','')),int(price.replace(',',''))
+            requested_won=size*(10000 if unit=='만원' else 1) if unit in ('원','만원') else None
+            if requested_won is not None:
+                size=requested_won//limit
+                if size==0:return '지정가 기준으로 1주를 요청하기에 부족한 금액이에요. 주문하지 않았어요.'
+            request=OrderRequest(code,'BUY' if side=='매수' else 'SELL',size,limit)
             request.validate()
             if request.quantity>10 or request.quantity*request.limit_price>100_000:
                 return '모의 시험 한도는 한 주문 10주·10만원이에요.'
@@ -356,13 +365,17 @@ class MockTelegramOrders:
                 return '이미 처리한 모의 주문 요청이에요. /주문상태로 확인해 주세요.'
             gross=request.quantity*request.limit_price
             request_payload=dict(code=request.code,side=request.side,quantity=request.quantity,limit_price=request.limit_price)
+            if requested_won is not None:request_payload['requested_won']=requested_won
             blocked=self._usage_block(db,request_payload)
             if blocked: return blocked
             code_token=secrets.token_urlsafe(18)
-            payload=json.dumps(dict(code=request.code,side=request.side,quantity=request.quantity,limit_price=request.limit_price))
+            payload=json.dumps(request_payload)
             db.execute('INSERT INTO intents VALUES (?,?,?,?,?,?,?,?,?)',
                 (uuid.uuid4().hex,scope,session,uid,hashlib.sha256(code_token.encode()).hexdigest(),payload,now+120,'WAITING',self.day.isoformat()))
+            budget_note=(f'요청 금액 {requested_won:,}원 ÷ 지정가 → {request.quantity}주 (소수점 버림)\n'
+                         f'지정가 기준 남는 금액 {requested_won-gross:,}원 · 수수료·세금 별도\n' if requested_won is not None else '')
             return (f'[키움 모의투자 주문 · 실제 돈 사용 안 함]\n{request.code} {side} {request.quantity}주 · 지정가 {request.limit_price:,}원\n'
+                    +budget_note+
                     f'주문금액 {gross:,}원 · 비용 별도\n2분 안에 /모의확인 {code_token}\n철회: /모의철회 {code_token}\n접수와 체결은 달라요.')
 
     def process(self,session):
