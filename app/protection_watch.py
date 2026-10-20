@@ -92,6 +92,11 @@ class ProtectionWatch:
         position=position_from_capture(ledger,capture,code=code,buy_orders=buy_orders,sell_orders=sell_orders,now=now)
         return self.observe(key,position,quote,now=now)
 
+    def triggered(self,key):
+        with connect(self.path) as db:
+            row=db.execute('SELECT state FROM protection_plans WHERE plan_key=?',(key,)).fetchone()
+        return row is not None and row['state']=='TRIGGERED'
+
     def summary(self,*,page=1):
         if type(page) is not int or not 1<=page<=999999:
             raise ValueError('페이지 번호를 확인해 주세요.')
@@ -102,7 +107,7 @@ class ProtectionWatch:
             if page>pages: return f'보호 기록은 {pages}페이지까지 있어요. /보호상태 {pages}'
             plans=db.execute('SELECT * FROM protection_plans ORDER BY rowid DESC LIMIT 5 OFFSET ?',((page-1)*5,)).fetchall()
             lines=[f'[{self.mode} · 보호 판단 기록 · {page}/{pages}]',
-                   '저장된 관측이에요. 자동 감시·매도 전송은 아직 연결되지 않았어요.']
+                   '저장된 관측이에요. 감시 실행 여부는 모의 연결 상태를 확인하세요. 자동 매도 전송은 아직 연결되지 않았어요.']
             for plan in plans:
                 cfg=json.loads(plan['payload'])
                 latest=db.execute('SELECT decision_json FROM protection_observations WHERE plan_key=? ORDER BY rowid DESC LIMIT 1',

@@ -1,6 +1,7 @@
 """Explicitly armed MOCK-only queue. Broker IO belongs to the watch owner."""
 from datetime import datetime
 from dataclasses import asdict
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -41,6 +42,8 @@ class MockTelegramOrders:
         self._sending = None
         self.ledger = self._capture = None
         self.protection = None
+        self._last_protection_at = None
+        self._protection_index = 0
         self.path = self.root/'telegram_intents.db'
         with ReceiverLock(self.root/'setup.lock'):
             identity = self.root/'profile.id'
@@ -67,8 +70,11 @@ class MockTelegramOrders:
         return self._latched
 
     def notice_delivery(self, action, **context):
-        from app.mock_order_delivery import delivery
-        return delivery(self.path,action,**context)
+        from app.mock_order_delivery import delivery,protection_delivery
+        result=delivery(self.path,action,**context)
+        if action=='claim' and result is None and self.protection:
+            return protection_delivery(self.path,self.protection,**context)
+        return result
 
     def _latch(self,reason,db=None):
         self._latched=True
@@ -335,11 +341,18 @@ class MockTelegramOrders:
                 return '모의 주문 전송을 요청했어요. /주문상태로 확인해 주세요.' if state=='QUEUED' else '모의 주문 확인을 철회했어요.'
             if text.split(' ',1)[0] in ('/정정','/취소'):
                 return self._preview_action(text,db,scope,session,uid,now)
-            match=re.fullmatch(r'/(매수|매도) ([A-Za-z0-9]{6}) ([1-9][0-9,]{0,18})(주|원|만원)? ([1-9][0-9,]{0,9})',text)
+            match=re.fullmatch(r'/(매수|매도) ([A-Za-z0-9]{6}) ([1-9][0-9,]{0,18})(주|원|만원)? ([1-9][0-9,]{0,9})(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
             if not match: return ('모의 주문 예: /매수 900001 1주 1000\n'
                 '금액으로 요청: /매수 900001 1만원 1000\n'
                 '마지막 숫자는 지정가(원)예요. 종목명 대신 6자리 코드를 써 주세요.')
-            side,code,quantity,unit,price=match.groups()
+            side,code,quantity,unit,price,take,stop=match.groups()
+            policy={}
+            if take is not None:
+                if side!='매수':return '익절·손절 감시 조건은 매수 요청에만 붙여 주세요.'
+                from app.protection_plan import validate_policy
+                policy=dict(take_bps=int(Decimal(take)*100),stop_bps=int(Decimal(stop)*100))
+                try:validate_policy(**policy)
+                except ValueError as error:return str(error)
             if not re.fullmatch(r'(?:[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)',quantity):
                 return '수량·금액의 쉼표 위치를 확인해 주세요.'
             if not re.fullmatch(r'(?:[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)',price):
@@ -365,6 +378,7 @@ class MockTelegramOrders:
                 return '이미 처리한 모의 주문 요청이에요. /주문상태로 확인해 주세요.'
             gross=request.quantity*request.limit_price
             request_payload=dict(code=request.code,side=request.side,quantity=request.quantity,limit_price=request.limit_price)
+            request_payload.update(policy)
             if requested_won is not None:request_payload['requested_won']=requested_won
             blocked=self._usage_block(db,request_payload)
             if blocked: return blocked
@@ -374,6 +388,8 @@ class MockTelegramOrders:
                 (uuid.uuid4().hex,scope,session,uid,hashlib.sha256(code_token.encode()).hexdigest(),payload,now+120,'WAITING',self.day.isoformat()))
             budget_note=(f'요청 금액 {requested_won:,}원 ÷ 지정가 → {request.quantity}주 (소수점 버림)\n'
                          f'지정가 기준 남는 금액 {requested_won-gross:,}원 · 수수료·세금 별도\n' if requested_won is not None else '')
+            if policy:
+                budget_note+=f'체결 뒤 감시: 익절 +{take}% · 손절 -{stop}% (자동 매도 미연결)\n'
             return (f'[키움 모의투자 주문 · 실제 돈 사용 안 함]\n{request.code} {side} {request.quantity}주 · 지정가 {request.limit_price:,}원\n'
                     +budget_note+
                     f'주문금액 {gross:,}원 · 비용 별도\n2분 안에 /모의확인 {code_token}\n철회: /모의철회 {code_token}\n접수와 체결은 달라요.')
@@ -444,6 +460,45 @@ class MockTelegramOrders:
                 db.execute('UPDATE intents SET state=? WHERE id=?',(state,row['id']))
             session.balance_stale=True
             return state
+
+    def monitor_protection(self, session):
+        """One selected confirmed plan per 30 seconds, read-only owner IO.
+
+        Explicit policy on a confirmed BUY opts into observation, not selling.
+        """
+        with self.lock:
+            if not self.armed or not self._open() or self.emergency.event.is_set() or not self.protection:return
+            with connect(self.path) as db:
+                rows=db.execute("SELECT * FROM intents WHERE state='ACKNOWLEDGED' AND day=? ORDER BY rowid",
+                                (self.day.isoformat(),)).fetchall()
+            plans=[row for row in rows if json.loads(row['payload']).get('take_bps') is not None
+                   and json.loads(row['payload']).get('side')=='BUY'
+                   and json.loads(row['payload']).get('action','NEW')=='NEW'
+                   and not self._canceled(row['scope'],row['session'])
+                   and not self.protection.triggered(row['id'])]
+            if not plans:return
+            now=self.clock().timestamp()
+            if self._last_protection_at is not None and now-self._last_protection_at<30:return
+            self._last_protection_at=now
+            row=plans[self._protection_index%len(plans)]
+            self._protection_index+=1
+            payload=json.loads(row['payload'])
+            try:
+                if session.transport.auth_generation!=self.generation or session.transport.profile_id!=self.profile:
+                    raise ContractError('모의 연결 변경')
+                receipt=self.journal.get(row['id'])
+                if not receipt or not receipt['order_no']:return
+                self.protection.register(row['id'],code=payload['code'],venue='KRX',
+                    take_bps=payload['take_bps'],stop_bps=payload['stop_bps'])
+                capture=session.capture_for_order()
+                self.observe(capture)
+                if self._latched or not self.armed:return
+                quote,_=session.transport.read_market_quote(payload['code'])
+                session._guard()
+                return self.protection.observe_mock(row['id'],self.ledger,capture,quote,
+                    code=payload['code'],buy_orders=(receipt['order_no'],),now=self.clock())
+            except (ContractError,ValueError):
+                return dict(state='BLOCKED',executable=False)
 
     def _resume(self,text,scope,session):
         if not self.emergency.event.is_set():

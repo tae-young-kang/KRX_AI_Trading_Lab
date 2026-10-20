@@ -73,3 +73,34 @@ def fill_delivery(db,scope,session):
     key=row['id']+':fill:'+str(row['filled'])
     db.execute('INSERT INTO result_delivery VALUES(?,?,?,?)',(key,scope,session,'SENDING'))
     return dict(key=key,text=text)
+
+
+def protection_delivery(path,protection,*,scope,session):
+    """Notify a stored trigger, not a sale or a new permission to sell."""
+    with connect(protection.path) as db:
+        plans=db.execute("SELECT * FROM protection_plans WHERE state='TRIGGERED' ORDER BY rowid").fetchall()
+    with connect(path) as db:
+        db.execute('BEGIN IMMEDIATE')
+        for plan in plans:
+            key=plan['plan_key']+':protection'
+            if db.execute('SELECT 1 FROM result_delivery WHERE id=?',(key,)).fetchone():continue
+            row=db.execute("SELECT payload FROM intents WHERE id=? AND scope=? AND session=? AND state='ACKNOWLEDGED'",
+                           (plan['plan_key'],scope,session)).fetchone()
+            if row is None:continue
+            cfg=json.loads(plan['payload'])
+            request=json.loads(row['payload'])
+            decision=json.loads(plan['trigger_json'])
+            code=cfg.get('code')
+            quantity=decision.get('quantity')
+            if (request.get('code')!=code or not isinstance(code,str) or not re.fullmatch('[A-Za-z0-9]{6}',code)
+                    or decision.get('state') not in ('TAKE_PROFIT','STOP_LOSS')
+                    or type(quantity) is not int or quantity<=0):continue
+            label='익절' if decision['state']=='TAKE_PROFIT' else '손절'
+            text=(f'[키움 모의투자 · {label} 조건 도달]\n실제 돈 사용 안 함\n'
+                  f'{code} · 당시 확인된 보유 {quantity:,}주\n'
+                  f'설정: 익절 +{cfg["take_bps"]/100:.2f}% · 손절 -{cfg["stop_bps"]/100:.2f}%\n'
+                  f'관측 시각 {plan["last_at"]}\n'
+                  '체결 평균가 기준 조건이에요. 매도 주문은 아직 보내지 않았어요.\n'
+                  '현재 자동 매도 전송은 미연결입니다. /보호상태 · /잔고로 확인하세요.')
+            db.execute('INSERT INTO result_delivery VALUES(?,?,?,?)',(key,scope,session,'SENDING'))
+            return dict(key=key,text=text)

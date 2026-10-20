@@ -123,6 +123,7 @@ class MockWatchWorker(QThread):
                         else:
                             if self.status_store: self.status_store.order_result(result)
                             self.notice.emit('모의 주문 처리 결과가 있어요. 텔레그램 /주문상태와 /잔고로 확인해 주세요.')
+                    self.orders.monitor_protection(session)
                 if self.status_store and self.status_store.take_refresh():
                     report = session.refresh()
                     if self._cancelled():
