@@ -34,6 +34,17 @@ def project_chain(journal, ledger, root_key):
     tag, rows = journal.read_chain(root_key)
     if tag != ledger._account_tag:
         raise ContractError('접수 기록과 체결 장부의 모의 계좌가 다릅니다.')
+    with connect(ledger.path) as db:
+        db.execute('BEGIN')
+        return project_records(rows,db,root_key,account_tag=tag)
+
+
+def project_records(rows,db,root_key,*,account_tag):
+    """Pure read projection for callers holding a read-only ledger snapshot."""
+    tag=account_tag
+    bound=db.execute('SELECT account_tag FROM fill_meta').fetchone()
+    if bound is None or bound[0]!=tag:
+        raise ContractError('접수 기록과 체결 장부의 모의 계좌가 다릅니다.')
     by_key = {row['request_key']: row for row in rows}
     root = by_key.get(root_key)
     if (not root or root['api_id'] not in ('kt10000', 'kt10001') or root['parent_key'] is not None
@@ -77,53 +88,51 @@ def project_chain(journal, ledger, root_key):
         for row in active.values() if row['api_id'] == 'kt10002')
     total_qty, total_gross, commissions, taxes, sources = 0, 0, [], [], set()
     missing_costs, fill_ids = False, set()
-    with connect(ledger.path) as db:
-        db.execute('BEGIN')
-        # A fill naming this lineage but absent from the dispatch chain must not
-        # be silently excluded from the aggregate.
-        for row in db.execute('SELECT payload FROM fill_events WHERE day=?', (day.isoformat(),)):
-            fill = json.loads(row[0])
-            if fill['order_no'] not in numbers and fill['original_no'] in numbers:
-                raise ContractError('접수 기록에 없는 후속 주문 체결이 있습니다.')
-        for key in sequence:
-            row = active[key]
-            number = order_number(row['order_no'])
-            fills, digest = ledger._fills(db, day.isoformat(), number)
-            plan = json.loads(row['payload'])
-            if row['api_id'] == 'kt10003':
-                if fills:
-                    raise ContractError('취소 접수 번호에 체결이 있습니다. 원자료 대조가 필요합니다.')
-                continue
-            limit = (None if key==root_key and plan.get('trde_tp')=='3' else
-                     int(plan['ord_uv'] if key == root_key else plan['mdfy_uv']))
-            cap = int(plan['ord_qty'] if key == root_key else plan['mdfy_qty'])
-            subtotal = 0
-            for fill in fills:
-                allowed_parents = {order_number(root['order_no'])}
-                if row['parent_key']:
-                    allowed_parents.add(order_number(active[row['parent_key']]['order_no']))
-                if (fill['code'] != body['stk_cd'] or fill['side'] != side
-                        or (key == root_key and fill['original_no'] is not None)
-                        or (key != root_key and fill['original_no'] not in allowed_parents)
-                        or (limit is not None and side == 'BUY' and fill['price'] > limit)
-                        or (limit is not None and side == 'SELL' and fill['price'] < limit)
-                        or fill['fill_no'] in fill_ids):
-                    raise ContractError('계보의 체결번호·종목·방향·원주문·지정가를 확인하세요.')
-                fill_ids.add(fill['fill_no'])
-                subtotal += fill['quantity']
-                total_gross += fill['quantity'] * fill['price']
-            if cap and subtotal > cap:
-                raise ContractError('해당 주문번호의 체결량이 요청 수량을 초과합니다.')
-            total_qty += subtotal
+    # A fill naming this lineage but absent from the dispatch chain must not
+    # be silently excluded from the aggregate.
+    for row in db.execute('SELECT payload FROM fill_events WHERE day=?', (day.isoformat(),)):
+        fill = json.loads(row[0])
+        if fill['order_no'] not in numbers and fill['original_no'] in numbers:
+            raise ContractError('접수 기록에 없는 후속 주문 체결이 있습니다.')
+    for key in sequence:
+        row = active[key]
+        number = order_number(row['order_no'])
+        fills, digest = MockFillLedger._fills(db, day.isoformat(), number)
+        plan = json.loads(row['payload'])
+        if row['api_id'] == 'kt10003':
             if fills:
-                cost = db.execute('SELECT * FROM fill_costs WHERE day=? AND order_no=? AND fill_digest=?',
-                                  (day.isoformat(), number, digest)).fetchone()
-                if cost:
-                    commissions.append(cost['commission'])
-                    taxes.append(cost['tax'])
-                    sources.add(cost['source'])
-                else:
-                    missing_costs = True
+                raise ContractError('취소 접수 번호에 체결이 있습니다. 원자료 대조가 필요합니다.')
+            continue
+        limit = (None if key==root_key and plan.get('trde_tp')=='3' else
+                 int(plan['ord_uv'] if key == root_key else plan['mdfy_uv']))
+        cap = int(plan['ord_qty'] if key == root_key else plan['mdfy_qty'])
+        subtotal = 0
+        for fill in fills:
+            allowed_parents = {order_number(root['order_no'])}
+            if row['parent_key']:
+                allowed_parents.add(order_number(active[row['parent_key']]['order_no']))
+            if (fill['code'] != body['stk_cd'] or fill['side'] != side
+                    or (key == root_key and fill['original_no'] is not None)
+                    or (key != root_key and fill['original_no'] not in allowed_parents)
+                    or (limit is not None and side == 'BUY' and fill['price'] > limit)
+                    or (limit is not None and side == 'SELL' and fill['price'] < limit)
+                    or fill['fill_no'] in fill_ids):
+                raise ContractError('계보의 체결번호·종목·방향·원주문·지정가를 확인하세요.')
+            fill_ids.add(fill['fill_no'])
+            subtotal += fill['quantity']
+            total_gross += fill['quantity'] * fill['price']
+        if cap and subtotal > cap:
+            raise ContractError('해당 주문번호의 체결량이 요청 수량을 초과합니다.')
+        total_qty += subtotal
+        if fills:
+            cost = db.execute('SELECT * FROM fill_costs WHERE day=? AND order_no=? AND fill_digest=?',
+                              (day.isoformat(), number, digest)).fetchone()
+            if cost:
+                commissions.append(cost['commission'])
+                taxes.append(cost['tax'])
+                sources.add(cost['source'])
+            else:
+                missing_costs = True
     if total_qty > ceiling:
         raise ContractError('전체 체결량이 계보 요청으로 가능한 상한을 초과합니다.')
     commission, tax, net, source = None, None, None, None

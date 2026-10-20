@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -61,6 +61,7 @@ class TelegramOrderService:
         self.actual_daily=actual_daily
         self.morning_daily=morning_daily
         self.morning_setup=morning_setup
+        self.mock_daily=mock_daily
         self.recommendation_request = recommendation_request
         self.recommendation_status = recommendation_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
@@ -127,11 +128,14 @@ class TelegramOrderService:
         from app.daily_report_delivery import pages
         def build(day):
             if not self.actual_daily or not self.morning_setup:raise ValueError('결산 조회 연결이 없어요.')
+            mock_note=('키움 모의 기록도 별도로 보내며 비용/체결 근거 누락은 손익 미확인으로 표시해요.\n' if self.mock_daily else
+                '키움 모의계좌 하루 결산은 아직 자동 집계되지 않아요. /모의기록 · /잔고에서 별도로 확인하세요.\n')
             return ([f'[20:30 저장 기록 결산] {day}\n실제 체결 입력과 아침 가상 기록을 분리해 보내요.\n'
-                '키움 모의계좌 하루 결산은 아직 자동 집계되지 않아요. /모의기록 · /잔고에서 별도로 확인하세요.\n'
+                +mock_note+
                 '실제 기록은 사용자 입력이며 증권사 자동 대조 전, 가상은 공급된 시세 근거 계산이에요.']
                 +pages(lambda d,p:self.actual_daily(d,page=p),day,'/실제결산')
-                +pages(lambda d,p:self.morning_setup(f'/가상하루 {d} {p}'),day,'/가상하루'))
+                +pages(lambda d,p:self.morning_setup(f'/가상하루 {d} {p}'),day,'/가상하루')
+                +(pages(lambda d,p:self.mock_daily(d,scope=self.scope,page=p),day,'/모의결산') if self.mock_daily else []))
         try:
             return self.daily_delivery.tick(now=self.clock(),active=self.accepts_search_requests,build=build,
                 send=lambda text:transport.send(self.chat_id,text))
@@ -231,7 +235,14 @@ class TelegramOrderService:
                 reply=(self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                        if not self.orders_enabled and self.watch_orders else '모의 보호 기록 연결이 없어요. 자동 매도는 아직 연결되지 않았어요.')
             elif text=='/결산알림상태':
-                reply=self.daily_delivery.summary(self.clock()) if self.daily_delivery else '20:30 결산 알림 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                reply=self.daily_delivery.summary(self.clock(),mock_available=self.mock_daily is not None) if self.daily_delivery else '20:30 결산 알림 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+            elif text.split(' ',1)[0]=='/모의결산':
+                match=re.fullmatch(r'/모의결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
+                if not match:reply='사용법: /모의결산 또는 /모의결산 YYYY-MM-DD [페이지]'
+                elif not self.mock_daily:reply='모의 결산 조회 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                else:
+                    try:reply=self.mock_daily(match[1] or self.clock().astimezone(KST).date().isoformat(),scope=self.scope,page=int(match[2] or 1))
+                    except Exception:reply='모의 결산 날짜와 별도 접수·체결/비용 장부를 확인해 주세요. 손익을 추측하지 않았어요.'
             elif text.split(' ',1)[0] in ('/가상추적','/가상추적상태','/가상하루'):
                 if not self.morning_setup:reply='가상 추적 목록 연결이 아직 없어요.'
                 elif text.split(' ',1)[0]=='/가상추적' and not owner['active']:reply='새 가상 목록 고정을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
@@ -403,6 +414,7 @@ class TelegramOrderService:
                 reply += '\n/실제결산: 입력한 실제 체결의 하루 기록 · 증권사 자동 대조 전'
                 reply += '\n/가상결산: 저장한 아침 추천 목록의 가상 성과'
                 reply += '\n/가상하루: 이전 아침 목록의 이월 보유까지 오늘 기준 조회'
+                reply += '\n/모의결산: 개인 모의 요청의 저장된 체결·비용 근거 하루 기록'
                 reply += '\n/결산알림상태: 거래일20:30 저장 결산 발송 상태'
                 reply += '\n/가상추적 일반 100만원: 다음 아침 가상 목록 고정 · 실제 주문 안 함'
                 reply += '\n/테마1계획 종목명 10주 또는 전체 100만원: 매수 계획 보기 (주문 안 함)'

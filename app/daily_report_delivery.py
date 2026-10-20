@@ -30,7 +30,7 @@ class DailyReportDelivery:
                 PRIMARY KEY(scope,mode,day))''')
             db.execute("UPDATE daily_report_delivery SET state='UNKNOWN' WHERE scope=? AND mode=? AND state IN ('BUILDING','SENDING')",(scope,mode))
 
-    def summary(self,now):
+    def summary(self,now,*,mock_available=False):
         day=now.astimezone(KST).date().isoformat()
         with connect(self.path) as db:
             row=db.execute('SELECT state,cursor,payload FROM daily_report_delivery WHERE scope=? AND mode=? AND day=?',
@@ -41,8 +41,10 @@ class DailyReportDelivery:
         count=f' · 확인된 페이지 {row["cursor"]}개' if row else ''
         return (f'[20:30 결산 알림] {day} · {self.mode}\n{state}{count}\n'
                 '거래일 20:30 이후 PC와 개인 텔레그램 수신이 켜져 있을 때 저장 기록을 보내요.\n'
-                '실제 체결 입력·아침 가상 기록을 구분해요. 키움 모의계좌 결산 자동 집계는 아직 미연결이에요.\n'
-                '수동 조회: /실제결산 · /가상하루. 발송 응답은 사용자가 읽었다는 확인이 아니에요.')
+                '실제 체결 입력·아침 가상 기록을 구분해요. '
+                +('모의 결산 조회 연결 있음 · 오늘 이미 준비한 보고는 당시 페이지를 유지해요.\n' if mock_available else '키움 모의계좌 결산 자동 집계는 아직 미연결이에요.\n')+
+                '수동 조회: /실제결산 · /가상하루'+(' · /모의결산' if mock_available else '')+
+                '. 발송 응답은 사용자가 읽었다는 확인이 아니에요.')
 
     def tick(self,*,now,active,build,send):
         if not active():return 'INACTIVE'

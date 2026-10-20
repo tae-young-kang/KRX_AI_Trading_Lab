@@ -161,6 +161,7 @@ class MainWindow(QMainWindow):
         self.mock_watch_worker = None
         from app.order_symbol_lookup import saved_symbol
         self.mock_watch_status = MockWatchStatus(history_path=data_dir()/'kiwoom_mock_watch'/'observations.db',
+            order_root=data_dir()/'kiwoom_mock_watch'/'mock_orders',
             symbol_lookup=lambda name,now,history=self.history:saved_symbol(history,'MOCK',name,now))
         self.scanning = False
         self.remote_scan = None
@@ -1723,6 +1724,7 @@ class MainWindow(QMainWindow):
                                      practice_daily=lambda day, page=1, db=self.db: db.practice_daily_report(day,page=page),
                                      actual_daily=lambda day,page=1: actual_daily_text(data_dir()/'actual_fill_records.db',day,page=page),
                                      daily_mode=current_mode(self.cfg).key,
+                                     mock_daily=self.mock_watch_status.daily_report,
                                      morning_daily=lambda day,page=1,mode=current_mode(self.cfg).key: morning_daily_text(data_dir(),mode,day,page=page),
                                      morning_setup=lambda text,db=self.db,history=self.history,mode=current_mode(self.cfg).key:
                                          morning_setup_text(data_dir(),db,history,mode,dict(self.cfg),text,now=datetime.now(KST)),
