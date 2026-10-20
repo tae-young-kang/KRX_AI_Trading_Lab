@@ -10,7 +10,7 @@ from app import mock_funds_view
 
 
 class MockWatchStatus:
-    def __init__(self, clock=None, *, history_path=None):
+    def __init__(self, clock=None, *, history_path=None,symbol_lookup=None):
         self._clock = clock or (lambda:datetime.now(KST))
         self._lock = threading.RLock()
         self._status = '모의 알림 연결 전'
@@ -27,6 +27,7 @@ class MockWatchStatus:
         self._last_reconnect = None
         self._validation = MockValidationProgress(self._clock)
         self._orders = None
+        self._symbol_lookup=symbol_lookup
         self._funds = None
         self._history = MockObservationHistory(history_path)
 
@@ -44,6 +45,7 @@ class MockWatchStatus:
 
     def bind_orders(self, orders):
         with self._lock:
+            if orders is not None and self._symbol_lookup is not None:orders.symbol_lookup=self._symbol_lookup
             self._orders = orders
 
     def handle_orders(self, text, **context):

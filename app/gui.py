@@ -159,7 +159,9 @@ class MainWindow(QMainWindow):
         self.work = None
         self.telegram_order_worker = None
         self.mock_watch_worker = None
-        self.mock_watch_status = MockWatchStatus(history_path=data_dir()/'kiwoom_mock_watch'/'observations.db')
+        from app.order_symbol_lookup import saved_symbol
+        self.mock_watch_status = MockWatchStatus(history_path=data_dir()/'kiwoom_mock_watch'/'observations.db',
+            symbol_lookup=lambda name,now,history=self.history:saved_symbol(history,'MOCK',name,now))
         self.scanning = False
         self.remote_scan = None
         self.remote_scan_active = False

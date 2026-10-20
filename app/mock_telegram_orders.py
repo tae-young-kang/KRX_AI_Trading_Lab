@@ -26,10 +26,11 @@ from app.mock_emergency import MockEmergencyStop
 
 class MockTelegramOrders:
     """Small fixed trial limits; no real-account destinations or retry path."""
-    def __init__(self, root, *, confirmed_day, clock=None):
+    def __init__(self, root, *, confirmed_day, clock=None,symbol_lookup=None):
         self.root = Path(root)
         self.root.mkdir(parents=True,exist_ok=True)
         self.clock = clock or (lambda:datetime.now(KST))
+        self.symbol_lookup=symbol_lookup
         self.day = confirmed_day
         self.calendar = TradingCalendar(open_dates={confirmed_day})
         self.lock = threading.RLock()
@@ -341,11 +342,24 @@ class MockTelegramOrders:
                 return '모의 주문 전송을 요청했어요. /주문상태로 확인해 주세요.' if state=='QUEUED' else '모의 주문 확인을 철회했어요.'
             if text.split(' ',1)[0] in ('/정정','/취소'):
                 return self._preview_action(text,db,scope,session,uid,now)
-            match=re.fullmatch(r'/(매수|매도) ([A-Za-z0-9]{6}) ([1-9][0-9,]{0,18})(주|원|만원)? ([1-9][0-9,]{0,9})(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
+            match=re.fullmatch(r'/(매수|매도) (.{1,100}?) ([1-9][0-9,]{0,18})(주|원|만원)? ([1-9][0-9,]{0,9})(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
             if not match: return ('모의 주문 예: /매수 900001 1주 1000\n'
                 '금액으로 요청: /매수 900001 1만원 1000\n'
-                '마지막 숫자는 지정가(원)예요. 종목명 대신 6자리 코드를 써 주세요.')
+                '마지막 숫자는 지정가(원)예요. 종목명은 오늘 같은 시세 모드에서 확인한 정확한 이름을 써 주세요.')
             side,code,quantity,unit,price,take,stop=match.groups()
+            symbol_info=None
+            if not re.fullmatch('[A-Za-z0-9]{6}',code):
+                if not self.symbol_lookup:return '종목명 조회가 연결되지 않았어요. 6자리 종목코드로 입력해 주세요.'
+                try:
+                    symbol_info=self.symbol_lookup(code,self.clock())
+                    if (not isinstance(symbol_info,dict) or symbol_info.get('name')!=code
+                            or symbol_info.get('market') not in ('KOSPI','KOSDAQ')
+                            or not isinstance(symbol_info.get('code'),str) or not re.fullmatch('[A-Za-z0-9]{6}',symbol_info['code'])):
+                        raise ValueError('종목명 조회 결과가 불명확해요. 종목코드로 입력해 주세요.')
+                    code=symbol_info['code']
+                    symbol_info={key:symbol_info[key] for key in ('code','name','market')}
+                except ValueError as error:return str(error)
+                except Exception:return '종목명을 확인하지 못했어요. 6자리 종목코드로 입력해 주세요.'
             policy={}
             if take is not None:
                 if side!='매수':return '익절·손절 감시 조건은 매수 요청에만 붙여 주세요.'
@@ -379,6 +393,7 @@ class MockTelegramOrders:
             gross=request.quantity*request.limit_price
             request_payload=dict(code=request.code,side=request.side,quantity=request.quantity,limit_price=request.limit_price)
             request_payload.update(policy)
+            if symbol_info:request_payload['requested_symbol']=dict(symbol_info)
             if requested_won is not None:request_payload['requested_won']=requested_won
             blocked=self._usage_block(db,request_payload)
             if blocked: return blocked
@@ -390,7 +405,8 @@ class MockTelegramOrders:
                          f'지정가 기준 남는 금액 {requested_won-gross:,}원 · 수수료·세금 별도\n' if requested_won is not None else '')
             if policy:
                 budget_note+=f'체결 뒤 감시: 익절 +{take}% · 손절 -{stop}% (자동 매도 미연결)\n'
-            return (f'[키움 모의투자 주문 · 실제 돈 사용 안 함]\n{request.code} {side} {request.quantity}주 · 지정가 {request.limit_price:,}원\n'
+            symbol_label=f'{symbol_info["name"]} ({request.code})' if symbol_info else request.code
+            return (f'[키움 모의투자 주문 · 실제 돈 사용 안 함]\n{symbol_label} {side} {request.quantity}주 · 지정가 {request.limit_price:,}원\n'
                     +budget_note+
                     f'주문금액 {gross:,}원 · 비용 별도\n2분 안에 /모의확인 {code_token}\n철회: /모의철회 {code_token}\n접수와 체결은 달라요.')
 
