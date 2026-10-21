@@ -10,7 +10,7 @@ import re
 
 from app.morning_quote_router import _plan_identity, _safe_path
 from app.morning_virtual import MorningVirtual, aware, record_path
-from app.morning_venue_policy import KRX_OPEN, stored_policy
+from app.morning_venue_policy import KRX_OPEN, stored_policy, deadline
 from app.storage import Database
 from app.trading_clock import KST
 
@@ -63,10 +63,19 @@ def inspect(root, mode, day, *, now):
             opened = datetime.fromisoformat(row['opened_at'])
         except (TypeError, ValueError, json.JSONDecodeError):
             raise ValueError('저장한 첫 거래 근거의 형식을 확인하지 못했어요.') from None
+        try:
+            quote_stamp = datetime.fromisoformat(entry['quote_stamp'])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('저장한 첫 거래 근거의 시각을 확인하지 못했어요.') from None
         if (not isinstance(entry, dict) or not aware(opened)
+                or not aware(quote_stamp)
+                or quote_stamp != opened
+                or opened < deadline(day, KRX_OPEN)
+                or opened > now
                 or opened.astimezone(KST).date().isoformat() != day
                 or row['entry_key'] != cohort.key(plan, code)
                 or row['source'] != ('DEMO' if mode == 'DEMO' else 'KIWOOM')
+                or entry.get('source') != row['source']
                 or entry.get('venue') != 'KRX'
                 or entry.get('price_basis') != 'VENUE_FIRST_TRADE'
                 or not isinstance(entry.get('evidence_hash'), str)
