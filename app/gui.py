@@ -53,6 +53,7 @@ from app.trading_clock import PRICE_BASIS_NOTICE, KST
 from app.trade_review import outcome, condition_label, settings_snapshot
 from app.telegram_worker import TelegramOrderWorker
 from app.telegram_conditions import ConditionCommands
+from app.condition_report import report as condition_report_text
 from app.kiwoom_mock_watch import require_mock_mode
 from app.kiwoom_mock_watch_worker import MockWatchWorker
 from app.mock_watch_status import MockWatchStatus
@@ -1703,6 +1704,8 @@ class MainWindow(QMainWindow):
             source=lambda mode=current_mode(self.cfg).key:recommendation_calendar_source(self.cfg,mode))
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
+                                     condition_report=lambda page=1,db=self.db,mode=current_mode(self.cfg).key:
+                                         condition_report_text(db,mode,min_train=max(20,int(self.cfg['min_strategy_trades'])),page=page),
                                      recommendation_request=self.remote_scan,
                                      theme_request=self.remote_theme,
                                      outcome_request=self.remote_outcome,
