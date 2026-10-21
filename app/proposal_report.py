@@ -44,7 +44,7 @@ def report(database,mode,*,page=1):
             elif key in SWITCHES.values():value='사용' if value else '사용 안 함'
             else:value=f'{value:g}'
             lines.append(f'{labels[key]} → {value}')
-    lines.append('\n원격 개선안 승인·거부는 아직 연결 중이에요. 자동 적용하지 않아요.')
+    lines.append('\n검토: /개선안승인 번호 또는 /개선안거부 번호 · 별도 확인 후 PC에서 처리해요. 자동 적용하지 않아요.')
     if page>1:lines.append(f'이전: /개선안 {page-1}')
     if page<pages:lines.append(f'다음: /개선안 {page+1}')
     return '\n'.join(lines)

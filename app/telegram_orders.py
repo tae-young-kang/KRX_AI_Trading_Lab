@@ -107,13 +107,17 @@ class TelegramOrderService:
     def stop(self):
         if self.watch_cancel_orders:
             self.watch_cancel_orders(self.scope,self.session)
-        if self.conditions is not None:
-            self.conditions.cancel_session(self.scope, self.session)
+        self.cancel_pending_changes()
         with connect(self.path) as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute('UPDATE tg_sessions SET active=0 WHERE scope=? AND session=?', (self.scope, self.session))
             db.execute("UPDATE tg_intents SET state='CANCELED' WHERE scope=? AND session=? AND state='WAITING'",
                        (self.scope, self.session))
+
+    def cancel_pending_changes(self):
+        if self.conditions is not None:self.conditions.cancel_session(self.scope,self.session)
+        review=getattr(self.analysis_request,'review',None)
+        if review is not None:review.cancel_session(self.scope,self.session)
 
     def cursor(self, new=None):
         with connect(self.path) as db:
@@ -407,6 +411,13 @@ class TelegramOrderService:
                          else '모의 잔고 조회 결과가 없어요.')
             elif text in ('/프로그램상태','/모의상태') or (text == '/상태' and not self.orders_enabled):
                 reply = self.watch_status() if self.watch_status is not None else '프로그램이 켜져 있어요. 모의 알림 상태 연결은 아직 없어요. 주문은 보내지 않았어요.'
+            elif text.split(' ',1)[0] in ('/개선안승인','/개선안거부','/개선안확인','/개선안철회','/개선안처리상태'):
+                review=getattr(self.analysis_request,'review',None)
+                if review is None:reply='개선안 검토 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                elif not owner['active'] and text.split(' ',1)[0] not in ('/개선안처리상태','/개선안철회'):reply='개선안 변경을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
+                else:
+                    try:reply=review.handle(text,scope=self.scope,session=self.session,uid=uid,now=now)
+                    except Exception:reply='개선안의 생성 기준·확인 기록을 읽지 못했어요. 적용하지 않았어요.'
             elif text in ('/조건비교','/조건비교상태') or text.split(' ',1)[0]=='/개선안':
                 if not self.analysis_request:reply='조건 비교 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
                 elif text=='/조건비교상태':reply=self.analysis_request.summary()
@@ -431,8 +442,7 @@ class TelegramOrderService:
                 if text == '/중지':
                     if self.watch_cancel_orders:
                         self.watch_cancel_orders(self.scope,self.session)
-                    if self.conditions is not None:
-                        self.conditions.cancel_session(self.scope, self.session)
+                    self.cancel_pending_changes()
                     db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
                     reply = '조건 변경·새 모의 주문 요청을 중지하고 대기 중인 변경·모의 주문 확인을 철회했어요. 이미 전송한 주문을 취소한 것은 아니에요.'
                 else:
@@ -486,8 +496,7 @@ class TelegramOrderService:
                     order_safety.latch(db, self.broker_identity, 'USER_EMERGENCY')
                 reply = '안전 상태 확인 중 · 주문을 새로 보내지 않습니다.'
             elif text == '/중지':
-                if self.conditions is not None:
-                    self.conditions.cancel_session(self.scope, self.session)
+                self.cancel_pending_changes()
                 db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
                 db.execute("UPDATE tg_intents SET state='CANCELED' WHERE scope=? AND state='WAITING'", (self.scope,))
                 reply = '새 주문을 중지하고 확인 대기를 철회했습니다. 이미 접수한 미체결 주문을 취소한 것은 아닙니다. 다시 시작하려면 프로그램에서 수신을 중지한 뒤 시작하세요.'

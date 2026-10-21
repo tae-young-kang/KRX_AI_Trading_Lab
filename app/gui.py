@@ -57,6 +57,7 @@ from app.condition_report import report as condition_report_text
 from app.condition_analysis_request import ConditionAnalysisRequest
 from app.proposal_report import report as proposal_report_text
 from app.proposal_application import apply as apply_proposal,recover as recover_proposals
+from app.proposal_review_commands import ProposalReviewCommands
 from app.kiwoom_mock_watch import require_mock_mode
 from app.kiwoom_mock_watch_worker import MockWatchWorker
 from app.mock_watch_status import MockWatchStatus
@@ -177,6 +178,7 @@ class MainWindow(QMainWindow):
         self.remote_outcome_active=False
         self.remote_analysis=None
         self.remote_analysis_active=False
+        self.proposal_review=None
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
         self.resize(1390, 860)
         self.setMinimumSize(1100, 690)
@@ -1706,8 +1708,12 @@ class MainWindow(QMainWindow):
             return
         self.remote_scan = RecommendationRequest(current_mode(self.cfg).key)
         self.remote_theme = ThemeRequest(self.history,current_mode(self.cfg).key)
+        try:self.proposal_review=ProposalReviewCommands(self.condition_commands.path,self.db,self.cfg)
+        except ValueError:
+            self.set_telegram_status('기본 조건값을 확인하고 저장한 뒤 텔레그램 수신을 시작해 주세요.')
+            return
         self.remote_analysis=ConditionAnalysisRequest(current_mode(self.cfg).key,
-            lambda page,db=self.db,mode=current_mode(self.cfg).key:proposal_report_text(db,mode,page=page))
+            lambda page,db=self.db,mode=current_mode(self.cfg).key:proposal_report_text(db,mode,page=page),review=self.proposal_review)
         self.remote_outcome=OutcomeRequest(current_mode(self.cfg).key,
             source=lambda mode=current_mode(self.cfg).key:recommendation_calendar_source(self.cfg,mode))
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
@@ -2238,6 +2244,16 @@ class MainWindow(QMainWindow):
         try:
             changed = self.condition_commands.sync(self.cfg, self.settings.save,
                 now=datetime.now().timestamp(), busy=busy)
+            review=getattr(self,'proposal_review',None)
+            if review is not None:
+                worker=self.telegram_order_worker
+                review_changed=review.sync(self.cfg,self.settings.save,self.settings.strategy_snapshot,
+                    now=datetime.now().timestamp(),busy=busy,
+                    active=lambda:bool(worker and worker.isRunning() and not worker.isInterruptionRequested()
+                        and worker.service and worker.service.accepts_search_requests()))
+                if review_changed:
+                    self.condition_commands.sync(self.cfg,self.settings.save,now=datetime.now().timestamp(),busy=True)
+                changed=review_changed or changed
             if changed:
                 self.stocks, self.results = [], []
                 self.fill_stock_tables()

@@ -314,12 +314,13 @@ class Database:
             if context:db.execute('INSERT INTO proposal_context VALUES(?,?,?)',(cursor.lastrowid,*context))
             return True
 
-    def review(self, proposal_id, accepted):
+    def review(self, proposal_id, accepted,*,authorize=None):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT * FROM proposals WHERE id=?', (proposal_id,)).fetchone()
             if row is None or row['state'] != 'PENDING':
                 raise ValueError('대기 중인 전략 개선안이 아닙니다.')
+            if authorize is not None:authorize()
             db.execute('UPDATE proposals SET state=?,reviewed_at=? WHERE id=?',
                        ('APPROVED' if accepted else 'REJECTED', now(), proposal_id))
             return json.loads(row['patch_json'])

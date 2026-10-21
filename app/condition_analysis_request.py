@@ -4,9 +4,10 @@ from time import monotonic
 
 
 class ConditionAnalysisRequest:
-    def __init__(self,mode,report,*,clock=monotonic):
+    def __init__(self,mode,report,*,clock=monotonic,review=None):
         if mode not in ('DEMO','MOCK','REAL_QUOTES'):raise ValueError('조건 비교 모드를 확인해 주세요.')
         self.mode,self.report,self.clock=mode,report,clock
+        self.review=review
         self.lock=Lock();self.state='IDLE';self.message='아직 조건 비교 요청이 없어요.'
         self.notice=None;self.delivery='';self.generation=0
 

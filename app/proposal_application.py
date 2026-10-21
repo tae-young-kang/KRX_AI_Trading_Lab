@@ -44,7 +44,19 @@ def fresh_candidate(rows,config,patch):
     return False
 
 
-def apply(database,config,proposal_id,save,read_saved):
+def preview(database,config,proposal_id,*,require_base=True):
+    base=snapshot(config);mode=current_mode(base).key
+    with database.connect() as db:
+        db.execute('BEGIN')
+        row=db.execute('SELECT p.state,p.patch_json,c.mode,c.base_json FROM proposals p JOIN proposal_context c ON c.proposal_id=p.id WHERE p.id=?',(proposal_id,)).fetchone()
+    if not row or row['state']!='PENDING' or row['mode']!=mode:raise ValueError('현재 모드의 검토 대기 개선안을 골라 주세요.')
+    original=snapshot(json.loads(row['base_json']));patch=json.loads(row['patch_json'])
+    if current_mode(original).key!=mode or (require_base and original!=base):raise ValueError('생성 당시 조건이 달라요. 새로 비교해 주세요.')
+    if not isinstance(patch,dict) or not patch or set(patch)-set(FILTER_KEYS+EXIT_KEYS):raise ValueError('허용된 개선안 변경값이 아니에요.')
+    return snapshot(dict(original,**patch,strategy_version=original['strategy_version']+1))
+
+
+def apply(database,config,proposal_id,save,read_saved,*,expected_target=None,authorize=None):
     """Call only after the user confirms this proposal on the owning UI thread."""
     if type(proposal_id) is not int or proposal_id<=0:raise ValueError('개선안 번호를 확인해 주세요.')
     base=snapshot(config);mode=current_mode(base).key
@@ -61,17 +73,24 @@ def apply(database,config,proposal_id,save,read_saved):
         patch=json.loads(row['patch_json'])
         if not isinstance(patch,dict) or not patch or set(patch)-set(FILTER_KEYS+EXIT_KEYS):raise ValueError('허용된 개선안 변경값이 아니에요.')
         target=snapshot(dict(base,**patch,strategy_version=base['strategy_version']+1))
+        if expected_target is not None and snapshot(expected_target)!=target:raise ValueError('확인한 개선안 내용이 바뀌었어요. 다시 검토해 주세요.')
         rows=[dict(item) for item in db.execute('SELECT * FROM paper_trades ORDER BY id')]
         if not fresh_candidate(rows,config,patch):raise ValueError('최신 기록에서 비교 기준을 만족하지 않아요. 다시 비교해 주세요.')
         operation=uuid.uuid4().hex
         db.execute('INSERT INTO proposal_applications VALUES(?,?,?,?,?,?)',(operation,proposal_id,mode,'APPLYING',encoded(base),encoded(target)))
         db.execute("UPDATE proposals SET state='APPLYING' WHERE id=?",(proposal_id,))
     before=dict(config);config.update(target)
-    try:save()
-    except Exception:pass  # The persisted readback, not the exception alone, decides.
+    authorization_failed=False
+    try:
+        if authorize is not None:authorize()
+    except Exception:authorization_failed=True
+    if not authorization_failed:
+        try:save()
+        except Exception:pass  # Readback, not the exception alone, decides.
     try:stored=snapshot(read_saved())
     except Exception:stored=None
     state='APPLIED' if stored==target else 'FAILED' if stored==base else 'UNKNOWN'
+    if authorization_failed:state='FAILED' if stored==base else 'ABORTED'
     if state!='APPLIED':config.clear();config.update(before)
     try:
         with database.connect() as db:
@@ -83,7 +102,7 @@ def apply(database,config,proposal_id,save,read_saved):
     except Exception:
         raise ValueError('설정과 승인 기록의 대조가 미확인이에요. 다시 적용하지 말고 재시작 후 확인해 주세요.') from None
     if state=='FAILED':raise ValueError('설정이 저장되지 않아 적용하지 않았어요. 기존 조건을 유지했어요.')
-    if state=='UNKNOWN':raise ValueError('저장 상태가 미확인이에요. 다시 적용하지 말고 재시작 후 확인해 주세요.')
+    if state in ('UNKNOWN','ABORTED'):raise ValueError('저장 상태가 미확인이에요. 다시 적용하지 말고 재시작 후 확인해 주세요.')
     return target
 
 
