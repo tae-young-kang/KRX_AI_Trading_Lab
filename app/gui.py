@@ -21,7 +21,8 @@ from app.morning_virtual import report_saved as morning_daily_text
 from app.morning_request import setup_text as morning_setup_text,freeze_scheduled as morning_freeze_saved
 from app.storage import Database
 from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
-from app.strategy import evaluate, auto_paper_exit, create_proposals
+from app.strategy import evaluate, auto_paper_exit
+from app.proposal_observation import compare_and_observe as create_proposals
 from app.practice_quotes import fresh_practice_price
 from app.recommendation_request import RecommendationRequest
 from app.outcome_request import OutcomeRequest
@@ -1948,6 +1949,7 @@ class MainWindow(QMainWindow):
         self.remote_analysis.finish(success=True,result=result)
         self.remote_analysis_active=False
         self.refresh_proposals()
+        self.refresh_shadow()
 
     def remote_theme_done(self,result):
         self.remote_theme.finish(success=True,result=result)
@@ -2308,11 +2310,6 @@ class MainWindow(QMainWindow):
 
     def create_optimizer(self):
         status = create_proposals(self.db, self.cfg)
-        for proposal in self.db.proposals():
-            if proposal['state']=='PENDING':
-                candidate=dict(self.cfg)
-                candidate.update(json.loads(proposal['patch_json']))
-                self.shadow.add_proposal_variant(candidate,proposal['id'],self.cfg['data_mode'])
         self.refresh_shadow()
         self.refresh_proposals()
         QMessageBox.information(self,'전략 분석',status)
@@ -2440,11 +2437,6 @@ class MainWindow(QMainWindow):
             key = now.strftime('%Y-%m-%d')
             if self.cfg.get('last_optimize_day','') != key:
                 create_proposals(self.db, self.cfg)
-                for prop in self.db.proposals():
-                    if prop['state']=='PENDING':
-                        variant=dict(self.cfg)
-                        variant.update(json.loads(prop['patch_json']))
-                        self.shadow.add_proposal_variant(variant,prop['id'],self.cfg['data_mode'])
                 self.refresh_shadow()
                 self.cfg['last_optimize_day'] = key
                 self.settings.save()

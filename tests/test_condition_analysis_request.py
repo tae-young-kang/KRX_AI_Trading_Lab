@@ -8,6 +8,7 @@ from app.condition_analysis_request import ConditionAnalysisRequest
 from app.proposal_report import report
 from app.storage import Database
 from app.strategy import create_proposals
+from app.proposal_observation import compare_and_observe
 from app.config import DEFAULTS
 from test_condition_report import add
 from test_telegram_orders import sandbox,update
@@ -99,5 +100,6 @@ def test_gui_poll_uses_owner_task_and_captured_config_without_gui(tmp_path):
     fake.remote_scan=Empty()
     fake.remote_analysis_done=lambda result:request.finish(success=True,result=result)
     fake.run_task=lambda fn,ok,text:calls.append(text) or ok(fn())
-    gui_method('poll_remote_scan',current_mode=current_mode,create_proposals=create_proposals)(fake)
+    gui_method('poll_remote_scan',current_mode=current_mode,create_proposals=compare_and_observe)(fake)
     assert calls==['저장 조건 비교 완료'] and request.state=='DONE' and len(db.proposals())==1
+    assert '새 조회 0회' in report(db,'DEMO')

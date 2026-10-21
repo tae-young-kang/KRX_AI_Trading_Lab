@@ -100,6 +100,8 @@ class ShadowEngine:
               PRIMARY KEY(strategy_id, day));
             CREATE TABLE IF NOT EXISTS shadow_processed_scans(
               scan_id INTEGER PRIMARY KEY, processed_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS shadow_observation_start(
+              strategy_id INTEGER PRIMARY KEY,after_scan_id INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS shadow_pending(
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               strategy_id INTEGER NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL,
@@ -151,12 +153,24 @@ class ShadowEngine:
                         '승인 당시 조건을 버전 고정', 'ACTIVE',data_source=data_source)
 
     def add_proposal_variant(self, cfg, proposal_id, data_source='DEMO'):
-        for s in self.strategies(include_stopped=True):
-            if s['source_proposal_id']==proposal_id and s['data_source']==data_source:
-                return s['id']
-        return self.add(f'미적용 개선안 #{proposal_id}',cfg,
-                        '실제 주문·승인 없이 별도 가상 추적','PROPOSAL',
-                        source_proposal_id=proposal_id,data_source=data_source)
+        signature=strategy_fields(cfg)
+        with self.db.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT * FROM shadow_strategies WHERE source_proposal_id=? AND data_source=?',
+                           (proposal_id,data_source)).fetchone()
+            if row:
+                if json.loads(row['strategy_json'])!=signature:
+                    raise ValueError('기존 개선안 가상 관측의 고정 조건이 달라요. 덮어쓰지 않았어요.')
+                return row['id']
+            cutoff=db.execute('SELECT COALESCE(MAX(scan_id),0) FROM scans').fetchone()[0]
+            sid=db.execute('''INSERT INTO shadow_strategies(
+                name,created_at,status,strategy_json,note,origin,initial_cash,qty,source_proposal_id,data_source)
+                VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                (f'미적용 개선안 #{proposal_id}',now(),'SHADOW',json.dumps(signature,sort_keys=True,ensure_ascii=False),
+                 '생성 이후 새 조회만 별도 가상 관측. 첫 거래 가격/실제 체결 아님.',
+                 'PROPOSAL',1_000_000,1,proposal_id,data_source)).lastrowid
+            db.execute('INSERT INTO shadow_observation_start VALUES(?,?)',(sid,cutoff))
+            return sid
 
     def stop(self, strategy_id):
         with self.db.connect() as db:
@@ -242,6 +256,8 @@ class ShadowEngine:
             source=meta['mode']
             for strategy in [s for s in self.strategies() if s['data_source']==source]:
                 sid=strategy['id'];cfg=json.loads(strategy['strategy_json'])
+                start=db.execute('SELECT after_scan_id FROM shadow_observation_start WHERE strategy_id=?',(sid,)).fetchone()
+                if start and scan_id<=start['after_scan_id']:continue
                 if meta['market']!='전체' and cfg['market']!='전체' and meta['market']!=cfg['market']:
                     continue
                 quotes={code:st for code,st in latest.items()
