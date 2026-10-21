@@ -76,6 +76,15 @@ def latest_targets(database,history,mode,kind,settings,now):
 
 
 def setup_text(root,database,history,mode,settings,text,*,now):
+    if text.split(' ',1)[0]=='/가상일봉':
+        match=re.fullmatch(
+            r'/가상일봉 ([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{4}-[0-9]{2}-[0-9]{2}) '
+            r'(KRX|CSV_USER|DEMO_SYNTHETIC)(?: ([1-9][0-9]{0,5}))?',text)
+        if not match:
+            return '사용법: /가상일봉 목록날짜 평가날짜 KRX|CSV_USER|DEMO_SYNTHETIC [페이지]'
+        from app.morning_bar_review import report_saved as bar_review
+        return bar_review(root,mode,match[1],match[2],history=history,source=match[3],
+                          now=now,page=int(match[4] or 1))
     if text.split(' ',1)[0]=='/추천대조':
         from app.morning_reconciliation import report
         match=re.fullmatch(r'/추천대조(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
