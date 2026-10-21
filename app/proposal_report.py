@@ -22,7 +22,8 @@ def report(database,mode,*,page=1):
             (mode,(page-1)*2)).fetchall()
     labels={'market':'시장','include_etf':'ETF',**{v[0]:k for k,v in NUMBERS.items()},
             **{v:k for k,v in SWITCHES.items()},'exit_take_pct':'가상 익절','exit_stop_pct':'가상 손절','exit_max_days':'가상 보유일'}
-    states={'PENDING':'검토 대기','APPROVED':'PC에서 승인 기록 있음','REJECTED':'거부 기록 있음'}
+    states={'PENDING':'검토 대기','APPROVED':'PC에서 승인 기록 있음','REJECTED':'거부 기록 있음',
+            'APPLYING':'적용 확인 중 · 재적용 금지','UNKNOWN':'적용 상태 미확인 · 재시작 후 확인'}
     lines=[f'[기록에서 찾은 개선안] {mode} · {page}/{pages}페이지',
         '사용자 선택 가상 기록의 비교 후보예요. AI 학습·독립 미래 검증·최적값 확정은 아니에요.',
         '생성 당시 조건 기준이며 현재 조건과 다를 수 있어요. 조회로 조건/주문을 바꾸지 않아요.']

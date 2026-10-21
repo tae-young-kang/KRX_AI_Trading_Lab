@@ -102,6 +102,11 @@ class Settings:
         temp.write_text(json.dumps(self.values, ensure_ascii=False, indent=2), encoding='utf-8')
         os.replace(temp, self.path)
 
+    def strategy_snapshot(self):
+        """Read saved strategy keys only; never credentials or unrelated fields."""
+        from app.proposal_application import snapshot
+        return snapshot(json.loads(self.path.read_text(encoding='utf-8')))
+
 
 class Credentials:
     """Never persist secrets in JSON/SQLite; keyring is required to save credentials."""

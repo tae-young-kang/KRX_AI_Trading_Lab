@@ -56,6 +56,7 @@ from app.telegram_conditions import ConditionCommands
 from app.condition_report import report as condition_report_text
 from app.condition_analysis_request import ConditionAnalysisRequest
 from app.proposal_report import report as proposal_report_text
+from app.proposal_application import apply as apply_proposal,recover as recover_proposals
 from app.kiwoom_mock_watch import require_mock_mode
 from app.kiwoom_mock_watch_worker import MockWatchWorker
 from app.mock_watch_status import MockWatchStatus
@@ -147,6 +148,7 @@ class MainWindow(QMainWindow):
         self.condition_commands = ConditionCommands(data_dir()/'telegram_conditions.db', self.cfg)
         self.creds = Credentials()
         self.db = Database(data_dir() / practice_db_name(self.cfg))
+        self.proposal_recovery=recover_proposals(self.db,self.settings.strategy_snapshot)
         self.demo = DemoMarket()
         self.quote_batch_profile=QuoteBatchProfile()
         self.shadow = ShadowEngine(self.db)
@@ -2307,8 +2309,13 @@ class MainWindow(QMainWindow):
                 self.proposal_table.setItem(i,j,cell(x))
         n = len(self.db.closed_trades())
         self.opt_status.setText(f'연습 매도 완료 {n}건 · 조건별 앞 기록 {max(20,self.cfg["min_strategy_trades"])}건 + 뒤 기록 10건부터 비교')
+        if getattr(self,'proposal_recovery',{}).get('UNKNOWN',0):
+            self.opt_status.setText(self.opt_status.text()+' · 이전 적용 상태 미확인: 저장 조건을 먼저 확인해 주세요.')
 
     def review_proposal(self, accept):
+        if self.scanning or (self.work and self.work.isRunning()):
+            QMessageBox.information(self,'작업 진행 중','진행 중인 작업이 끝난 뒤 개선안을 검토해 주세요.')
+            return
         row = self.proposal_table.currentRow()
         if row < 0:
             return
@@ -2320,17 +2327,12 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self,'전략 개선안 검토',f'{prop["title"]}\n\n{prop["rationale"]}\n\n{verb}할까요?') != QMessageBox.StandardButton.Yes:
             return
         try:
-            patch = json.loads(prop['patch_json'])
-            if accept and any(k not in self.cfg for k in patch):
-                raise ValueError('알 수 없는 전략 변경값입니다.')
-            patch = self.db.review(pid,accept)
             if accept:
-                self.cfg.update(patch)
-                self.cfg['strategy_version'] += 1
-                self.settings.save()
+                apply_proposal(self.db,self.cfg,pid,self.settings.save,self.settings.strategy_snapshot)
                 self.refresh_strategy_fields()
                 self.shadow.ensure_active_reference(dict(self.cfg),self.cfg['data_mode'])
                 self.refresh_shadow()
+            else:self.db.review(pid,False)
             self.db.log('PROPOSAL',f'{pid}: {verb}')
             self.refresh_proposals()
         except Exception as ex:
