@@ -50,12 +50,11 @@ def test_software_attached_entry_is_not_called_verified_exchange_price(tmp_path)
 def test_unreadable_identity_fails_closed_without_new_file(tmp_path):
     tracker,_=new(tmp_path)
     root=record_path(tmp_path,'DEMO',DAY)
+    opened=datetime(2026,10,20,9,0,tzinfo=KST)
+    original=replace(trade(venue='KRX',hour=9),at=opened,fetched_at=opened)
+    tracker.enter(original,now=opened)
     with tracker.db.connect() as db:
-        db.execute("INSERT INTO paper_trades (code,name,market,opened_at,qty,buy_ref,buy_fill,buy_fee,"
-                   "stop_pct,take_pct,max_days,highwater,source,strat_json,entry_json,remaining_qty,"
-                   "realized_pnl,entry_key,entry_digest) VALUES "
-                   "('900001','합성','KOSPI','2026-10-20T09:00:00+09:00',1,1000,1000,0,"
-                   "3,2,5,1000,'DEMO','{}','{}',1,0,'invalid','invalid')")
+        db.execute("UPDATE paper_trades SET entry_json='{}' WHERE code='900001'")
     with pytest.raises(ValueError,match='근거'):
         inspect(tmp_path,'DEMO',DAY,now=NOW)
     assert root.is_file()
@@ -64,10 +63,13 @@ def test_unreadable_identity_fails_closed_without_new_file(tmp_path):
 
 
 def test_original_legacy_cohort_not_misreported_as_krx_open(tmp_path):
-    original,_=setup(tmp_path/'old_data')
-    row=original.plan()
-    output=render({'legacy':True,'mode':'DEMO','day':row['day'],'results':[]})
-    assert '이전 NXT/KRX 혼합 정책' in output
+    _,args=setup(tmp_path/'old_data')
+    from app.morning_virtual import MorningVirtual
+    old=MorningVirtual(Database(record_path(tmp_path,'DEMO',args['day'])))
+    old.prepare(**args)
+    report=inspect(tmp_path,'DEMO',args['day'],now=NOW)
+    assert report['legacy'] is True
+    assert '이전 NXT/KRX 혼합 정책' in render(report)
     # No evidence is manufactured for a cohort which has not been created.
     assert not record_path(tmp_path,'MOCK',DAY).is_file()
 
