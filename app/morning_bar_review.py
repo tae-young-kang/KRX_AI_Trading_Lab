@@ -101,7 +101,13 @@ def observe(plan, bars, *, review_day, source):
                             else 'TAKE_RANGE_ONLY' if hit_take
                             else 'STOP_RANGE_ONLY' if hit_stop
                             else 'NEITHER_TOUCHED')
-            item['change_pct']=round(float((Decimal(str(review.close))/open_price-1)*100),3)
+            pct=float((Decimal(str(review.close))/open_price-1)*100)
+            if isfinite(pct):
+                item['change_pct']=round(pct,3)
+            else:
+                # Extreme malformed quote magnitudes cannot be counted as
+                # observed returns or displayed as a misleading infinity.
+                item['status']='NO_VALID_TRADES'
         results.append(item)
     # Evidence coverage is useful for screening research, but must not be
     # interpreted as a win rate, paper entry, executed exit or realized PnL.
