@@ -49,7 +49,7 @@ def test_actual_saved_selection_is_frozen_once_without_paper_entry_and_survives_
 @pytest.mark.parametrize('case',['late','closed','inactive','stale'])
 def test_no_late_backfill_closed_day_inactive_or_old_recommendation(tmp_path,case):
     schedule,db,history,cfg,clock,sent,prepared,tick=setup(tmp_path)
-    if case=='late':clock[0]=NOW.replace(hour=8)
+    if case=='late':clock[0]=NOW.replace(hour=9,minute=0)
     elif case=='closed':clock[0]=NOW.replace(day=24)
     elif case=='stale':
         with db.connect() as record:record.execute("UPDATE recommendation_batches SET created_at='2026-10-16T17:00:00+09:00'")
@@ -95,7 +95,7 @@ def test_crossing_cutoff_is_not_reported_as_on_time_freeze(tmp_path):
     schedule,db,history,cfg,clock,sent,prepared,tick=setup(tmp_path)
     def prepare(day,text):
         result=freeze_scheduled(tmp_path,db,history,'DEMO',cfg,day,text,now=NOW)
-        clock[0]=NOW.replace(hour=8)
+        clock[0]=NOW.replace(hour=9,minute=0)
         return result
     assert schedule.tick(now=NOW,clock=lambda:clock[0],active=lambda:True,prepare=prepare,send=lambda t:1)=='LATE'
     assert '고정 완료 시각이 마감을 지남' in schedule.summary(clock[0])

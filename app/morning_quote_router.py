@@ -15,6 +15,7 @@ from app.storage import Database
 from app.theme_calendar import recent_sessions
 from app.trading_clock import KST,TradingCalendar
 from app.modes import current_mode
+from app.morning_venue_policy import KRX_OPEN,stored_policy,deadline
 
 
 def validate_trade(evidence,*,now):
@@ -46,14 +47,15 @@ def _safe_path(root,path):
 
 
 def _plan_identity(plan,mode,day):
-    if (not isinstance(plan,dict) or plan.get('version')!=1 or plan.get('kind')!='VIRTUAL_ONLY'
+    if (not isinstance(plan,dict) or plan.get('kind')!='VIRTUAL_ONLY'
             or plan.get('mode')!=mode or plan.get('day')!=day
             or not isinstance(plan.get('origin'),str) or not re.fullmatch('[A-Za-z0-9_-]{1,100}',plan['origin'])
             or type(plan.get('total_won')) is not int or not 1<=plan['total_won']<=10**15
             or not isinstance(plan.get('targets'),list) or not plan['targets']):
         raise ValueError('목록 신원을 확인해 주세요.')
+    policy=stored_policy(plan)
     frozen=datetime.fromisoformat(plan['frozen_at'])
-    if not aware(frozen) or frozen>=datetime.combine(date.fromisoformat(day),time(8),KST):
+    if not aware(frozen) or frozen>=deadline(day,policy):
         raise ValueError('목록 고정 시각을 확인해 주세요.')
     targets=plan['targets']
     for row in targets:
@@ -61,6 +63,9 @@ def _plan_identity(plan,mode,day):
                 or not re.fullmatch('[A-Za-z0-9]{6}',row['code'])
                 or row.get('market') not in ('KOSPI','KOSDAQ') or row.get('venue') not in ('NXT','KRX','UNKNOWN')):
             raise ValueError('고정 종목을 확인해 주세요.')
+        if policy==KRX_OPEN and (row['venue']!='KRX' or 'nxt_eligible' not in row
+                or row['nxt_eligible'] is not None and type(row['nxt_eligible']) is not bool):
+            raise ValueError('KRX 고정 시장과 NXT 자격 자료를 확인해 주세요.')
     if len({row['code'] for row in targets})!=len(targets):raise ValueError('고정 종목이 중복돼요.')
     cfg=plan['settings']
     if (cfg.get('data_mode') not in ('DEMO','KIWOOM') or cfg.get('kiwoom_env') not in ('MOCK','REAL')

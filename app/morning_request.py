@@ -9,6 +9,7 @@ from app.trading_clock import KST
 from app.morning_virtual import MorningVirtual,record_path
 from app.nxt_evidence import latest_for_day
 from app.theme_sources import valid_source
+from app.morning_venue_policy import KRX_OPEN,krx_open,stored_policy
 
 
 def next_day(now):
@@ -19,7 +20,7 @@ def next_day(now):
         import exchange_calendars
         calendar=exchange_calendars.get_calendar('XKRX',start=local.date().isoformat(),end=(local.date()+timedelta(days=30)).isoformat())
         days=[d.strftime('%Y-%m-%d') for d in calendar.sessions]
-        return next(day for day in days if day>local.date().isoformat() or local.time()<time(8))
+        return next(day for day in days if local<krx_open(day))
     except Exception:
         raise ValueError('다음 거래일 달력을 확인하지 못했어요. 평일로 추측하지 않았어요.') from None
 
@@ -109,22 +110,22 @@ def setup_text(root,database,history,mode,settings,text,*,now):
         elif kind=='테마1':cfg.update(exit_take_pct=2,exit_stop_pct=3)
         origin,targets,cfg,selection_info=latest_targets(database,history,mode,kind,cfg,now)
         path=record_path(root,mode,day)
-        frozen=now
+        frozen=now;policy=KRX_OPEN
         if path.is_file():
             reader=Database(path,read_only=True)
             with reader.connect() as db:prior_row=db.execute('SELECT payload FROM morning_cohort WHERE id=1').fetchone()
             if prior_row is not None:
                 prior=MorningVirtual(reader).plan()
-                frozen=datetime.fromisoformat(prior['frozen_at'])
+                frozen=datetime.fromisoformat(prior['frozen_at']);policy=stored_policy(prior)
         tracker=MorningVirtual(Database(path))
         plan=tracker.prepare(day=day,mode=mode,origin=origin,targets=targets,settings=cfg,
-            total_won=int(value)*(10000 if unit=='만원' else 1),now=frozen,selection_info=selection_info)
+            total_won=int(value)*(10000 if unit=='만원' else 1),now=frozen,selection_info=selection_info,venue_policy=policy)
     unknown=sum(t['venue']=='UNKNOWN' for t in plan['targets'])
     return (f'[아침 추천 가상 목록 · {mode}]\n대상 거래일 {day} · 출처 {plan["origin"]}\n'
         f'저장 추천/판정 기준: {plan.get("selection_info",{}).get("asof","미확인")}\n'
         f'고정 종목 {len(plan["targets"])}개 · 총예산 {plan["total_won"]:,}원 균등 배분\n'
         f'익절 +{plan["settings"]["exit_take_pct"]:g}% · 손절 -{plan["settings"]["exit_stop_pct"]:g}%\n'
-        f'NXT/KRX 자격 미확인 {unknown}개 · 미확인은 KRX로 추정하지 않아요.\n'
+        +('새 정책: 전 종목 KRX 시초가 기준 · NXT 자격과 별개로 KRX를 선택해요.\n' if stored_policy(plan)==KRX_OPEN else f'이전 정책의 고정 목록 · NXT/KRX 자격 미확인 {unknown}개 · 시장을 바꾸지 않아요.\n')+
         '추천 목록·설정만 고정했어요. 가상 진입/청산은 별도 첫 거래·시세 근거가 필요해요.\n'
         '현재 첫 거래 자동 수집·자동 진입은 미연결이에요. 실제 주문을 하지 않았어요.\n'
         f'종목 보기: /가상목록 {day}\n목록 확인: /가상추적상태 {day} · 기록 조회: /가상결산 {day}')
@@ -143,6 +144,7 @@ def list_text(plan,*,page=1):
           f'전체 {len(targets):,}종목 · 총 가상 예산 {plan["total_won"]:,}원\n'
           f'종목당 {allocation:,}원 · 배분하지 않은 잔액 {remainder:,}원\n'
           f'익절 +{cfg["exit_take_pct"]:g}% · 손절 -{cfg["exit_stop_pct"]:g}%\n')
+    text+=('시장 정책: 전 종목 KRX 시초가 기준\n' if stored_policy(plan)==KRX_OPEN else '이전 정책의 고정 시장을 유지해요.\n')
     for number,target in enumerate(targets[(page-1)*5:page*5],(page-1)*5+1):
         market={'KOSPI':'코스피','KOSDAQ':'코스닥'}[target['market']]
         venue={'NXT':'NXT 첫 거래','KRX':'KRX 시초가','UNKNOWN':'거래 시장 미확인 · 진입 대기'}[target['venue']]
@@ -158,7 +160,7 @@ def freeze_scheduled(root,database,history,mode,settings,day,text,*,now):
     """Freeze recent stored selection only; never run a scan, feed or order."""
     from app.theme_calendar import recent_sessions
     if next_day(now)!=day or now.astimezone(KST).date().isoformat()!=day:
-        raise ValueError('오늘08:00 전 목록만 자동 고정할 수 있어요. 소급/다음날 대체는 하지 않아요.')
+        raise ValueError('오늘 KRX 개장 전 목록만 자동 고정할 수 있어요. 소급/다음날 대체는 하지 않아요.')
     match=re.fullmatch(r'/가상추적 (일반|테마1) ([1-9][0-9]{0,14})(원|만원)(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
     if not match:raise ValueError('예약한 가상 목록 형식을 확인해 주세요.')
     kind,value,unit,take,stop=match.groups();cfg=dict(settings)
@@ -175,13 +177,15 @@ def freeze_scheduled(root,database,history,mode,settings,day,text,*,now):
             row=db.execute('SELECT report_json FROM theme_runs WHERE id=?',(int(origin.split('_')[-1]),)).fetchone()
         if not row or json.loads(row[0]).get('search_scope',{}).get('include_etf') is not False:
             raise ValueError('ETF 제외를 확인한 테마1 검색 결과가 필요해요. 먼저 /테마1검색을 완료해 주세요.')
-    path=record_path(root,mode,day);frozen=now
+    path=record_path(root,mode,day);frozen=now;policy=KRX_OPEN
     if path.is_file():
         reader=Database(path,read_only=True)
         with reader.connect() as db:prior=db.execute('SELECT payload FROM morning_cohort WHERE id=1').fetchone()
-        if prior:frozen=datetime.fromisoformat(json.loads(prior[0])['frozen_at'])
+        if prior:
+            original=json.loads(prior[0]);frozen=datetime.fromisoformat(original['frozen_at']);policy=stored_policy(original)
     tracker=MorningVirtual(Database(path))
     plan=tracker.prepare(day=day,mode=mode,origin=origin,targets=targets,settings=cfg,
-        total_won=int(value)*(10000 if unit=='만원' else 1),now=frozen,selection_info=info)
+        total_won=int(value)*(10000 if unit=='만원' else 1),now=frozen,selection_info=info,venue_policy=policy)
     return dict(day=plan['day'],mode=plan['mode'],frozen_at=plan['frozen_at'],
+        venue_policy=stored_policy(plan),
         text=setup_text(root,database,history,mode,settings,'/가상추적상태 '+day,now=now))

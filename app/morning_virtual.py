@@ -16,6 +16,7 @@ from app.trade_review import settings_snapshot
 from app.theme_calendar import recent_sessions
 from app.trading_clock import KST,TradingCalendar
 from app.modes import current_mode
+from app.morning_venue_policy import KRX_OPEN,deadline,target_venue,stored_policy
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ class MorningVirtual:
             db.execute('CREATE TABLE IF NOT EXISTS morning_cohort(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS morning_marks(code TEXT,day TEXT,price INTEGER,at TEXT,evidence_hash TEXT,PRIMARY KEY(code,day))')
 
-    def prepare(self,*,day,mode,origin,targets,settings,total_won,now,selection_info=None):
+    def prepare(self,*,day,mode,origin,targets,settings,total_won,now,selection_info=None,venue_policy=None):
         target_day=date.fromisoformat(day)
         if (target_day.isoformat()!=day or mode not in ('DEMO','MOCK','REAL_QUOTES') or not aware(now)
                 or not isinstance(origin,str) or not re.fullmatch('[A-Za-z0-9_-]{1,100}',origin)
@@ -51,7 +52,7 @@ class MorningVirtual:
                 or not isinstance(targets,list) or not targets):
             raise ValueError('가상 추적 날짜·출처·예산·추천 목록을 확인해 주세요.')
         if day not in recent_sessions(target_day):raise ValueError('확인된 거래일이 아니에요.')
-        if now.astimezone(KST)>=datetime.combine(target_day,time(8),KST):
+        if now.astimezone(KST)>=deadline(day,venue_policy):
             raise ValueError('첫 거래 뒤 추천을 소급 선택하지 않아요. 다음 거래일을 선택해 주세요.')
         cfg=settings_snapshot(settings)
         if current_mode(cfg).key!=mode:raise ValueError('추천 모드와 가상 추적의 시세 모드가 달라요.')
@@ -70,13 +71,13 @@ class MorningVirtual:
                     or not isinstance(row.get('name'),str) or not 1<=len(row['name'])<=100
                     or row.get('market') not in ('KOSPI','KOSDAQ')):
                 raise ValueError('추천 종목의 이름·시장·코드를 확인해 주세요.')
-            eligible=row.get('nxt_eligible')
-            # Unknown eligibility never silently turns into KRX.
-            venue='NXT' if eligible is True else 'KRX' if eligible is False else 'UNKNOWN'
+            venue=target_venue(row,venue_policy)
             chosen.append(dict(code=row['code'],name=row['name'],market=row['market'],venue=venue))
+            if venue_policy==KRX_OPEN:chosen[-1]['nxt_eligible']=row.get('nxt_eligible')
         if len({r['code'] for r in chosen})!=len(chosen):raise ValueError('추천 종목이 중복됐어요.')
         payload=dict(version=1,kind='VIRTUAL_ONLY',day=day,mode=mode,origin=origin,frozen_at=now.astimezone(KST).isoformat(),
                      targets=chosen,settings=cfg,total_won=total_won)
+        if venue_policy==KRX_OPEN:payload.update(version=2,venue_policy=KRX_OPEN)
         if selection_info is not None:
             if (not isinstance(selection_info,dict) or set(selection_info)!= {'kind','asof'}
                     or selection_info['kind'] not in ('GENERAL','THEME1') or not isinstance(selection_info['asof'],str)):
@@ -101,6 +102,11 @@ class MorningVirtual:
         if row is None:raise ValueError('먼저 아침 추천 목록을 고정해 주세요.')
         plan=json.loads(row['payload'])
         if plan.get('kind')!='VIRTUAL_ONLY':raise ValueError('별도의 아침 가상 추적 기록이 필요해요.')
+        policy=stored_policy(plan)
+        if policy==KRX_OPEN and (not isinstance(plan.get('targets'),list) or not plan['targets']
+                or any(not isinstance(row,dict) or row.get('venue')!='KRX' or 'nxt_eligible' not in row
+                    or row['nxt_eligible'] is not None and type(row['nxt_eligible']) is not bool for row in plan['targets'])):
+            raise ValueError('KRX 목록의 고정 시장·NXT 자격 자료를 확인해 주세요.')
         return plan
 
     @staticmethod
@@ -109,6 +115,7 @@ class MorningVirtual:
 
     def _check(self,evidence,now,*,opening):
         plan=self.plan()
+        policy=stored_policy(plan)
         if (type(evidence) is not VenueTrade or not aware(now) or not aware(evidence.at) or not aware(evidence.fetched_at)
                 or evidence.mode!=plan['mode'] or type(evidence.price_won) is not int or not 0<evidence.price_won<10**12
                 or not isinstance(evidence.evidence_hash,str) or not re.fullmatch('[a-f0-9]{64}',evidence.evidence_hash)
@@ -123,6 +130,8 @@ class MorningVirtual:
         if (day.isoformat() not in recent_sessions(day) or not TradingCalendar(open_dates={day}).is_open(evidence.at,evidence.venue)
                 or (opening and day.isoformat()!=plan['day'])):
             raise ValueError('추천일의 확인된 거래 구간을 확인해 주세요.')
+        if policy==KRX_OPEN and (target['venue']!='KRX' or evidence.at<deadline(day.isoformat(),policy)):
+            raise ValueError('KRX 개장 이후의 확인된 시세가 필요해요.')
         return plan,target
 
     def enter(self,evidence,*,now):

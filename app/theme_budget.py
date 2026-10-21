@@ -42,7 +42,7 @@ def preview_latest(history, *, mode, total_won, fee_bps, buffer_bps, take_bps=20
         preview=equal_budget_preview(total_won=total_won,targets=targets,available_won=None,
                                      fee_bps=fee_bps,buffer_bps=buffer_bps)
         return dict(preview,run_id=run['id'],price_asof=run['day'],source=run['source'],mode=mode,
-                    take_bps=take_bps,stop_bps=stop_bps)
+                    take_bps=take_bps,stop_bps=stop_bps,venue_policy='KRX_OPEN')
 
 
 def plan_text(history,mode,text):
@@ -81,8 +81,8 @@ def plan_text(history,mode,text):
         lines.append(f'{target["name"]} ({target["code"]}) · {label}')
     lines.extend([f'예상 확보액 {preview["reserved_won"]:,}원 · 남는 예산 {preview["unreserved_won"]:,}원',
                   '수수료 0.02%·가격 여유 2% 가정. 소수점 주수는 버려요.',
-                  '시장 계획: NXT 가능 종목은 NXT 첫 거래, 그 외는 KRX 첫 거래.',
-                  '예수금·다음 NXT/KRX 거래 가능 여부는 아직 확인하지 않았어요.',
+                  '시장 계획: NXT 가능 여부와 관계없이 전 종목 KRX 시초가 시장가 매수 기준.',
+                  '예수금·다음 KRX 개장과 주문 가능 여부는 아직 확인하지 않았어요.',
                   '시초가 주문·익절/손절 자동 매도는 실행 연결 전이에요.'])
     if page<pages:
         lines.append(f'다음: /테마1계획 {symbol} {number}{unit} 페이지 {page+1}'+
@@ -103,7 +103,7 @@ def preview_text(preview, *, page=None):
            f'수수료 가정 {preview["fee_bps"]/100:.2f}% · 가격 여유 {preview["buffer_bps"]/100:.2f}%',
            f'매수 후 계획: 체결가 대비 익절 +{preview.get("take_bps",200)/100:.2f}% · 손절 -{preview.get("stop_bps",300)/100:.2f}%',
            '매도 감시·주문은 연결되지 않았어요. 실제 체결가 확인 전에는 매도 목표가를 정하지 않아요.',
-           'NXT 대상과 다음 첫 거래 가능 여부는 주문 전에 다시 확인해야 해요. 시장 자동 선택은 아직 연결되지 않았어요.',
+           '신규 매수 정책: 전 종목 KRX 시초가 시장가 기준. 실제 주문 연결은 아직 완료 전이에요.',
            '증권사 주문 가능 금액은 조회하지 않았어요. 실제 매수 가능 여부는 미확인입니다.']
     rows=preview['targets'] if page is None else preview['targets'][(page-1)*5:page*5]
     if page is not None:

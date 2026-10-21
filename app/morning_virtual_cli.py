@@ -6,7 +6,8 @@ from pathlib import Path
 from app.config import data_dir
 from app.storage import Database
 from app.morning_virtual import MorningVirtual,VenueTrade,record_path
-from app.morning_quote_router import route_trade,validate_trade
+from app.morning_quote_router import route_trade,validate_trade,_plan_identity
+from app.morning_venue_policy import stored_policy,target_venue
 from app.trading_clock import KST
 
 
@@ -14,6 +15,9 @@ def replay(root,plan,events,*,now):
     # Validate shape/time first; later per-event failures can leave earlier
     # valid paper records. No input can select an arbitrary database path.
     path=record_path(root,plan['mode'],plan['day'])
+    policy=stored_policy(plan) if 'version' in plan or 'venue_policy' in plan else None
+    if plan.get('version')==2:_plan_identity(plan,plan['mode'],plan['day'])
+    for target in plan['targets']:target_venue(target,policy)
     frozen=datetime.fromisoformat(plan['frozen_at'])
     if frozen.tzinfo is None or frozen.utcoffset() is None or frozen>now:raise ValueError('추천 고정 시각을 확인해 주세요.')
     if not isinstance(events,list) or len(events)>100000:raise ValueError('거래 근거 목록을 확인해 주세요.')
@@ -28,15 +32,17 @@ def replay(root,plan,events,*,now):
         if trade.kind!='FIRST_TRADE':
             validate_trade(trade,now=trade.fetched_at)
             selected=next((row for row in plan['targets'] if isinstance(row,dict) and row.get('code')==trade.code),None)
-            eligible=selected.get('nxt_eligible') if selected else None
-            venue='NXT' if eligible is True else 'KRX' if eligible is False else 'UNKNOWN'
+            venue=target_venue(selected,policy) if selected else 'UNKNOWN'
             if selected is None or venue!=trade.venue:
                 raise ValueError('선택한 아침 목록과 거래 근거의 종목·거래 시장이 달라요.')
         parsed.append(trade)
     if any(a.fetched_at>b.fetched_at for a,b in zip(parsed,parsed[1:])):raise ValueError('거래 근거를 시간 순서로 입력해 주세요.')
     tracker=MorningVirtual(Database(path))
+    # Original v1 replay ignored this optional input field. Do not migrate a
+    # previously replayed cohort just because its source JSON contains it.
     tracker.prepare(day=plan['day'],mode=plan['mode'],origin=plan['origin'],targets=plan['targets'],
-        settings=plan['settings'],total_won=plan['total_won'],now=frozen)
+        settings=plan['settings'],total_won=plan['total_won'],now=frozen,
+        selection_info=plan.get('selection_info') if policy is not None else None,venue_policy=policy)
     results=[]
     for trade in parsed:
         if trade.kind=='FIRST_TRADE':result=tracker.enter(trade,now=trade.fetched_at)

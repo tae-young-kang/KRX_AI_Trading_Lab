@@ -36,7 +36,9 @@ def test_saved_general_recommendations_and_exit_policy_are_frozen(tmp_path):
     text=call(tmp_path,db,history,cfg,'/가상추적 일반 100만원 익절 2 손절 3')
     plan=MorningVirtual(Database(record_path(tmp_path,'DEMO','2026-10-20'),read_only=True)).plan()
     assert [r['code'] for r in plan['targets']]==['900001','900002']
-    assert plan['targets'][0]['venue']=='NXT' and plan['targets'][1]['venue']=='UNKNOWN'
+    assert plan['version']==2 and plan['venue_policy']=='KRX_OPEN'
+    assert [row['venue'] for row in plan['targets']]==['KRX','KRX']
+    assert [row['nxt_eligible'] for row in plan['targets']]==[True,None]
     assert plan['settings']['min_value_eok']==DEFAULTS['min_value_eok']
     assert plan['settings']['exit_take_pct']==2 and plan['total_won']==1000000
     assert plan['selection_info']['asof'].startswith('2026-10-19')
@@ -59,7 +61,7 @@ def test_theme_selection_uses_all_matches_and_separate_default_policy(tmp_path):
 
 
 @pytest.mark.parametrize('stamp,expected',[
-    ('2026-10-20T07:59:00+09:00','2026-10-20'),('2026-10-20T08:00:00+09:00','2026-10-21'),
+    ('2026-10-20T08:30:00+09:00','2026-10-20'),('2026-10-20T09:00:00+09:00','2026-10-21'),
     ('2026-10-23T20:00:00+09:00','2026-10-26'),('2026-10-24T07:00:00+09:00','2026-10-26')])
 def test_target_day_skips_closed_days_and_passed_opening(stamp,expected):
     assert next_day(datetime.fromisoformat(stamp))==expected
@@ -134,5 +136,5 @@ def test_private_frozen_list_command_remains_readable_when_stopped(tmp_path,sand
     assert service.handle(bad) is None
     service.handle(update(sandbox,3,'/중지'))
     reply=service.handle(update(sandbox,4,'/가상목록'))
-    assert '전체 2종목' in reply and '합성 연습 시세' in reply and '거래 시장 미확인' in reply
+    assert '전체 2종목' in reply and '합성 연습 시세' in reply and '전 종목 KRX 시초가 기준' in reply
     assert broker.calls==[]
