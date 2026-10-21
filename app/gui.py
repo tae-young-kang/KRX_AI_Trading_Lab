@@ -57,6 +57,7 @@ from app.telegram_conditions import ConditionCommands
 from app.condition_report import report as condition_report_text
 from app.condition_analysis_request import ConditionAnalysisRequest
 from app.morning_quote_request import MorningQuoteRequest
+from app.theme_opening_requests import handle as theme_opening_handle
 from app.morning_quote_refresh import refresh as refresh_morning_quotes
 from app.proposal_report import report as proposal_report_text
 from app.proposal_application import apply as apply_proposal,recover as recover_proposals
@@ -1730,6 +1731,8 @@ class MainWindow(QMainWindow):
                                      recommendation_request=self.remote_scan,
                                      theme_request=self.remote_theme,
                                      outcome_request=self.remote_outcome,
+                                     theme_opening=lambda text,history=self.history,mode=current_mode(self.cfg).key,**kwargs:
+                                         theme_opening_handle(history,mode,text,**kwargs) if current_mode(self.cfg).key==mode else '시세 모드가 바뀌었어요. 개인 수신을 다시 시작해 주세요.',
                                      theme_plan=lambda text,history=self.history,mode=current_mode(self.cfg).key:theme_plan_text(history,mode,text),
                                      recommendation_status=lambda db=self.db, mode=current_mode(self.cfg).key: recommendation_schedule_summary(db,mode,enabled=self.cfg.get('recommendation_auto_evaluate'),now=datetime.now(KST),automatic_source=recommendation_calendar_source(self.cfg,mode)),
                                      watch_status=self.mock_watch_status.summary,
