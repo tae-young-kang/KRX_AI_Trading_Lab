@@ -50,6 +50,7 @@ def test_both_thresholds_hit_is_not_resolved_as_winning_or_losing_trade(tmp_path
     assert '평가일 고가·저가상 기준가격 미도달' in report
     assert '종가 변화 +1.000%' in report
     assert '실현손익을 기록하지 않아요' in report
+    assert '가격 참고 가능 2/3종목 · 자료 누락/무효 1종목 · 익절·손절 동시 범위 1종목' in report
     assert tracker.db.trades()==[]
     assert record_path(tmp_path,'DEMO',COHORT).read_bytes()==original
 
@@ -167,3 +168,17 @@ def test_telegram_command_is_read_only_with_owner_controls(tmp_path,sandbox):
     assert '선후 순서 미확인' in service.handle(update(sandbox,4,cmd))
     assert '사용법' in service.handle(update(sandbox,5,'/가상일봉 기타'))
     assert broker.calls==[] and tracker.db.trades()==[]
+
+
+def test_price_evidence_summary_never_counts_extreme_invalid_return_as_observed(tmp_path):
+    tracker,history=installed(tmp_path)
+    with history.connect() as db:
+        db.execute("UPDATE daily_bars SET open=1e-300,low=1e-300,high=1000,close=1000 "
+                   "WHERE source='DEMO_SYNTHETIC' AND day=? AND code=?",
+                   (COHORT,'900001'))
+    text=report_saved(tmp_path,'DEMO',COHORT,REVIEW,
+                      history=history,source='DEMO_SYNTHETIC',now=NOW)
+    assert '가격 참고 가능 1/3종목 · 자료 누락/무효 2종목' in text
+    assert '거래량이나 가격 근거가 부족해요' in text
+    assert 'inf%' not in text and 'nan%' not in text
+    assert tracker.db.trades()==[]
