@@ -95,12 +95,24 @@ def test_wrong_mode_missing_cohort_and_future_day_fail_without_writing(tmp_path)
 
 
 def test_krx_unconfirmed_raw_snapshot_not_used_as_proven_open(tmp_path):
-    tracker,history=installed(tmp_path)
+    from app.config import DEFAULTS
+    from app.morning_virtual import MorningVirtual
+    from app.morning_venue_policy import KRX_OPEN
+
+    history=HistoryStore(tmp_path/'history.db')
+    config=deepcopy(DEFAULTS)
+    config.update(data_mode='KIWOOM',kiwoom_env='REAL',exit_take_pct=2,exit_stop_pct=3)
+    tracker=MorningVirtual(Database(record_path(tmp_path,'REAL_QUOTES',COHORT)))
+    tracker.prepare(day=COHORT,mode='REAL_QUOTES',origin='scan_1',
+                    targets=[dict(code='900001',name='가상',market='KOSPI',nxt_eligible=None)],
+                    settings=config,total_won=100000,now=datetime(2026,10,20,8,30,tzinfo=KST),
+                    venue_policy=KRX_OPEN)
     history.insert_bars([daily(COHORT),daily(REVIEW)],'KRX')
-    # No post-close fetched_days evidence was provided.
+    # No post-close fetched_days evidence was provided, so KRX source cannot
+    # be promoted to a confirmed daily bar merely because OHLC rows exist.
     result=report_saved(tmp_path,'REAL_QUOTES',COHORT,REVIEW,
                         history=history,source='KRX',now=NOW)
-    assert '고정한 아침 추천 목록이 없어요' in result
+    assert '고정일의 일봉 시가가 없어요' in result
     assert tracker.db.trades()==[]
 
 
