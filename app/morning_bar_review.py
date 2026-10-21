@@ -103,8 +103,15 @@ def observe(plan, bars, *, review_day, source):
                             else 'NEITHER_TOUCHED')
             item['change_pct']=round(float((Decimal(str(review.close))/open_price-1)*100),3)
         results.append(item)
+    # Evidence coverage is useful for screening research, but must not be
+    # interpreted as a win rate, paper entry, executed exit or realized PnL.
+    checked=sum(item['change_pct'] is not None for item in results)
+    ambiguous=sum(item['status']=='BOTH_TOUCHED_ORDER_UNKNOWN' for item in results)
     return dict(cohort_day=plan['day'],review_day=review_day,mode=plan['mode'],
-                source=source,results=results)
+                source=source,results=results,
+                evidence=dict(total=len(results),price_observed=checked,
+                              missing_or_invalid=len(results)-checked,
+                              both_thresholds_unknown=ambiguous))
 
 
 def report_saved(root, mode, cohort_day, review_day, *, history, source, now, page=1):
@@ -139,6 +146,9 @@ def report_saved(root, mode, cohort_day, review_day, *, history, source, now, pa
         return f'사후 일봉 관측은 {pages}페이지까지 있어요.'
     lines=[f'[추천 일봉 사후 관측] 목록 {cohort_day} · 관측 {review_day} · {page}/{pages}페이지',
            f'{mode} · 자료 {source} · 고정 종목 {len(targets)}개',
+           (f"가격 참고 가능 {report['evidence']['price_observed']}/{report['evidence']['total']}종목"
+            f" · 자료 누락/무효 {report['evidence']['missing_or_invalid']}종목"
+            f" · 익절·손절 동시 범위 {report['evidence']['both_thresholds_unknown']}종목"),
            '고정일의 일봉 시가 대비 종가 변화와 평가일의 고가·저가 범위만 비교해요.',
            '일봉 시가는 공식 첫 체결/주문 체결을 증명하지 않으며, 매수·매도·승패·실현손익을 기록하지 않아요.']
     for item in targets[(page-1)*5:page*5]:
