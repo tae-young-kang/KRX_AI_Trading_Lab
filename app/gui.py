@@ -596,6 +596,15 @@ class MainWindow(QMainWindow):
         detail.clicked.connect(self.show_trade_conditions)
         row.addWidget(detail)
         v.addLayout(row)
+        operations = QHBoxLayout()
+        for title,handler in (('전체 운영 기록 백업',self.request_operating_backup),
+                              ('전체 백업 검사',self.inspect_operating_backup),
+                              ('새 폴더로 복구',self.request_operating_restore)):
+            button=QPushButton(title)
+            button.clicked.connect(handler)
+            operations.addWidget(button)
+        v.addLayout(operations)
+        v.addWidget(lbl('전체 백업·복구는 프로그램 종료 후 진행해요. 키·설정은 제외하며 현재 기록을 덮지 않아요.','Muted'))
         self.trade_table = make_table(['ID','종목','구분','남은/처음 수량','매수가','평균 매도가','실현손익(원)',
                                        '손익률','매수일','청산일','사유','승패'])
         v.addWidget(self.trade_table)
@@ -2495,6 +2504,53 @@ class MainWindow(QMainWindow):
             self.auto_button.setText('자동 검색 중지')
             self.scan()
 
+    def defer_operating_request(self,request):
+        self.pending_operating_request=None
+        try:
+            request.validate()
+            detail=('전체 운영 기록을 백업해요.' if request.action=='backup' else
+                    '새 폴더에만 복구해요. 현재 데이터 위치는 바뀌지 않아요.')
+            location=str(request.folder if request.action=='backup' else request.target)
+            answer=QMessageBox.question(self,'종료 후 기록 작업',
+                detail+'\n프로그램을 종료한 뒤 실행합니다.\n저장 위치: '+location+
+                '\n키·설정은 포함하지 않으며 주문을 실행하지 않아요. 계속할까요?',
+                QMessageBox.Yes|QMessageBox.No,QMessageBox.No)
+            if answer!=QMessageBox.Yes:return
+            self.pending_operating_request=request
+            if not self.close():self.pending_operating_request=None
+        except Exception:
+            self.pending_operating_request=None
+            QMessageBox.information(self,'기록 작업 보류','폴더·진행 중인 작업을 확인해 주세요. 종료 후 작업을 예약하지 않았어요.')
+
+    def request_operating_backup(self):
+        self.pending_operating_request=None
+        folder=QFileDialog.getExistingDirectory(self,'전체 백업을 저장할 폴더 · 현재 기록 폴더 밖')
+        if not folder:return
+        from app.operating_backup_request import OperatingRequest
+        self.defer_operating_request(OperatingRequest('backup',data_dir(),Path(folder)))
+
+    def request_operating_restore(self):
+        self.pending_operating_request=None
+        folder=QFileDialog.getExistingDirectory(self,'검사한 전체 운영 백업 폴더 선택')
+        if not folder:return
+        parent=QFileDialog.getExistingDirectory(self,'새 복구 폴더를 만들 위치 · 현재 기록 폴더 밖')
+        if not parent:return
+        import uuid
+        from app.operating_backup_request import OperatingRequest
+        target=Path(parent)/('krx-restored-'+uuid.uuid4().hex)
+        self.defer_operating_request(OperatingRequest('restore',data_dir(),Path(folder),target))
+
+    def inspect_operating_backup(self):
+        if self.work and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 백업을 검사해 주세요.')
+            return
+        folder=QFileDialog.getExistingDirectory(self,'검사할 전체 운영 백업 폴더 선택')
+        if not folder:return
+        from app.operating_backup import verify
+        self.run_task(lambda:verify(folder),lambda info:QMessageBox.information(self,'전체 백업 검사 완료',
+            f"운영 기록 {len(info['files'])}개를 확인했어요.\n저장 시각: {info['created_at']}\n현재 기록 변경·복구·주문은 하지 않았어요."),
+            '전체 운영 백업 검사 완료')
+
     def inspect_saved_backup(self):
         """Inspect an explicitly selected snapshot; never overwrite or restore."""
         if self.work and self.work.isRunning():
@@ -2543,15 +2599,18 @@ class MainWindow(QMainWindow):
         if self.mock_watch_worker and self.mock_watch_worker.isRunning():
             self.stop_mock_notices()
             QMessageBox.information(self,'모의 연결 종료 중','모의 알림 연결이 끝난 뒤 다시 닫아 주세요.')
+            self.pending_operating_request=None
             event.ignore()
             return
         if self.telegram_order_worker and self.telegram_order_worker.isRunning():
             self.stop_telegram_orders()
             QMessageBox.information(self, '수신 종료 중', '텔레그램 수신이 종료된 뒤 다시 닫아주세요. 확인 대기는 철회했습니다.')
+            self.pending_operating_request=None
             event.ignore()
             return
         if self.work and self.work.isRunning():
             QMessageBox.information(self,'조회 진행 중','진행 중인 요청이 종료된 뒤 닫아주세요.')
+            self.pending_operating_request=None
             event.ignore()
             return
         event.accept()
@@ -2570,4 +2629,15 @@ def main():
     except ReceiverAlreadyRunning:
         QMessageBox.information(None,'프로그램 사용 중','이미 프로그램이 켜져 있거나 운영 기록을 백업 중이에요. 기존 창이나 백업을 먼저 종료해 주세요.')
         return
+    request=getattr(win,'pending_operating_request',None)
+    win.pending_operating_request=None
+    if request is not None and result==0:
+        from app.operating_backup_request import execute
+        outcome=execute(request)
+        if outcome['ok']:
+            title='전체 백업 완료' if outcome['action']=='backup' else '새 폴더 복구 완료'
+            QMessageBox.information(None,title,'저장 위치: '+outcome['path']+
+                '\n키·설정은 제외했어요. 현재 데이터 위치와 주문 허용은 바뀌지 않았어요.'+
+                '\n복구한 기록의 미실행·미확인 요청을 확인하세요. 자동 재시작·주문은 하지 않았어요.')
+        else:QMessageBox.information(None,'기록 작업 실패',outcome['message'])
     sys.exit(result)
