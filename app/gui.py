@@ -54,6 +54,8 @@ from app.trade_review import outcome, condition_label, settings_snapshot
 from app.telegram_worker import TelegramOrderWorker
 from app.telegram_conditions import ConditionCommands
 from app.condition_report import report as condition_report_text
+from app.condition_analysis_request import ConditionAnalysisRequest
+from app.proposal_report import report as proposal_report_text
 from app.kiwoom_mock_watch import require_mock_mode
 from app.kiwoom_mock_watch_worker import MockWatchWorker
 from app.mock_watch_status import MockWatchStatus
@@ -171,6 +173,8 @@ class MainWindow(QMainWindow):
         self.remote_theme_active = False
         self.remote_outcome=None
         self.remote_outcome_active=False
+        self.remote_analysis=None
+        self.remote_analysis_active=False
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
         self.resize(1390, 860)
         self.setMinimumSize(1100, 690)
@@ -1696,14 +1700,17 @@ class MainWindow(QMainWindow):
             return
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
         self.condition_commands.sync(self.cfg, self.settings.save, now=datetime.now().timestamp(), busy=True)
-        if self.remote_scan_active or self.remote_theme_active:
+        if self.remote_scan_active or self.remote_theme_active or self.remote_analysis_active:
             return
         self.remote_scan = RecommendationRequest(current_mode(self.cfg).key)
         self.remote_theme = ThemeRequest(self.history,current_mode(self.cfg).key)
+        self.remote_analysis=ConditionAnalysisRequest(current_mode(self.cfg).key,
+            lambda page,db=self.db,mode=current_mode(self.cfg).key:proposal_report_text(db,mode,page=page))
         self.remote_outcome=OutcomeRequest(current_mode(self.cfg).key,
             source=lambda mode=current_mode(self.cfg).key:recommendation_calendar_source(self.cfg,mode))
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
+                                     analysis_request=self.remote_analysis,
                                      condition_report=lambda page=1,db=self.db,mode=current_mode(self.cfg).key:
                                          condition_report_text(db,mode,min_train=max(20,int(self.cfg['min_strategy_trades'])),page=page),
                                      recommendation_request=self.remote_scan,
@@ -1830,6 +1837,11 @@ class MainWindow(QMainWindow):
             self.task_failed(str(ex))
 
     def task_failed(self, message):
+        if getattr(self,'remote_analysis_active',False):
+            self.remote_analysis.finish(success=False)
+            self.remote_analysis_active=False
+            self.statusBar().showMessage('조건 비교 미완료 · 저장 기록을 확인하세요.')
+            return
         if getattr(self,'remote_outcome_active',False):
             self.remote_outcome.finish(success=False)
             self.remote_outcome_active=False
@@ -1894,6 +1906,13 @@ class MainWindow(QMainWindow):
                                  busy=bool(self.work and self.work.isRunning()), active=active):
             self.scan(remote=True)
             return
+        analysis=getattr(self,'remote_analysis',None)
+        if analysis is not None and analysis.take(current_mode(self.cfg).key,
+                busy=bool(self.work and self.work.isRunning()),active=active):
+            self.remote_analysis_active=True
+            db,cfg=self.db,dict(self.cfg)
+            self.run_task(lambda:create_proposals(db,cfg),self.remote_analysis_done,'저장 조건 비교 완료')
+            return
         outcome=getattr(self,'remote_outcome',None)
         if outcome is not None:
             data=outcome.take(current_mode(self.cfg).key,busy=bool(self.work and self.work.isRunning()),active=active)
@@ -1916,6 +1935,11 @@ class MainWindow(QMainWindow):
     def remote_outcome_done(self,result):
         self.remote_outcome.finish(success=True,result=result)
         self.remote_outcome_active=False
+
+    def remote_analysis_done(self,result):
+        self.remote_analysis.finish(success=True,result=result)
+        self.remote_analysis_active=False
+        self.refresh_proposals()
 
     def remote_theme_done(self,result):
         self.remote_theme.finish(success=True,result=result)
@@ -2226,7 +2250,7 @@ class MainWindow(QMainWindow):
             self.count_info.setText('추천 조건 저장을 확인해야 해요. 프로그램에서 조건을 다시 확인해 주세요.')
 
     def save_strategy(self):
-        if self.scanning:
+        if self.scanning or (self.work and self.work.isRunning()):
             QMessageBox.information(self, '조회 진행 중', '조회가 끝나거나 취소한 뒤 조건을 저장하세요.')
             return
         cfg = dict(self.cfg)

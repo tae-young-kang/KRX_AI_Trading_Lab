@@ -7,7 +7,7 @@ from math import isfinite, fsum
 from datetime import datetime
 from pathlib import Path
 from app.db import ClosingConnection
-from app.trade_review import settings_snapshot, review_conditions, outcome
+from app.trade_review import settings_snapshot, review_conditions, outcome, SNAPSHOT_KEYS
 from app import recommendations
 from app import recommendation_overview
 from app import paper_exits
@@ -69,6 +69,8 @@ class Database:
                   title TEXT NOT NULL, rationale TEXT NOT NULL,
                   patch_json TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'PENDING',
                   reviewed_at TEXT);
+                CREATE TABLE IF NOT EXISTS proposal_context(
+                  proposal_id INTEGER PRIMARY KEY,mode TEXT NOT NULL,base_json TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS audit(
                   id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,
                   kind TEXT NOT NULL, message TEXT NOT NULL);
@@ -289,14 +291,27 @@ class Database:
         with self.connect() as db:
             return [dict(x) for x in db.execute('SELECT * FROM proposals ORDER BY id DESC LIMIT 100')]
 
-    def propose(self, title, rationale, patch):
+    def propose(self, title, rationale, patch,*,base_settings=None):
+        context=None
+        if base_settings is not None:
+            from app.modes import current_mode
+            base=settings_snapshot(base_settings)
+            if (set(base)!=set(SNAPSHOT_KEYS) or base['data_mode'] not in ('DEMO','KIWOOM')
+                    or base['kiwoom_env'] not in ('MOCK','REAL')):
+                raise ValueError('개선안 생성 당시의 조건·모드를 확인해 주세요.')
+            context=(current_mode(base).key,json.dumps(base,ensure_ascii=False,sort_keys=True,allow_nan=False))
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
             # prevent identical unreviewed proposal duplication
             p = json.dumps(patch, ensure_ascii=False, sort_keys=True)
-            if db.execute('SELECT 1 FROM proposals WHERE patch_json=? AND state=?', (p, 'PENDING')).fetchone():
+            duplicate=(db.execute('SELECT 1 FROM proposals p JOIN proposal_context c ON c.proposal_id=p.id WHERE p.patch_json=? AND p.state=? AND c.mode=? AND c.base_json=?',
+                                 (p,'PENDING',*context)).fetchone() if context else
+                       db.execute('SELECT 1 FROM proposals WHERE patch_json=? AND state=?',(p,'PENDING')).fetchone())
+            if duplicate:
                 return False
-            db.execute('INSERT INTO proposals(created_at,title,rationale,patch_json,state) VALUES(?,?,?,?,?)',
+            cursor=db.execute('INSERT INTO proposals(created_at,title,rationale,patch_json,state) VALUES(?,?,?,?,?)',
                        (now(), title, rationale, p, 'PENDING'))
+            if context:db.execute('INSERT INTO proposal_context VALUES(?,?,?)',(cursor.lastrowid,*context))
             return True
 
     def review(self, proposal_id, accepted):
