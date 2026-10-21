@@ -173,7 +173,7 @@ def test_telegram_command_is_read_only_with_owner_controls(tmp_path,sandbox):
 def test_price_evidence_summary_never_counts_extreme_invalid_return_as_observed(tmp_path):
     tracker,history=installed(tmp_path)
     with history.connect() as db:
-        db.execute("UPDATE daily_bars SET open=1e-300,low=1e-300,high=1000,close=1000 "
+        db.execute("UPDATE daily_bars SET open=1e-307,low=1e-307,high=1000,close=1000 "
                    "WHERE source='DEMO_SYNTHETIC' AND day=? AND code=?",
                    (COHORT,'900001'))
     text=report_saved(tmp_path,'DEMO',COHORT,REVIEW,
