@@ -52,7 +52,8 @@ def _index(bars, *, entry_day, review_day):
         nums = (item.open, item.high, item.low, item.close, item.volume)
         if (any(type(x) not in (int,float) or not isfinite(x) for x in nums)
                 or min(nums[:4])<=0 or item.volume<0
-                or item.low>min(item.open,item.close) or item.high<max(item.open,item.close)):
+                or item.low>item.high or item.low>min(item.open,item.close)
+                or item.high<max(item.open,item.close)):
             raise ValueError('일봉의 가격·거래량 범위를 확인해 주세요.')
         key=(item.date,item.market,item.code)
         if key in indexed:
@@ -136,7 +137,7 @@ def report_saved(root, mode, cohort_day, review_day, *, history, source, now, pa
     pages=max(1,(len(targets)+4)//5)
     if page>pages:
         return f'사후 일봉 관측은 {pages}페이지까지 있어요.'
-    lines=[f'[추천 일봉 사후 관측] 목록 {cohort_day} · 관측 {review_day} · {page}/{pages}',
+    lines=[f'[추천 일봉 사후 관측] 목록 {cohort_day} · 관측 {review_day} · {page}/{pages}페이지',
            f'{mode} · 자료 {source} · 고정 종목 {len(targets)}개',
            '고정일의 일봉 시가 대비 종가 변화와 평가일의 고가·저가 범위만 비교해요.',
            '일봉 시가는 공식 첫 체결/주문 체결을 증명하지 않으며, 매수·매도·승패·실현손익을 기록하지 않아요.']
