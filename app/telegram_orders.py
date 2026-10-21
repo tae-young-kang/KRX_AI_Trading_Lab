@@ -266,7 +266,7 @@ class TelegramOrderService:
                 else:
                     try:reply=self.mock_daily(match[1] or self.clock().astimezone(KST).date().isoformat(),scope=self.scope,page=int(match[2] or 1))
                     except Exception:reply='모의 결산 날짜와 별도 접수·체결/비용 장부를 확인해 주세요. 손익을 추측하지 않았어요.'
-            elif text.split(' ',1)[0] in ('/가상추적','/가상추적상태','/가상하루','/가상목록','/추천대조'):
+            elif text.split(' ',1)[0] in ('/가상추적','/가상추적상태','/가상하루','/가상목록','/추천대조','/가상일봉'):
                 if not self.morning_setup:reply='가상 추적 목록 연결이 아직 없어요.'
                 elif text.split(' ',1)[0]=='/가상추적' and not owner['active']:reply='새 가상 목록 고정을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
                 else:
@@ -464,6 +464,7 @@ class TelegramOrderService:
                 reply += '\n/실제결산: 입력한 실제 체결의 하루 기록 · 증권사 자동 대조 전'
                 reply += '\n/가상결산: 저장한 아침 추천 목록의 가상 성과'
                 reply += '\n/가상하루: 이전 아침 목록의 이월 보유까지 오늘 기준 조회'
+                reply += '\n/가상일봉 목록날짜 평가날짜 KRX: 사후 일봉 범위만 관측 · 실제 체결 아님'
                 reply += '\n/모의결산: 개인 모의 요청의 저장된 체결·비용 근거 하루 기록'
                 reply += '\n/결산알림상태: 거래일20:30 저장 결산 발송 상태'
                 reply += '\n/가상추적 일반 100만원: 다음 아침 가상 목록 고정 · 실제 주문 안 함'
