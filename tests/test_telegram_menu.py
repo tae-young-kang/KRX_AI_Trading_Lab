@@ -120,3 +120,30 @@ def test_theme_buttons_share_authorized_single_request_path(sandbox):
     service.handle(update(sandbox,4,'/중지'))
     assert '중지' in service.handle(update(sandbox,5,'테마1 종목 찾기'))
     assert len(calls)==2 and broker.calls==[]
+
+
+@pytest.mark.parametrize('label,heading',[
+    ('전체 도움말','[처음 쓰는 순서]'),('매매 방법','[키움 모의 주문 방법]'),
+    ('하루 결산','[하루 손익 보기]'),('가상 추적 방법','[추천 성과 가상 기록]'),
+    ('조건 개선 방법','[기록으로 조건 개선]')])
+def test_guides_are_private_replayable_read_only_and_available_when_stopped(sandbox,label,heading):
+    service,broker,_,_=sandbox;service.orders_enabled=False
+    event=update(sandbox,1,label)
+    reply=service.handle(event)
+    assert reply.startswith(heading) and len(reply)<750 and service.handle(event)==reply
+    service.handle(update(sandbox,2,'/중지'))
+    assert service.handle(update(sandbox,3,label))==reply
+    bad=update(sandbox,4,label);bad['message']['from']['id']=99
+    assert service.handle(bad) is None and broker.calls==[]
+
+
+def test_order_guides_separate_fake_and_mock_and_show_unconnected_first_feed(sandbox):
+    service,broker,_,_=sandbox
+    assert '가짜 서버 주문 연습' in service.handle(update(sandbox,1,'매매 방법'))
+    assert '/확인 코드' in service.handle(update(sandbox,2,'/매매안내'))
+    service.orders_enabled=False
+    mock=service.handle(update(sandbox,3,'/매매안내'))
+    assert '/모의확인 코드' in mock and '실제 시세 모드에서는 주문할 수 없어요' in mock
+    assert 'NXT·시초가 예약·테마1 전체 실행은 아직 연결 전' in mock
+    virtual=service.handle(update(sandbox,4,'/가상안내'))
+    assert '목록 고정만으로 매매 기록이 생기지 않아요' in virtual and broker.calls==[]

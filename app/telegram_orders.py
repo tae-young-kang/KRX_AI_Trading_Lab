@@ -438,23 +438,13 @@ class TelegramOrderService:
             elif (text.startswith('/조건') or text.startswith('/청산조건')) and self.conditions is not None:
                 reply = (self.conditions.handle(text, scope=self.scope, session=self.session, uid=uid, now=now)
                          if owner['active'] or text in ('/조건','/조건도움말','/청산조건') or text.split(' ',1)[0] in ('/조건기록','/청산조건기록') else '조건 변경을 중지했어요. 프로그램에서 수신을 다시 시작해 주세요.')
-            elif not self.orders_enabled:
-                if text == '/중지':
-                    if self.watch_cancel_orders:
-                        self.watch_cancel_orders(self.scope,self.session)
-                    self.cancel_pending_changes()
-                    db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
-                    reply = '조건 변경·새 모의 주문 요청을 중지하고 대기 중인 변경·모의 주문 확인을 철회했어요. 이미 전송한 주문을 취소한 것은 아니에요.'
-                else:
-                    reply = '실제 돈 주문은 잠겨 있어요. 키움 모의 주문은 PC의 당일 허용과 별도 확인이 필요해요.\n/프로그램상태 · /모의점검 · /모의기록 · /잔고 · /잔고결과 · /모의재연결 · /주문목록 · /미체결 · /주문상태 · /주문점검 · /긴급중지 · /모의재개 · /조건 · /조건도움말'
-                    reply += '\n/모의자금: 예수금·주문 가능 금액·다음 결제일 예상값 구분'
-                    reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
-                    reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
-            elif text in ('/도움말', '/start', '/help'):
-                reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
+            elif text in ('/도움말','/help','/매매안내','/결산안내','/가상안내','/개선안내'):
+                reply=telegram_menu.guide(text,practice=self.orders_enabled)
+            elif text == '/전체명령':
+                reply = (HELP if self.orders_enabled else '[시세 관리·키움 모의 주문 안내 · 실제 돈 주문 잠김]\n/매매안내: 연결·허용·확인 순서') + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
                 reply += '\n/추천검색: 새 검색 요청 · /검색상태: 진행 확인'
                 reply += '\n/검색취소: 대기·진행 중인 원격 검색 취소'
-                reply += '\n/보호상태: 모의 보호 판단 기록 (자동 매도 미연결)'
+                reply += '\n/보호상태: 모의 보호 판단·요청 기록 (자동매도는 별도 사전 확인 필요)'
                 reply += '\n/평가상태: 추천 성적 자동 갱신 상태'
                 reply += '\n/성적갱신: 저장 자료로 추천 성적 다시 계산 · /성적갱신상태: 진행 확인'
                 reply += '\n/성적자료보완: 빠진 KRX 일봉 수집 후 다시 평가 (별도 KRX 키 필요)'
@@ -473,6 +463,18 @@ class TelegramOrderService:
                 reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
                 reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
                 reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
+            elif not self.orders_enabled:
+                if text == '/중지':
+                    if self.watch_cancel_orders:
+                        self.watch_cancel_orders(self.scope,self.session)
+                    self.cancel_pending_changes()
+                    db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
+                    reply = '조건 변경·새 모의 주문 요청을 중지하고 대기 중인 변경·모의 주문 확인을 철회했어요. 이미 전송한 주문을 취소한 것은 아니에요.'
+                else:
+                    reply = '실제 돈 주문은 잠겨 있어요. 키움 모의 주문은 PC의 당일 허용과 별도 확인이 필요해요.\n/프로그램상태 · /모의점검 · /모의기록 · /잔고 · /잔고결과 · /모의재연결 · /주문목록 · /미체결 · /주문상태 · /주문점검 · /긴급중지 · /모의재개 · /조건 · /조건도움말'
+                    reply += '\n/모의자금: 예수금·주문 가능 금액·다음 결제일 예상값 구분'
+                    reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
+                    reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
             elif text == '/상태':
                 account = self.engine.account()
                 last = db.execute('SELECT * FROM tg_intents WHERE scope=? ORDER BY rowid DESC LIMIT 1', (self.scope,)).fetchone()
