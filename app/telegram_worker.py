@@ -21,7 +21,7 @@ class TelegramOrderWorker(QThread):
     def __init__(self, root, token, user_id, chat_id, catalog, conditions=None, orders_enabled=True, watch_status=None,
                  watch_refresh=None, watch_result=None, watch_reconnect=None, watch_validation=None,
                  watch_orders=None, watch_cancel_orders=None, watch_history=None, watch_funds=None,
-                 recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None):
+                 recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None,morning_quote_request=None):
         super().__init__()
         self.root, self.token = Path(root), token
         self.user_id, self.chat_id, self.catalog = user_id, chat_id, dict(catalog)
@@ -51,6 +51,7 @@ class TelegramOrderWorker(QThread):
         self.morning_freeze=morning_freeze
         self.condition_report=condition_report
         self.analysis_request=analysis_request
+        self.morning_quote_request=morning_quote_request
         self.recommendation_request = recommendation_request
         self.recommendation_status = recommendation_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
@@ -95,7 +96,7 @@ class TelegramOrderWorker(QThread):
                                                 watch_history=self.watch_history, watch_funds=self.watch_funds,
                                                 recommendation_report=self.recommendation_report,
                                                 recommendation_request=self.recommendation_request,
-                                                theme_request=self.theme_request,outcome_request=self.outcome_request,theme_plan=self.theme_plan,watch_delivery=self.watch_delivery,actual_daily=self.actual_daily,morning_daily=self.morning_daily,morning_setup=self.morning_setup,daily_mode=self.daily_mode,mock_daily=self.mock_daily,morning_freeze=self.morning_freeze,condition_report=self.condition_report,analysis_request=self.analysis_request,
+                                                theme_request=self.theme_request,outcome_request=self.outcome_request,theme_plan=self.theme_plan,watch_delivery=self.watch_delivery,actual_daily=self.actual_daily,morning_daily=self.morning_daily,morning_setup=self.morning_setup,daily_mode=self.daily_mode,mock_daily=self.mock_daily,morning_freeze=self.morning_freeze,condition_report=self.condition_report,analysis_request=self.analysis_request,morning_quote_request=self.morning_quote_request,
                                                 recommendation_status=self.recommendation_status,
                                                 recommendation_overview=self.recommendation_overview, practice_sales=self.practice_sales, theme_report=self.theme_report, theme_status=self.theme_status, theme_budget=self.theme_budget, practice_daily=self.practice_daily)
             report = self.service.recovery_status(startup=True) if self.orders_enabled else None
@@ -119,6 +120,9 @@ class TelegramOrderWorker(QThread):
                         active=not self.isInterruptionRequested() and self.service.accepts_search_requests())
                 if self.analysis_request:
                     self.analysis_request.send_notice(lambda text:transport.send(self.chat_id,text),
+                        active=not self.isInterruptionRequested() and self.service.accepts_search_requests())
+                if self.morning_quote_request:
+                    self.morning_quote_request.send_notice(lambda text:transport.send(self.chat_id,text),
                         active=not self.isInterruptionRequested() and self.service.accepts_search_requests())
                 if self.theme_request:
                     self.theme_request.send_notice(transport,self.chat_id,

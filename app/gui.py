@@ -56,6 +56,8 @@ from app.telegram_worker import TelegramOrderWorker
 from app.telegram_conditions import ConditionCommands
 from app.condition_report import report as condition_report_text
 from app.condition_analysis_request import ConditionAnalysisRequest
+from app.morning_quote_request import MorningQuoteRequest
+from app.morning_quote_refresh import refresh as refresh_morning_quotes
 from app.proposal_report import report as proposal_report_text
 from app.proposal_application import apply as apply_proposal,recover as recover_proposals
 from app.proposal_review_commands import ProposalReviewCommands
@@ -178,6 +180,8 @@ class MainWindow(QMainWindow):
         self.remote_outcome=None
         self.remote_outcome_active=False
         self.remote_analysis=None
+        self.remote_morning_quote=None
+        self.remote_morning_quote_active=False
         self.remote_analysis_active=False
         self.proposal_review=None
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
@@ -1705,7 +1709,7 @@ class MainWindow(QMainWindow):
             return
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
         self.condition_commands.sync(self.cfg, self.settings.save, now=datetime.now().timestamp(), busy=True)
-        if self.remote_scan_active or self.remote_theme_active or self.remote_analysis_active:
+        if self.remote_scan_active or self.remote_theme_active or self.remote_analysis_active or self.remote_morning_quote_active:
             return
         self.remote_scan = RecommendationRequest(current_mode(self.cfg).key)
         self.remote_theme = ThemeRequest(self.history,current_mode(self.cfg).key)
@@ -1715,11 +1719,12 @@ class MainWindow(QMainWindow):
             return
         self.remote_analysis=ConditionAnalysisRequest(current_mode(self.cfg).key,
             lambda page,db=self.db,mode=current_mode(self.cfg).key:proposal_report_text(db,mode,page=page),review=self.proposal_review)
+        self.remote_morning_quote=MorningQuoteRequest(current_mode(self.cfg).key)
         self.remote_outcome=OutcomeRequest(current_mode(self.cfg).key,
             source=lambda mode=current_mode(self.cfg).key:recommendation_calendar_source(self.cfg,mode))
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
-                                     analysis_request=self.remote_analysis,
+                                     analysis_request=self.remote_analysis,morning_quote_request=self.remote_morning_quote,
                                      condition_report=lambda page=1,db=self.db,mode=current_mode(self.cfg).key:
                                          condition_report_text(db,mode,min_train=max(20,int(self.cfg['min_strategy_trades'])),page=page),
                                      recommendation_request=self.remote_scan,
@@ -1846,6 +1851,11 @@ class MainWindow(QMainWindow):
             self.task_failed(str(ex))
 
     def task_failed(self, message):
+        if getattr(self,'remote_morning_quote_active',False):
+            self.remote_morning_quote.finish(success=False)
+            self.remote_morning_quote_active=False
+            self.statusBar().showMessage('가상 보유 시세 갱신 미완료 · 기록을 확인하세요.')
+            return
         if getattr(self,'remote_analysis_active',False):
             self.remote_analysis.finish(success=False)
             self.remote_analysis_active=False
@@ -1915,6 +1925,23 @@ class MainWindow(QMainWindow):
                                  busy=bool(self.work and self.work.isRunning()), active=active):
             self.scan(remote=True)
             return
+        morning=getattr(self,'remote_morning_quote',None)
+        if morning is not None and morning.take(current_mode(self.cfg).key,
+                busy=bool(self.work and self.work.isRunning()),active=active):
+            self.remote_morning_quote_active=True
+            mode=morning.mode
+            def permitted():
+                return (morning.running() and current_mode(self.cfg).key==mode
+                    and self.telegram_order_worker is worker and worker.isRunning()
+                    and not worker.isInterruptionRequested() and worker.service is not None
+                    and worker.service.accepts_search_requests())
+            def client_factory():
+                environment='MOCK' if mode=='MOCK' else 'REAL'
+                key,secret=self.broker_keys(environment)
+                return KiwoomMarket(key,secret,environment)
+            self.run_task(lambda:refresh_morning_quotes(data_dir(),mode,client_factory,active=permitted),
+                self.remote_morning_quote_done,'가상 보유 시세 확인 완료')
+            return
         analysis=getattr(self,'remote_analysis',None)
         if analysis is not None and analysis.take(current_mode(self.cfg).key,
                 busy=bool(self.work and self.work.isRunning()),active=active):
@@ -1944,6 +1971,10 @@ class MainWindow(QMainWindow):
     def remote_outcome_done(self,result):
         self.remote_outcome.finish(success=True,result=result)
         self.remote_outcome_active=False
+
+    def remote_morning_quote_done(self,result):
+        self.remote_morning_quote.finish(success=True,result=result)
+        self.remote_morning_quote_active=False
 
     def remote_analysis_done(self,result):
         self.remote_analysis.finish(success=True,result=result)
