@@ -315,11 +315,13 @@ class TelegramOrderService:
                         reply='테마1 판정과 총예산·수수료·가격 여유·익절/손절 비율을 확인해 주세요. 주문하지 않았어요.'
             elif text=='/테마1조건':
                 reply=THEME_ONE_RULES
-            elif text in ('/테마1검색','/테마1검색상태'):
+            elif text in ('/테마1검색','/테마1검색상태','/테마1검색취소'):
                 if self.theme_request is None:
                     reply='테마1 검색 연결이 없어요. PC에서 수신을 다시 시작해 주세요.'
                 elif text=='/테마1검색상태':
                     reply=self.theme_request.summary()
+                elif text=='/테마1검색취소':
+                    reply=self.theme_request.cancel()
                 elif not owner['active']:
                     reply='새 테마1 검색 요청을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
                 else:

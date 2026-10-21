@@ -20,6 +20,7 @@ class ThemeRequest:
         self.wall_clock=wall_clock or (lambda:datetime.now(KST))
         self._notice=None
         self._delivery=''
+        self._cancel_requested=False
 
     def _expire(self):
         if self.state=='PENDING' and not 0<=self.clock()-self.started<120:
@@ -44,11 +45,12 @@ class ThemeRequest:
             self.data=data
             self.started=self.clock()
             self.state='PENDING'
+            self._cancel_requested=False
             self._delivery=''
             self.message=(f'테마1 판정 요청 · 자료 {data["source"]} · 기준일 {data["through"]}\n'
                           '요청일 기준 최근 6거래일과 전일 종가용 1일을 자동 계산했어요.\n'
                           +('키움 시세 조회 후 감지 종목을 한 종목씩 알려드려요.\n' if source in KIWOOM_SOURCES.values() else '저장 시세로 판정해요.\n')+
-                          '/테마1검색상태로 확인하세요.')
+                          '/테마1검색상태로 확인하세요. 중단: /테마1검색취소')
             return self.message
 
     def take(self,mode,*,busy,active):
@@ -61,14 +63,40 @@ class ThemeRequest:
                 return None
             if busy:return None
             self.state='RUNNING'
+            self.running_since=self.clock()
             action=('키움 시세를 조회하고 테마1 종목을 찾고 있어요.'
                     if self.data['source'] in KIWOOM_SOURCES.values() else '저장 시세로 테마1 판정 중이에요.')
             self.message=f'기준일 {self.data["through"]} · '+action
             return self.data
 
+    def progress(self,message):
+        with self.lock:
+            if self.state=='RUNNING' and not self._cancel_requested and isinstance(message,str):
+                self.message='조회 중 · '+''.join(c for c in message if c.isprintable())[:240]
+
+    def cancel(self):
+        with self.lock:
+            self._expire()
+            if self.state=='PENDING':
+                self.state='CANCELED'
+                self.message='대기 중인 테마1 검색을 취소했어요. 기존 판정은 남겨요.'
+            elif self.state=='RUNNING':
+                self._cancel_requested=True
+                self.message='테마1 검색 취소 요청 중이에요. 현재 조회 응답 후 중단해요. 이미 저장된 판정은 삭제하지 않아요.'
+            else:return '취소할 테마1 검색이 없어요. 이미 저장된 판정은 삭제하지 않아요.'
+            return self.message
+
+    def cancellation_requested(self):
+        with self.lock:return self.state=='RUNNING' and self._cancel_requested
+
     def finish(self,*,success,result=None):
         with self.lock:
             if self.state!='RUNNING':return
+            if not success and self._cancel_requested:
+                self.state='CANCELED'
+                self.message='테마1 검색 중단 처리를 마쳤어요. 기존 판정은 남겨요. /테마1에서 마지막 저장 결과를 확인하세요.'
+                self._notice=dict(message=self.message,run_id=None)
+                return
             self.state='DONE' if success else 'FAILED'
             if success and missing_data_notice(result):
                 partial=result.get('matched',0)>0
@@ -81,6 +109,9 @@ class ThemeRequest:
                           f'{result["states"].get("PRICE_MISSING",0)}개\n/테마1에서 결과를 보세요. 전체 시장 수집 완료는 미확인이에요.'
                           if success else '테마1 검색을 완료하지 못했어요. PC의 오류 안내를 확인한 뒤 /테마1검색으로 다시 요청하세요.')
             self._notice=dict(message=self.message,run_id=result.get('run_id') if success else None)
+            if success and self._cancel_requested:
+                self.message+='\n취소 요청과 완료가 겹쳐 결과가 이미 저장됐어요. 위 저장 결과를 확인해 주세요.'
+                self._notice['message']=self.message
 
     def send_notice(self,transport,chat_id,*,active,stopped=lambda:False):
         with self.lock:
@@ -103,4 +134,8 @@ class ThemeRequest:
     def summary(self):
         with self.lock:
             self._expire()
-            return '[테마1 검색 상태]\n'+self.message+'\n'+self._delivery+'\n계좌 주문은 실행하지 않아요.'
+            elapsed=''
+            if self.state=='RUNNING':
+                seconds=max(0,int(self.clock()-self.running_since))
+                elapsed=f'\n검색 경과 {seconds//60}분 {seconds%60}초 · 완료 예상 시간은 미확인이에요.'
+            return '[테마1 검색 상태]\n'+self.message+elapsed+'\n'+self._delivery+'\n계좌 주문은 실행하지 않아요.'

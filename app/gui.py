@@ -1858,6 +1858,9 @@ class MainWindow(QMainWindow):
 
     def poll_remote_scan(self):
         worker = self.telegram_order_worker
+        if getattr(self,'remote_theme_active',False) and self.remote_theme.cancellation_requested():
+            if self.work and self.work.isRunning():self.work.requestInterruption()
+            return
         if not self.remote_scan:
             return
         if self.remote_scan_active and self.remote_scan.cancellation_requested():
@@ -1879,7 +1882,8 @@ class MainWindow(QMainWindow):
                     key,secret=self.broker_keys('MOCK' if mode=='MOCK' else 'REAL')
                     def fetch(progress,cancelled):
                         client=KiwoomMarket(key,secret,'MOCK' if mode=='MOCK' else 'REAL',batch_profile=self.quote_batch_profile)
-                        try:return collect_kiwoom_theme(self.history,client,mode,selection=data,progress=progress,cancelled=cancelled,include_etf=include_etf)
+                        try:return collect_kiwoom_theme(self.history,client,mode,selection=data,progress=progress,
+                            cancelled=lambda:cancelled() or self.remote_theme.cancellation_requested(),include_etf=include_etf)
                         finally:client.session.close()
                     self.run_task(fetch,self.remote_theme_done,'테마1 검색 완료',with_progress=True)
                 else:
@@ -1943,6 +1947,8 @@ class MainWindow(QMainWindow):
         self.run_task(fetch, lambda output: self.on_scan(output[0],cfg,mode,metrics=output[1]), '전체 대상 검색 및 DB 저장 완료', with_progress=True)
 
     def show_scan_progress(self, message):
+        if getattr(self,'remote_theme_active',False):
+            self.remote_theme.progress(message)
         if self.remote_scan_active:
             self.remote_scan.progress(message)
         self.count_info.setText(message)
