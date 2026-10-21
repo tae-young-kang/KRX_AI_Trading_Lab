@@ -108,3 +108,27 @@ def test_expired_missing_day_returns_no_database_or_synthetic_evidence(tmp_path)
     result=report_saved(root,'DEMO',DAY,now=NOW)
     assert '고정된 추천 목록이 없어요' in result
     assert not root.exists()
+
+
+@pytest.mark.parametrize('change',['timestamp','source','preopen'])
+def test_tampered_open_timestamp_and_source_never_count_as_proven_evidence(tmp_path,change):
+    import json
+    tracker,_=new(tmp_path)
+    opened=datetime(2026,10,20,9,0,tzinfo=KST)
+    trade_row=replace(trade(venue='KRX',hour=9),at=opened,fetched_at=opened)
+    tracker.enter(trade_row,now=opened)
+    with tracker.db.connect() as db:
+        row=db.execute("SELECT entry_json FROM paper_trades WHERE code='900001'").fetchone()
+        entry=json.loads(row['entry_json'])
+        if change=='timestamp':
+            entry['quote_stamp']='2026-10-20T09:01:00+09:00'
+        elif change=='source':
+            entry['source']='KIWOOM'
+        else:
+            entry['quote_stamp']='2026-10-20T08:59:00+09:00'
+            db.execute("UPDATE paper_trades SET opened_at=? WHERE code='900001'",
+                       (entry['quote_stamp'],))
+        db.execute("UPDATE paper_trades SET entry_json=? WHERE code='900001'",
+                   (json.dumps(entry),))
+    with pytest.raises(ValueError,match='근거'):
+        inspect(tmp_path,'DEMO',DAY,now=NOW)
