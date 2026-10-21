@@ -12,6 +12,7 @@ import time
 from app.order_engine import connect
 from app.modes import current_mode
 from app import exit_policy_commands as exits
+from app import virtual_cost_commands as costs
 
 NUMBERS = {
     '최저가': ('min_price', 0, 1000000), '최고가': ('max_price', 100, 10000000),
@@ -25,6 +26,7 @@ SWITCHES = {'가격사용': 'on_price', '시총사용': 'on_cap', '거래대금�
 KEYS = ('market', 'include_etf', *[v[0] for v in NUMBERS.values()], *SWITCHES.values())
 HELP = ('/조건: 지금 추천 기준 보기\n'
         '/청산조건: 기본 가상 익절·손절 보기 · /청산조건기록: 변경 이력\n'
+        '/가상비용: 비용 가정 보기 · /가상비용기록: 변경 이력\n'
         '/조건기록: 이전 추천 조건 보기 · /조건복귀 기록번호: 확인 후 되돌리기\n'
         '/조건변경 시장=코스닥 ETF=제외 거래대금=100\n'
         '시장: 코스피/코스닥/전체 · ETF: 포함/제외\n'
@@ -32,12 +34,13 @@ HELP = ('/조건: 지금 추천 기준 보기\n'
         '최저가·최고가·시총최소·시총최대·거래량비율·등락최소·등락최대·추천수도 변경 가능\n'
         '가격사용·시총사용·거래대금사용·거래량사용·등락사용: 켜기/끄기\n'
         '내용 확인 → /조건확인 코드 · 철회: /조건철회 코드\n'
-        '추천 조건만 바뀝니다. 주문하거나 자동 검색을 시작하지 않아요.')
+        '확인한 추천·가상 계산 설정을 바꿔요. 주문하거나 자동 검색을 시작하지 않아요.')
 
 
 def state(config):
     return dict(mode=current_mode(config).key, version=config['strategy_version'],
-                conditions={key: config[key] for key in KEYS},exit_policy={key:config[key] for key in exits.KEYS})
+                conditions={key: config[key] for key in KEYS},exit_policy={key:config[key] for key in exits.KEYS},
+                cost_policy={key:config[key] for key in costs.KEYS})
 
 
 def encode(value):
@@ -118,6 +121,15 @@ def record_version(db,current,now):
         db.execute('INSERT INTO exit_policy_versions(mode,version,payload,created) VALUES(?,?,?,?)',
             (current['mode'],current['version'],policy,now))
 
+    cost=encode(current['cost_policy'])
+    last=db.execute('SELECT version,payload FROM virtual_cost_versions WHERE mode=? ORDER BY id DESC LIMIT 1',(current['mode'],)).fetchone()
+    if last is None or last['version']!=current['version'] or last['payload']!=cost:
+        db.execute('INSERT INTO virtual_cost_versions(mode,version,payload,created) VALUES(?,?,?,?)',(current['mode'],current['version'],cost,now))
+
+
+def unknown_costs(db,mode=None):
+    return db.execute("SELECT * FROM condition_requests WHERE state IN ('UNKNOWN','APPLYING') AND (? IS NULL OR json_extract(target,'$.mode')=?) AND json_extract(target,'$.cost_policy')<>json_extract(base,'$.cost_policy')",(mode,mode)).fetchall()
+
 
 class ConditionCommands:
     def __init__(self, path, config):
@@ -131,8 +143,10 @@ class ConditionCommands:
                 CREATE TABLE IF NOT EXISTS condition_replies(scope TEXT,session TEXT,uid INTEGER,reply TEXT,
                     PRIMARY KEY(scope,session,uid));
                 CREATE TABLE IF NOT EXISTS condition_versions(id INTEGER PRIMARY KEY,mode TEXT,version INTEGER,payload TEXT,created REAL);
+                CREATE TABLE IF NOT EXISTS virtual_cost_versions(id INTEGER PRIMARY KEY,mode TEXT,version INTEGER,payload TEXT,created REAL);
                 CREATE TABLE IF NOT EXISTS exit_policy_versions(id INTEGER PRIMARY KEY,mode TEXT,version INTEGER,payload TEXT,created REAL);
             ''')
+            db.execute("UPDATE condition_requests SET state='UNKNOWN' WHERE state='APPLYING'")
             record_version(db,self._state(config),time.time())
             db.execute('INSERT OR REPLACE INTO condition_current VALUES (?,?)', (self.owner,encode(self._state(config))))
 
@@ -152,12 +166,16 @@ class ConditionCommands:
                 return previous[0]
             current = json.loads(db.execute('SELECT payload FROM condition_current WHERE id=?', (self.owner,)).fetchone()[0])
             try:
-                if text in ('/조건','/청산조건'):
+                if text in ('/조건','/청산조건','/가상비용'):
                     last = db.execute('SELECT state FROM condition_requests WHERE scope=? AND session=? ORDER BY rowid DESC LIMIT 1',
                                       (scope,session)).fetchone()
+                    if text=='/가상비용':last=db.execute("SELECT state FROM condition_requests WHERE scope=? AND json_extract(target,'$.mode')=? AND json_extract(target,'$.cost_policy')<>json_extract(base,'$.cost_policy') ORDER BY (state='UNKNOWN') DESC,rowid DESC LIMIT 1",(scope,current['mode'])).fetchone()
+                    if text=='/가상비용' and unknown_costs(db):last=('UNKNOWN',)
                     status = {'QUEUED':'변경 반영 대기 중', 'APPLIED':'최근 변경 적용됨', 'REJECTED':'최근 변경 취소됨',
-                              'EXPIRED':'이전 변경 만료', 'PREVIEW':'변경안 확인 대기'}.get(last[0], '') if last else ''
-                    reply = (exits.describe(current) if text=='/청산조건' else describe(current)) + ('\n'+status if status else '')
+                              'EXPIRED':'이전 변경 만료', 'PREVIEW':'변경안 확인 대기','FAILED':'저장 실패 · 다시 확인해 주세요','UNKNOWN':'저장 대조 미확인 · 자동 재적용하지 않아요','APPLYING':'저장 대조 진행 중','REVIEWED':'재시작 후 현재 저장값 대조됨 · 과거 요청 성공 확정 아님 · 재적용 안 함'}.get(last[0], '') if last else ''
+                    reply = (costs.describe(current) if text=='/가상비용' else exits.describe(current) if text=='/청산조건' else describe(current)) + ('\n'+status if status else '')
+                    if text=='/가상비용' and unknown_costs(db):reply+='\n가상 비용 저장 미확인으로 모든 조건 저장을 차단했어요. PC를 재시작해 저장값을 대조하세요.'
+                    if text=='/가상비용':reply+='\n/가상비용변경 수수료=0.015 세금=0.2 슬리피지=0.1\n/가상비용기록 · /가상비용복귀 기록번호'
                     if text=='/청산조건':reply+='\n/청산조건변경 익절=2 손절=3 보유일=5\n/청산조건기록 · /청산조건복귀 기록번호'
                 elif text == '/조건도움말':
                     reply = HELP
@@ -178,6 +196,20 @@ class ConditionCommands:
                         lines.append(f'되돌리기: /조건복귀 {row["id"]}')
                     if page<pages:lines.append(f'다음: /조건기록 {page+1}')
                     reply='\n'.join(lines)
+                elif text.split(' ',1)[0]=='/가상비용기록':
+                    match=re.fullmatch(r'/가상비용기록(?: ([1-9][0-9]{0,5}))?',text)
+                    if not match:raise ValueError('사용법: /가상비용기록 [페이지]')
+                    page=int(match[1] or 1)
+                    count=db.execute('SELECT COUNT(*) FROM virtual_cost_versions WHERE mode=?',(current['mode'],)).fetchone()[0]
+                    pages=max(1,(count+4)//5)
+                    if page>pages:raise ValueError(f'가상 비용 기록은 {pages}페이지까지 있어요.')
+                    rows=db.execute('SELECT * FROM virtual_cost_versions WHERE mode=? ORDER BY id DESC LIMIT 5 OFFSET ?',(current['mode'],(page-1)*5)).fetchall()
+                    lines=[f'[가상 비용 이력] {page}/{pages}페이지 · 현재 모드 · 기록을 시작한 이후만 표시']
+                    for row in rows:
+                        lines.append(f'기록 {row["id"]} · '+costs.describe(dict(mode=current['mode'],version=row['version'],cost_policy=json.loads(row['payload']))))
+                        lines.append(f'되돌리기: /가상비용복귀 {row["id"]}')
+                    if page<pages:lines.append(f'다음: /가상비용기록 {page+1}')
+                    reply='\n'.join(lines)
                 elif text.split(' ',1)[0]=='/청산조건기록':
                     match=re.fullmatch(r'/청산조건기록(?: ([1-9][0-9]{0,5}))?',text)
                     if not match:raise ValueError('사용법: /청산조건기록 [페이지]')
@@ -193,11 +225,23 @@ class ConditionCommands:
                         lines.append(f'되돌리기: /청산조건복귀 {row["id"]}')
                     if page<pages:lines.append(f'다음: /청산조건기록 {page+1}')
                     reply='\n'.join(lines)
-                elif text.startswith('/조건변경') or text.split(' ',1)[0] in ('/조건복귀','/청산조건변경','/청산조건복귀'):
+                elif text.startswith('/조건변경') or text.split(' ',1)[0] in ('/조건복귀','/청산조건변경','/청산조건복귀','/가상비용변경','/가상비용복귀'):
+                    if unknown_costs(db):raise ValueError('가상 비용 저장이 미확인이어서 조건 저장을 차단했어요. PC를 재시작해 저장값을 대조한 뒤 새로 요청하세요.')
+                    cost_change=text.split(' ',1)[0] in ('/가상비용변경','/가상비용복귀')
                     policy=text.split(' ',1)[0] in ('/청산조건변경','/청산조건복귀')
-                    restoring=text.split(' ',1)[0] in ('/조건복귀','/청산조건복귀')
+                    restoring=text.split(' ',1)[0] in ('/조건복귀','/청산조건복귀','/가상비용복귀')
                     target = json.loads(encode(current))
-                    if policy:
+                    if cost_change:
+                        if restoring:
+                            match=re.fullmatch(r'/가상비용복귀 ([1-9][0-9]{0,8})',text)
+                            if not match:raise ValueError('사용법: /가상비용복귀 기록번호')
+                            row=db.execute('SELECT payload FROM virtual_cost_versions WHERE id=? AND mode=?',(int(match[1]),current['mode'])).fetchone()
+                            if row is None:raise ValueError('현재 모드의 가상 비용 기록에서 골라 주세요.')
+                            changes=json.loads(row['payload']);costs.validate(changes)
+                        else:changes=costs.patch(text[len('/가상비용변경'):].strip())
+                        target['cost_policy'].update(changes);costs.validate(target['cost_policy'])
+                        if target['cost_policy']==current['cost_policy']:raise ValueError('현재 가상 비용과 같아요.')
+                    elif policy:
                         if restoring:
                             match=re.fullmatch(r'/청산조건복귀 ([1-9][0-9]{0,8})',text)
                             if not match:raise ValueError('사용법: /청산조건복귀 기록번호')
@@ -215,7 +259,7 @@ class ConditionCommands:
                         changes=json.loads(row['payload']);validate_conditions(changes)
                         if changes==current['conditions']:raise ValueError('현재 추천 조건과 같아요. 변경하지 않았어요.')
                     else:changes = patch(text[len('/조건변경'):].strip())
-                    if not policy:target['conditions'].update(changes)
+                    if not policy and not cost_change:target['conditions'].update(changes)
                     for lower, upper in (('min_price','max_price'),('min_cap_eok','max_cap_eok'),('min_change_pct','max_change_pct')):
                         if target['conditions'][lower] > target['conditions'][upper]:
                             raise ValueError('최소값은 최대값보다 클 수 없어요.')
@@ -225,9 +269,9 @@ class ConditionCommands:
                     db.execute("UPDATE condition_requests SET state='EXPIRED' WHERE scope=? AND session=? AND state='PREVIEW'", (scope,session))
                     db.execute('INSERT INTO condition_requests VALUES (?,?,?,?,?,?,?)',
                                (digest,scope,session,encode(current),encode(target),now+120,'PREVIEW'))
-                    heading=('기본 가상 익절·손절을 바꿀까요?\n' if policy else
+                    heading=('가상 비용을 바꿀까요?\n' if cost_change else '기본 가상 익절·손절을 바꿀까요?\n' if policy else
                         '이전 추천 기준으로 되돌릴까요? 익절·손절·테마1은 바뀌지 않아요.\n' if restoring else '이렇게 바꿀까요?\n')
-                    reply = heading+(exits.describe(target) if policy else describe(target))+f'\n2분 안에 /조건확인 {nonce}\n철회: /조건철회 {nonce}'
+                    reply = heading+(costs.describe(target) if cost_change else exits.describe(target) if policy else describe(target))+f'\n2분 안에 /조건확인 {nonce}\n철회: /조건철회 {nonce}'
                 else:
                     match = re.fullmatch(r'/(조건확인|조건철회) ([A-Za-z0-9_-]{16})', text)
                     if not match:
@@ -240,6 +284,7 @@ class ConditionCommands:
                     if row['base'] != encode(current):
                         db.execute("UPDATE condition_requests SET state='REJECTED' WHERE token=?", (digest,))
                         raise ValueError('그사이 조건이나 모드가 바뀌었어요. /조건으로 확인 후 다시 요청해 주세요.')
+                    if match[1]=='조건확인' and unknown_costs(db):raise ValueError('가상 비용 저장 미확인으로 확인하지 않았어요. PC 재시작 후 저장값을 대조하고 새로 요청하세요.')
                     next_state = 'QUEUED' if match[1] == '조건확인' else 'REJECTED'
                     db.execute('UPDATE condition_requests SET state=? WHERE token=?', (next_state,digest))
                     reply = ('변경을 예약했어요. 현재 작업이 끝나면 반영해요. 화면에서 조건을 수정 중이면 먼저 저장해 주세요. /조건 또는 /청산조건으로 결과를 확인해 주세요.'
@@ -249,7 +294,7 @@ class ConditionCommands:
             db.execute('INSERT INTO condition_replies VALUES (?,?,?,?)', (scope,session,uid,reply))
             return reply
 
-    def sync(self, config, save, *, now, busy=False):
+    def sync(self, config, save, *, now, busy=False,read_saved=None):
         """GUI thread only; no worker mutates GUI settings. Queues expire safely."""
         changed = False
         with connect(self.path) as db:
@@ -257,7 +302,19 @@ class ConditionCommands:
             db.execute("UPDATE condition_requests SET state='EXPIRED' WHERE state IN ('PREVIEW','QUEUED') AND expires<=?", (now,))
             current = self._state(config)
             record_version(db,current,now)
-            if not busy:
+            blocked=unknown_costs(db)
+            if blocked:
+                # Reject pending work before any recovery: none may overwrite
+                # an uncertain saved value or become an automatic retry.
+                db.execute("UPDATE condition_requests SET state='REJECTED' WHERE state='QUEUED'")
+                try:
+                    recovered=(all(json.loads(item['target'])['owner']!=self.owner for item in blocked)
+                               and read_saved is not None and costs.snapshot(read_saved())==costs.snapshot(config))
+                except Exception:recovered=False
+                if recovered:
+                    for item in blocked:db.execute("UPDATE condition_requests SET state='REVIEWED' WHERE token=?",(item['token'],))
+                blocked=True
+            if not busy and not blocked:
                 for row in db.execute("SELECT * FROM condition_requests WHERE state='QUEUED' ORDER BY rowid").fetchall():
                     target = json.loads(row['target'])
                     if target['owner'] != self.owner:
@@ -267,6 +324,15 @@ class ConditionCommands:
                             db.execute("UPDATE condition_requests SET state='REJECTED' WHERE token=?", (row['token'],))
                             continue
                         exits.validate(target['exit_policy'])
+                        costs.validate(target['cost_policy'])
+                        if target['cost_policy']!=current['cost_policy']:
+                            cost_status=self._apply_cost(db,row,current,target,config,save,read_saved)
+                            current=self._state(config)
+                            changed=changed or row['target']==encode(current)
+                            if cost_status=='UNKNOWN':
+                                db.execute("UPDATE condition_requests SET state='REJECTED' WHERE state='QUEUED'")
+                                break
+                            continue
                         before = dict(config)
                         config.update(target['conditions'])
                         config.update(target['exit_policy'])
@@ -282,3 +348,27 @@ class ConditionCommands:
                     db.execute("UPDATE condition_requests SET state='APPLIED' WHERE token=?", (row['token'],))
             db.execute('INSERT OR REPLACE INTO condition_current VALUES (?,?)', (self.owner,encode(self._state(config))))
         return changed
+
+    def _apply_cost(self,db,row,current,target,config,save,read_saved):
+        before=dict(config)
+        base=costs.snapshot(config)
+        try:
+            if read_saved is None or costs.snapshot(read_saved())!=base:raise ValueError()
+        except Exception:
+            db.execute("UPDATE condition_requests SET state='UNKNOWN' WHERE token=?",(row['token'],))
+            return 'UNKNOWN'
+        # Persist the one-attempt boundary before changing settings. A crash is
+        # UNKNOWN on restart, never a queued automatic retry.
+        db.execute("UPDATE condition_requests SET state='APPLYING' WHERE token=?",(row['token'],));db.commit()
+        config.update(target['cost_policy']);config['strategy_version']=target['version']
+        intended=costs.snapshot(config);failed=False
+        try:save()
+        except Exception:failed=True
+        try:stored=costs.snapshot(read_saved())
+        except Exception:stored=None
+        status='APPLIED' if not failed and stored==intended else 'FAILED' if stored==base else 'UNKNOWN'
+        if status!='APPLIED':config.clear();config.update(before)
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('UPDATE condition_requests SET state=? WHERE token=?',(status,row['token']))
+        if status=='APPLIED':record_version(db,self._state(config),time.time())
+        return status

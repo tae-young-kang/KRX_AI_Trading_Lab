@@ -448,9 +448,9 @@ class TelegramOrderService:
                 else:
                     try:reply=self.condition_report(int(match[1] or 1))
                     except Exception:reply='조건별 가상 기록을 확인하지 못했어요. 성과를 추측하지 않았어요.'
-            elif (text.startswith('/조건') or text.startswith('/청산조건')) and self.conditions is not None:
+            elif (text.startswith('/조건') or text.startswith('/청산조건') or text.startswith('/가상비용')) and self.conditions is not None:
                 reply = (self.conditions.handle(text, scope=self.scope, session=self.session, uid=uid, now=now)
-                         if owner['active'] or text in ('/조건','/조건도움말','/청산조건') or text.split(' ',1)[0] in ('/조건기록','/청산조건기록') else '조건 변경을 중지했어요. 프로그램에서 수신을 다시 시작해 주세요.')
+                         if owner['active'] or text in ('/조건','/조건도움말','/청산조건','/가상비용') or text.split(' ',1)[0] in ('/조건기록','/청산조건기록','/가상비용기록') else '조건 변경을 중지했어요. 프로그램에서 수신을 다시 시작해 주세요.')
             elif text in ('/도움말','/help','/매매안내','/결산안내','/가상안내','/개선안내'):
                 reply=telegram_menu.guide(text,practice=self.orders_enabled)
             elif text == '/전체명령':

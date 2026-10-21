@@ -2288,7 +2288,7 @@ class MainWindow(QMainWindow):
             busy = busy or value != self.cfg[key]
         try:
             changed = self.condition_commands.sync(self.cfg, self.settings.save,
-                now=datetime.now().timestamp(), busy=busy)
+                now=datetime.now().timestamp(), busy=busy,read_saved=self.settings.strategy_snapshot)
             review=getattr(self,'proposal_review',None)
             if review is not None:
                 worker=self.telegram_order_worker
