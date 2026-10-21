@@ -76,6 +76,12 @@ def latest_targets(database,history,mode,kind,settings,now):
 
 
 def setup_text(root,database,history,mode,settings,text,*,now):
+    if text.split(' ',1)[0]=='/가상시초근거':
+        match=re.fullmatch(r'/가상시초근거 ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?',text)
+        if not match:
+            return '사용법: /가상시초근거 목록날짜 [페이지]'
+        from app.morning_open_evidence_status import report_saved as first_status
+        return first_status(root,mode,match[1],now=now,page=int(match[2] or 1))
     if text.split(' ',1)[0]=='/가상일봉':
         match=re.fullmatch(
             r'/가상일봉 ([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{4}-[0-9]{2}-[0-9]{2}) '
