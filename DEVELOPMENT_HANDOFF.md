@@ -1282,3 +1282,12 @@ PC/일일/원격 조건비교를 같은 생성 context 기반 관측 등록으�
 - 읽기 전용 인증된 텔레그램 연동, 새 실계좌/모의 주문 없음. 합성 회귀 `tests/test_morning_open_evidence_status.py` 추가, 사용법 `docs/MORNING_OPEN_EVIDENCE_STATUS.md` 기록.
 - 이전 /가상일봉 수정 커밋 82719c8의 GitHub Actions 성공 확인. 신규 범위 CI는 HEAD 기준 확인 필요, **독립 검증 담당자의 별도 수락은 대기**. GUI·실 시세/모의 체결/실계좌 실증 미실행.
 - 다음: 실제 KRX 최초 거래 원문·출처/전체 페이지/거래 시각 확인 가능성 검증을 별도 단계로 개발. 일봉 시가/해시만으로 첫 체결 인증을 만들어내면 안 됨.
+
+## 2026-10-22 D 새 작업 — 사용자 제출 첫 거래 원본과 가상 진입 정합성 대조
+
+- 신규 `app/morning_open_receipt_compare.py`의 서명되지 않은 외부 입력 CSV와 고정 v2 KRX_OPEN 목록의 가상 진입 근거 비교. 가격·시각·해시 일치/불일치, 가상 진입 없음, CSV 누락, 수집 완전성 주장이 없을 때를 별개로 표시.
+- CSV 주장 자체가 사실인지 앱이 인증하지 못하므로 `MATCHED_USER_CLAIM`도 "공식 최초 거래 인증 아님" 안내. 증권사/거래소 시세 API·실제 주문·가상 주문·DB 쓰기 전혀 없음.
+- GUI 연습 탭에 안내 버튼, 날짜/CSV 파일 선택, 사용자 로컬에서만 검사. 별도 CLI도 제공.
+- 합성 CSV 회귀 테스트 `tests/test_morning_open_receipt_compare.py`; 상세 `docs/MORNING_OPEN_RECEIPT_COMPARE.md`.
+- 지난 소목표 1,434개 GitHub Windows CI 통과 확인. **신규 변경 전체 CI 및 독립 verifier는 대기 중**. 이점을 완료라고 오보고 금지.
+- 다음 실제 연결: 신뢰할 만한 공식 거래소/공급자 기록의 수집 완전성 증거(서명·첫 페이지·시퀀스·원문) 확보 → 안전한 읽기 전용 검증 → 그 후 실제 사용자 승인 하에 모의 체결/Windows 실증. 실계좌 주문 금지.

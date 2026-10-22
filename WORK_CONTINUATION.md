@@ -895,3 +895,16 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - `docs/MORNING_OPEN_EVIDENCE_STATUS.md` 사용/제약/다음 실증. 핵심 미완료: 공식 KRX 최초 체결 원문 확보·페이지 전체성 및 최신성 검증 → 가상 진입의 독립 원천 확인. 이번 구현은 자동 첫 거래 수집/실제 체결 증명 아님.
 - **새 기능 전체 CI**: GitHub Actions 최신 HEAD 확인이 필요하며 결과 확인 전 완료로 승격 금지. 독립 개발-검증 역할 분리 지침에 따른 별도 verifier 리뷰도 **미실시/대기**. 실제 Windows/텔레그램 왕복·공식 KRX/키움 모의 주문·HTS 장부 실증 미실행.
 - 검토 기준: 기존 `82719c8` 대비 변경 목록을 확인하고 정확한 HEAD·전체 CI 통과 확인, 개인 DB/비밀키 업로드 없이 합성 fixture로 reviewer가 다른 세션에서 검증. `main`은 그대로 유지.
+
+## 2026-10-22 Stage D 새 개발: 외부 제출 첫 거래 CSV와 고정 가상 진입의 읽기 전용 대조
+
+- 사용자가 "다음 개발"을 명시적으로 요청한 소목표. **공식 KRX/키움 첫 거래 자동 수집이 아니라**, 별도로 확보한 사용자 CSV 주장과 기존 v2 `KRX_OPEN` 아침 고정 가상 진입 장부 사이의 출처·시각·가격·해시 **일관성 비교**입니다.
+- `app/morning_open_receipt_compare.py` 신규: 정확한 8열 CSV `day,market,code,venue,first_at,price_won,evidence_hash,capture_status`; 시간대 지정, KRX 개장 이후, 미래 방지, 동일 고정일·종목·시장 검증, 1MB/1,000행/중복 제한. 소스가 없거나 mismatch면 `NO_RECEIPT`, `NO_VIRTUAL_ENTRY`, `RECEIPT_MISMATCH`, `USER_CAPTURE_UNVERIFIED`, `MATCHED_USER_CLAIM`으로 나누고 미관측 0%/실주문을 만들지 않음.
+- `capture_status=CLAIMED_COMPLETE`은 오직 **CSV 제출자의 수집 완전성 주장**입니다. 외부 공급자 서명·KRX 공식 인증 아님. 프로그램 `evidence_hash`도 자체 소프트웨어 기록에 불과해 최초 체결이 확인되었다고 표시하지 않음.
+- `app/gui.py` 연습 탭에 "고정 추천·외부 첫 거래 CSV 대조 (읽기 전용)" 버튼 및 날짜·CSV 선택 GUI 경로 추가. CLI `python -m app.morning_open_receipt_compare --root ... --mode ... --day ... --csv ...` 지원. 원본 CSV 파일/경로·개인 DB를 GitHub/다른 서버에 업로드하지 않음.
+- `tests/test_morning_open_receipt_compare.py`: 합성 고정 목록, 일치·가격/해시/시각 충돌, 수집 불명, 가상 진입 없음, 목록 밖/중복/잘못된 CSV·타 시장/모드, 파일 크기/표시 제한, GUI/CLI 읽기 전용 진입점 회귀.
+- `docs/MORNING_OPEN_RECEIPT_COMPARE.md`: 가상 예시·제출 CSV 계약·공식 첫 거래 인증 아님·독립 원천 검증의 남은 조건 안내.
+- 완료의 4가지 기준: (1) 새 CSV/DB 읽기만 하고 가상·모의·실주문 없을 것, (2) 종목·시장·날짜·출처 모드 혼합 거부, (3) 원문 유무/불일치/소프트웨어 일치 표시, (4) 실제 첫 체결 검증·계좌 체결 완료라고 오해하지 않을 것.
+- 이전 `/가상시초근거` HEAD `44d22be660bd6bbaca61ad43ab36db5276a4d24b`의 GitHub Actions **1,434 passed** 검증. 이번 새 기능의 최신 GitHub Actions는 **결과 확인 전까지 미검증**(run 39713487401 포함). 기존 CI 성공을 신규 기능 성공으로 주장하지 않음. 별도 독립 verification agent 수락도 **대기**.
+- 운영 단위 미완료: 검증 가능한 공식 KRX 최초 거래 원문 확보·원문 서명/연속 수집·장중 시세, Windows GUI 실제 클릭, 사용자 본인 CSV의 독립성, 키움 모의 체결/HTS 대조, 실계좌 주문. 실 주문 금지와 비밀정보 업로드 금지 유지.
+- 집 Work는 우선 현재 HEAD/diff/CI를 확인하고 실패를 고치고, 별도 검증 담당자가 변경된 정확한 SHA를 리뷰하게 한 후에만 이 소목표 완료로 처리. Draft PR #1 별도 브랜치 유지.
