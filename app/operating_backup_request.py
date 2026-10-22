@@ -59,7 +59,7 @@ def execute(request):
             # Restore itself only copies a bundle. Also prevent another active
             # instance from overlapping this explicitly deferred maintenance.
             with ExitStack() as locks:
-                for name in ('application.lock','telegram_offline/receiver.lock','kiwoom_mock_watch/receiver.lock'):
+                for name in ('application.lock','telegram_offline/receiver.lock','kiwoom_mock_watch/receiver.lock','quote_capture.lock'):
                     locks.enter_context(ReceiverLock(Path(request.root)/name))
                 output=operating_backup.restore(request.folder,request.target)
         return dict(ok=True,action=request.action,path=str(output))

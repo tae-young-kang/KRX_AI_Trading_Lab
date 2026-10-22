@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None,morning_quote_request=None,theme_opening=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None,morning_quote_request=None,theme_opening=None,quote_capture=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -58,6 +58,7 @@ class TelegramOrderService:
         self.theme_budget = theme_budget
         self.theme_plan=theme_plan
         self.theme_opening=theme_opening
+        self.quote_capture=quote_capture
         self.practice_daily = practice_daily
         self.actual_daily=actual_daily
         self.morning_daily=morning_daily
@@ -74,6 +75,7 @@ class TelegramOrderService:
         from app.theme_delivery import destination_scope
         self.theme_destination = destination_scope(bot_id,chat_id)
         self.broker_identity = engine.broker.identity
+        self.daily_mode=daily_mode
         self.clock = clock or (lambda: datetime.now(KST))
         if self.clock().tzinfo is None:
             raise ValueError('시간대가 포함된 시각이 필요합니다.')
@@ -117,6 +119,7 @@ class TelegramOrderService:
                        (self.scope, self.session))
 
     def cancel_pending_changes(self):
+        if self.quote_capture is not None:self.quote_capture.cancel(owner=(self.scope,self.session))
         if self.morning_quote_request is not None:self.morning_quote_request.cancel()
         if self.conditions is not None:self.conditions.cancel_session(self.scope,self.session)
         review=getattr(self.analysis_request,'review',None)
@@ -436,6 +439,12 @@ class TelegramOrderService:
                     else:
                         try:reply=self.analysis_request.report(int(match[1] or 1))
                         except Exception:reply='개선안의 생성 당시 조건·모드를 확인하지 못했어요. 조건을 적용하지 않았어요.'
+            elif text in ('/시세수집시작','/시세수집상태','/시세수집중지'):
+                if self.quote_capture is None:reply='시세 수집 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                elif text=='/시세수집상태':reply=self.quote_capture.report()
+                elif text=='/시세수집중지':reply=self.quote_capture.cancel(owner=(self.scope,self.session),explicit=True)
+                elif not owner['active']:reply='수신을 중지했어요. PC에서 개인 수신을 다시 시작해 주세요.'
+                else:reply=self.quote_capture.request(mode=self.daily_mode,owner=(self.scope,self.session))
             elif text in ('/가상시세갱신','/가상시세상태'):
                 if self.morning_quote_request is None:reply='가상 시세 갱신 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
                 elif text=='/가상시세상태':reply=self.morning_quote_request.summary()

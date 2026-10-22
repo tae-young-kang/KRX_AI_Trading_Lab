@@ -57,6 +57,8 @@ from app.telegram_conditions import ConditionCommands
 from app.condition_report import report as condition_report_text
 from app.condition_analysis_request import ConditionAnalysisRequest
 from app.morning_quote_request import MorningQuoteRequest
+from app.quote_capture_request import QuoteCaptureRequest
+from app.quote_capture_worker import QuoteCaptureWorker
 from app.theme_opening_requests import handle as theme_opening_handle
 from app.morning_quote_refresh import refresh as refresh_morning_quotes
 from app.proposal_report import report as proposal_report_text
@@ -158,6 +160,8 @@ class MainWindow(QMainWindow):
         self.quote_batch_profile=QuoteBatchProfile()
         self.shadow = ShadowEngine(self.db)
         self.history = HistoryStore(data_dir() / 'research.db')
+        self.quote_capture=QuoteCaptureRequest(data_dir())
+        self.quote_capture_worker=None
         self.research_report = None
         self.research_run_id = None
         self.shadow.initialize_defaults(dict(self.cfg), self.cfg['data_mode'])
@@ -609,6 +613,11 @@ class MainWindow(QMainWindow):
         compare_open.setToolTip('별도 확보한 CSV와 저장한 가상 시초 기록을 비교해요. 거래소 인증·실제 체결 아님')
         compare_open.clicked.connect(self.compare_morning_open_csv)
         v.addWidget(compare_open)
+        quote_controls=QHBoxLayout()
+        for label,handler in (('시세 수집 시작',self.start_quote_capture),('수집 상태',self.show_quote_capture),('시세 수집 중지',self.stop_quote_capture)):
+            button=QPushButton(label);button.clicked.connect(handler);quote_controls.addWidget(button)
+        v.addLayout(quote_controls)
+        v.addWidget(lbl('REAL 시세만 저장해요. 처음 받은 후보는 공식 첫 거래 인증이 아니며 주문하지 않아요.','Muted'))
         self.trade_table = make_table(['ID','종목','구분','남은/처음 수량','매수가','평균 매도가','실현손익(원)',
                                        '손익률','매수일','청산일','사유','승패'])
         v.addWidget(self.trade_table)
@@ -1759,7 +1768,7 @@ class MainWindow(QMainWindow):
             source=lambda mode=current_mode(self.cfg).key:recommendation_calendar_source(self.cfg,mode))
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
-                                     analysis_request=self.remote_analysis,morning_quote_request=self.remote_morning_quote,
+                                     analysis_request=self.remote_analysis,morning_quote_request=self.remote_morning_quote,quote_capture=self.quote_capture,
                                      condition_report=lambda page=1,db=self.db,mode=current_mode(self.cfg).key:
                                          condition_report_text(db,mode,min_train=max(20,int(self.cfg['min_strategy_trades'])),page=page),
                                      recommendation_request=self.remote_scan,
@@ -1924,7 +1933,43 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage('오류: ' + message)
         QMessageBox.warning(self, '작업 실패', message)
 
+    def start_quote_capture(self):
+        mode=current_mode(self.cfg).key if self.cfg.get('data_mode')=='KIWOOM' and self.cfg.get('kiwoom_env')=='REAL' else 'UNSUPPORTED'
+        QMessageBox.information(self,'시세 전용 수집',self.quote_capture.request(mode=mode))
+
+    def stop_quote_capture(self):
+        self.quote_capture.cancel()
+        if self.quote_capture_worker is not None:self.quote_capture_worker.stop()
+
+    def show_quote_capture(self):
+        QMessageBox.information(self,'시세 수집 상태',self.quote_capture.report())
+
+    def poll_quote_capture(self):
+        control=getattr(self,'quote_capture',None)
+        if control is None:return
+        running=getattr(self,'quote_capture_worker',None)
+        if running is not None and running.isRunning():return
+        receiver=self.telegram_order_worker
+        owner=control.owner
+        def current():
+            if self.cfg.get('data_mode')!='KIWOOM' or self.cfg.get('kiwoom_env')!='REAL':return False
+            if owner is None:return True
+            return bool(receiver and receiver is self.telegram_order_worker and receiver.isRunning()
+                and not receiver.isInterruptionRequested() and receiver.service
+                and (receiver.service.scope,receiver.service.session)==owner and receiver.service.accepts_search_requests())
+        generation=control.take(mode=current_mode(self.cfg).key,busy=bool(self.work and self.work.isRunning()),active=current())
+        if generation is None:return
+        active=lambda:control.active(generation) and current()
+        def auth():
+            if not active():raise ValueError('시세 수집 소유권이 바뀌었어요.')
+            key,secret=self.broker_keys('REAL')
+            return KiwoomMarket(key,secret,env='REAL')
+        worker=QuoteCaptureWorker(data_dir(),auth,active=active)
+        worker.completed.connect(lambda state:control.finish(generation,state))
+        self.quote_capture_worker=worker;worker.start()
+
     def poll_remote_scan(self):
+        if hasattr(self,'poll_quote_capture'):self.poll_quote_capture()
         worker = self.telegram_order_worker
         if getattr(self,'remote_theme_active',False) and self.remote_theme.cancellation_requested():
             if self.work and self.work.isRunning():self.work.requestInterruption()
@@ -2621,6 +2666,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self,event):
         self.timer.stop()
+        capture=getattr(self,'quote_capture_worker',None)
+        if capture is not None and capture.isRunning():
+            self.stop_quote_capture()
+            self.pending_operating_request=None
+            QMessageBox.information(self,'시세 수집 종료 중','시세 수집이 끝난 뒤 다시 닫아 주세요.')
+            event.ignore()
+            return
         if self.mock_watch_worker and self.mock_watch_worker.isRunning():
             self.stop_mock_notices()
             QMessageBox.information(self,'모의 연결 종료 중','모의 알림 연결이 끝난 뒤 다시 닫아 주세요.')

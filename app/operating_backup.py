@@ -98,7 +98,7 @@ def backup(root,folder):
     if not root.is_dir() or not folder.is_dir() or folder.is_relative_to(root):raise ValueError('기록 폴더 밖의 기존 백업 폴더를 선택해 주세요.')
     target=folder/('krx-operations-'+uuid.uuid4().hex)
     with ExitStack() as locks:
-        for name in ('application.lock','telegram_offline/receiver.lock','kiwoom_mock_watch/receiver.lock'):
+        for name in ('application.lock','telegram_offline/receiver.lock','kiwoom_mock_watch/receiver.lock','quote_capture.lock'):
             locks.enter_context(ReceiverLock(root/name))
         names=[name for name in [*REQUIRED,PROFILE] if checked_path(root,name).is_file()]
         for mode in ('DEMO','MOCK','REAL_QUOTES'):

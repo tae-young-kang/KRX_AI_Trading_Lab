@@ -930,3 +930,26 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - 제품4파일최종해시: morning_virtual515a4ac644ea4b1b9d73aacfff35eb22a26053fe7b8fdff88888b3d8c8a0de40, evidence_status2889f4ff87f785a01ebf68e3cfd735856f69c656da88943106005f25f55d41f6, receipt_compare67441288c560dd6b6c3d217a69487ef64809fe0eba1076e00ebc3ba16603be8d, test7d28546432a87e2bc09fab5dc6058a2a3d05f88caa4d9c2325870fd401724ef2.
 - docs/MORNING_OPEN_RECEIPT_COMPARE.md 검증범위 추가와 기록3파일 재검토 후 정확한8파일 staged검사·commit/push·원격SHA·새CI 확인 예정. PR #1은OPEN/DRAFT/unmerged이며 main에 병합하지 않는다. baseline CI39713684766의1452 성공과 새수정 검증을 구분한다.
 - 다음 우선순위1: 공식 시세전용0B 수신→출처/세션/등록·끊김·수신근거 보관의 읽기전용 경로 설계/구현. 첫수신은 후보이며 공식최초체결로승격하지 않는다. 공식스키마의순번/누락복구/등록효력/서버정렬 보장 부족은 미검증으로 남긴다. 이후 가격 연결→실제입력 분리→객관성과·시장초과수익→실제자료 Walk-Forward/48조건 순서를 유지한다.
+
+## 2026-10-22 D-시세전용수집경로-1 · 착수 전 수락기준
+- 직전81b8e2d11003bfc123f365bf6c5eaeb8347bf6f7: exact staged8파일 비밀정보검사·commit/push 성공·remoteSHA일치. PR#1 설명을 실제수정/독립1469/1·baseline1452·미검증범위로 갱신, OPEN/DRAFT/unmerged 유지. 새CI39715363375는현재정확한SHA에서실행중이며완료후확인한다.
+- 요구사항 최신우선순위1/원래 D·7·10: 신뢰할수있는첫거래데이터 경로의 선행단계인 주문·계좌와 분리된 공식0B 시세 수신/수집근거 보존. 개발 /root/development, 독립검증 /root/verification, 조정자 /root. 공인최초체결 인증/자동 가상진입은 이번에도 미완료로 분리한다.
+- 범위: 기존 REAL_QUOTES 모드의 사전고정v2KRX 대상→개인명령 또는명시GUI 시작→독립시세worker→고정REAL인증/공식0B WS 등록·수신→로컬운영DB의세션/시세근거→상태/중지. 키움모의/계좌주문stream은사용하지않으며실제네트워크/GUI실행은이번개발검사에서하지않는다. 기존인증·수신/소유Work패턴을좁게재사용한다.
+- 기준1: 명시적으로 시작한 현재 REAL_QUOTES/동일 KRX 고정대상만 허용. 대상/날짜/경로·수신소유자/작업/모드 변경·한도·중복수집/잠금/재시작을 검사, 지원한도 초과는 조용히 잘라내지 않음. 계좌조회·주문 함수0, MOCK/DEMO자료 혼합0, 실제client/키는 FakeAuth/FakeSocket으로대체해검사.
+- 기준2: 공식REAL WS와LOGIN→REG0B→REAL만 허용하고 handshake/등록전후·세션ID·로컬수신순번/수신시각·monotonic·요청코드·허용된시세필드원문/hash를구분보존. LOGIN토큰/키·계좌자료·모르는프레임/예외원문을저장하거나표시하지않음. session상의추정날짜와공급HHmmss를구분하고날짜변경/역순/잘못된/미래시각·알수없는거래소는정직하게미확인/오류로처리.
+- 기준3: 종목별처음수신은CANDIDATE_FIRST_SEEN(처음받은후보)일뿐 FIRST_TRADE/공식KRX최초체결·시초가·실체결로승격금지. 등록응답의로컬수신시각이거래소구독효력시각이라는가정금지, 거래소순번/손실복구/서버정렬·서명·완전성은공식명세에서미확인이므로항상구분. 자료모음으로기존가상진입/손익·승패·실제입력장부를변경하지않음.
+- 기준4: 수신중지/끊김·등록실패·프로토콜오류·버퍼/저장실패는세션에남기고종료,자동재로그인/재연결/조용한세션이어붙이기금지. 신규시작은새세션. 저장시퀀스/세션근거는append하고조회는읽기전용·없는DB생성0. 기존허용운영DB에두어백업포함/키제외유지.
+- 기준5: 집PC/Telegram 사용자에게쉬운한국어의명시시작/상태/중지/미확인안내제공. 긴수신이화면을막거나기존Work/receiver종료guard를우회하지않음. 소유receiver교체·중지/모드전환과앱종료시활성수집종료/재시작명시선택을보장.
+- 기준6: FakeSocket/FakeAuth→개인명령/가짜GUI→worker→LOGIN/REG→등록전자료·정상0B·중복/역순/날짜변경·끊김/oversize/오류→임시DB→조회/중지 종단을검사. 비밀marker가DB/상태에남지않고계좌/주문호출0·기존장부불변/운영백업포함을확인. 자체관련/전체suite·compile/diff→동결독립재현/전체검사→exactstaged검사·commit/push·CI·인수인계.
+- 공식근거: Kiwoom-Securities/Kiwoom-REST-API의subscribe_domestic_stock_trade_pubsub.py·kiwoom_api_spec.json·core/ws_client.py. 확인필드20(HHmmss)/10(현재가)/16(시가)/1890(시가시간)/9081(거래소). 1890/9081세부값·최초체결완전성보장은미확인. 필요명세가부족한필드는추정승인하지않는다. 실제원문/시세·Windows/Telegram실증은미검증상태로남긴다.
+- 직전 receipt 수정 CI39715363375 최종 확인: head81b8e2d11003bfc123f365bf6c5eaeb8347bf6f7 completed/success, Windows job 로그1470 passed in549.82s. 로컬1skip과Windows통과수를구분한다. PR#1 설명도 해당정확SHA의CI성공으로갱신했다. 이 결과는현재개발중인시세수집코드의성공으로확대하지않는다.
+- D수집 독립 첫검증 수락보류(기준2/6): JSON 중복키의 마지막값만 검증한 뒤 raw 원문을 저장하여 values의 중복10키 앞값에 미검증 marker를 넣어도 정상STOPPED·quote_capture_frames.raw에남는 것을 검증담당이 임시재현했다. 개발담당에 모든 중첩객체의 중복키(escape로동일해지는키포함) strict거절 및 원문/해시·비저장회귀를 반환했다. 이전1494/1 자체검사는최종수락근거로사용하지않고수정후재동결·독립재검증한다.
+
+## 2026-10-22 D-시세전용수집경로-1 독립 검증 완료
+- 구현: REAL_QUOTES 사전고정 KRX 1~100종목→GUI/허용 개인명령 명시시작→독립 QuoteCaptureWorker→시세전용LOGIN/REG0B→research.db의세션·제어이벤트·허용원문/hash·처음받은후보→읽기상태/중지. 긴수신은기존Work와분리, 모드/소유receiver·generation변경/종료guard를검사하며이전receiver생명주기종료가새GUI/새소유수집을취소하지않는다. 현재허용개인의명시명령은GUI시작수집도중지가능.
+- 독립 첫발견(중복JSON키앞값의미검증원문영속)을모든중첩객체의strict중복키거절로수정. escaped동일키도거절한다. 예외/LOGIN·토큰·계좌자료/알수없는원문은저장하지않고정상시세원문/hash는보존한다. 계좌/주문호출0,기존가상장부불변.
+- 개발자체최종관련117 passed·전체1498 passed/1 skipped·compileall/diff통과. 독립 /root/verification 직접관련65 passed(12.26s)·전체1498 passed/1 skipped(72.80s)·compileall/diff통과. 임시DB/가짜Auth·Socket/AST가짜GUI·개인명령으로만검사했다.
+- 별도독립 escaped중복marker재현: FAILED/frames0·DB/이벤트/상태marker0. 다음명시시작은새세션으로정상원문·SHA보존/기존가상DB바이트불변. 중지/실패/끊김·재연결0,소유권·모드·종료경계,운영백업포함/실행중capture lock백업·복구차단확인.
+- 기준1~6: 명시한구현/오프라인범위충족. 기준HEAD81b8e2d11003bfc123f365bf6c5eaeb8347bf6f7의최종11파일해시불변독립확인. 최종coreCD3FEE738B83A68786255EC180E3DC7DD1502CB14CE95069D4BFBE466C110892·tests4FD250489B2D7F3C261739368C0E2B11D30DE9E30BFA3DA372F3653BAEA880CD. 조정자는이번범위만수락한다.
+- 전체우선순위1은부분구현/실환경미검증: 실제접속·원문수집/GUI·Telegram전달미실행,최초체결인증·provider순번/손실복구·서버정렬/등록효력·9081해석/독립원천인증미확인. 날짜는LOCAL_SESSION_INFERRED,첫수신은CANDIDATE_FIRST_SEEN일뿐공식KRX첫체결/정규장시초가/체결·수익률로승격하지않는다. FIRST_TRADE·신규자동진입/손익장부는미연결이다.
+- 제품/검사/가이드11파일+기록3파일총14파일최종기록재검토후exactstaged비밀검사·commit/push·remoteSHA·새CI/PR상태를확인한다. 이전81b8e2d Windows1470성공은이번11파일CI로사용하지않는다. 다음은날짜가있는기존ka10079/시세근거와후속가격을안전하게연결하는경로를점검하되원천미확인후보를가상진입으로승격하지않는다. 실제입력분리→객관성과/시장초과수익→실자료Walk-Forward/48조건의남은요구를유지한다.
