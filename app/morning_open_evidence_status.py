@@ -3,14 +3,17 @@
 A paper-trade row or SHA256 is a stored software assertion, NOT independent
 exchange feed certification or real Kiwoom/mock-account execution.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from contextlib import contextmanager
+from functools import lru_cache
+from math import isfinite
 import json
 from pathlib import Path
 import re
 
 from app.morning_quote_router import _plan_identity, _safe_path
 from app.morning_virtual import MorningVirtual, aware, record_path
-from app.morning_venue_policy import KRX_OPEN, stored_policy, deadline
+from app.morning_venue_policy import KRX_OPEN, stored_policy
 from app.storage import Database
 from app.trading_clock import KST
 
@@ -31,27 +34,51 @@ def _day(value):
     return result
 
 
-def inspect(root, mode, day, *, now):
-    """Never instantiate a writable Database or create a missing cohort file."""
-    if mode not in MODES or not aware(now):
-        raise ValueError('자료 모드·확인 시각을 확인해 주세요.')
-    if _day(day) > now.astimezone(KST).date():
-        raise ValueError('미래 고정 목록을 조회하지 않아요.')
-    root = Path(root)
-    path = record_path(root, mode, day)
-    _safe_path(root, path)
+@lru_cache(maxsize=128)
+def session_bounds(day):
+    """Calendar-confirmed regular session; closing-auction timestamp inclusive."""
+    target=_day(day)
+    try:
+        import exchange_calendars
+        calendar=exchange_calendars.get_calendar('XKRX',start=(target-timedelta(days=7)).isoformat(),end=(target+timedelta(days=7)).isoformat())
+        opened=calendar.session_open(day).to_pydatetime()
+        closed=calendar.session_close(day).to_pydatetime()
+        if (not aware(opened) or not aware(closed) or opened>=closed
+                or opened.astimezone(KST).date().isoformat()!=day or closed.astimezone(KST).date().isoformat()!=day):raise ValueError()
+        return opened,closed
+    except Exception:
+        raise ValueError('해당 거래일의 정규장 시작·종료 시각을 확인하지 못했어요.') from None
+
+
+@contextmanager
+def validated_snapshot(root,mode,day,*,now):
+    """Validate and expose the exact same readonly transaction to consumers."""
+    if mode not in MODES or not aware(now):raise ValueError('자료 모드·확인 시각을 확인해 주세요.')
+    if _day(day)>now.astimezone(KST).date():raise ValueError('미래 고정 목록을 조회하지 않아요.')
+    root=Path(root);path=record_path(root,mode,day);_safe_path(root,path)
     if not path.is_file():
-        return None
-    reader = Database(path, read_only=True)
-    cohort = MorningVirtual(reader)
-    plan = cohort.plan()
-    _plan_identity(plan, mode, day)
-    if stored_policy(plan) != KRX_OPEN:
-        return {'mode': mode, 'day': day, 'legacy': True, 'results': []}
+        yield None
+        return
+    reader=Database(path,read_only=True)
     with reader.connect() as db:
-        rows = db.execute(
-            'SELECT code,source,entry_key,entry_json,opened_at,closed_at '
-            'FROM paper_trades').fetchall()
+        db.execute('BEGIN')
+        plan=MorningVirtual.plan_from_connection(db)
+        _plan_identity(plan,mode,day)
+        if stored_policy(plan)!=KRX_OPEN:
+            yield (dict(mode=mode,day=day,legacy=True,results=[]),plan,[])
+            return
+        rows=db.execute('SELECT code,market,source,entry_key,entry_json,strat_json,opened_at,closed_at,buy_ref FROM paper_trades').fetchall()
+        info=_inspect_rows(plan,rows,mode,day,now)
+        yield info,plan,rows
+
+
+def inspect(root,mode,day,*,now):
+    with validated_snapshot(root,mode,day,now=now) as snapshot:
+        return snapshot[0] if snapshot is not None else None
+
+
+def _inspect_rows(plan,rows,mode,day,now):
+    opened_at,closed_at=session_bounds(day)
     targets = {t['code']: t for t in plan['targets']}
     by_code = {}
     for row in rows:
@@ -60,20 +87,29 @@ def inspect(root, mode, day, *, now):
             raise ValueError('고정 대상 외 가상 진입 기록이나 중복 기록이 있어요.')
         try:
             entry = json.loads(row['entry_json'])
+            settings=json.loads(row['strat_json'])
             opened = datetime.fromisoformat(row['opened_at'])
         except (TypeError, ValueError, json.JSONDecodeError):
             raise ValueError('저장한 첫 거래 근거의 형식을 확인하지 못했어요.') from None
         try:
             quote_stamp = datetime.fromisoformat(entry['quote_stamp'])
+            fetched_stamp = datetime.fromisoformat(entry['stamp'])
         except (KeyError, TypeError, ValueError):
             raise ValueError('저장한 첫 거래 근거의 시각을 확인하지 못했어요.') from None
         if (not isinstance(entry, dict) or not aware(opened)
                 or not aware(quote_stamp)
                 or quote_stamp != opened
-                or opened < deadline(day, KRX_OPEN)
+                or opened < opened_at or opened > closed_at
+                or not aware(fetched_stamp) or not opened<=fetched_stamp<=now
+                or (fetched_stamp-opened).total_seconds()>30
+                or row['market']!=targets[code]['market']
+                or settings!=plan['settings']
+                or type(row['buy_ref']) not in (int,float) or not isfinite(row['buy_ref']) or row['buy_ref']<=0
+                or type(entry.get('price')) not in (int,float) or not isfinite(entry['price'])
+                or entry['price']!=row['buy_ref']
                 or opened > now
                 or opened.astimezone(KST).date().isoformat() != day
-                or row['entry_key'] != cohort.key(plan, code)
+                or row['entry_key'] != MorningVirtual.key(plan, code)
                 or row['source'] != ('DEMO' if mode == 'DEMO' else 'KIWOOM')
                 or entry.get('source') != row['source']
                 or entry.get('venue') != 'KRX'

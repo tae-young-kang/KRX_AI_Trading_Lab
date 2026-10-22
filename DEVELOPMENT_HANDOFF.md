@@ -1291,3 +1291,6 @@ PC/일일/원격 조건비교를 같은 생성 context 기반 관측 등록으�
 - 합성 CSV 회귀 테스트 `tests/test_morning_open_receipt_compare.py`; 상세 `docs/MORNING_OPEN_RECEIPT_COMPARE.md`.
 - 지난 소목표 1,434개 GitHub Windows CI 통과 확인. **신규 변경 전체 CI 및 독립 verifier는 대기 중**. 이점을 완료라고 오보고 금지.
 - 다음 실제 연결: 신뢰할 만한 공식 거래소/공급자 기록의 수집 완전성 증거(서명·첫 페이지·시퀀스·원문) 확보 → 안전한 읽기 전용 검증 → 그 후 실제 사용자 승인 하에 모의 체결/Windows 실증. 실계좌 주문 금지.
+
+## 2026-10-22 최신6b27b14 동기화·첫거래 CSV 대조 독립 검증
+로컬초안은stash/.git복사본으로보존하고 작업브랜치를6b27b14로fast-forward했다. PR#1 OPEN/DRAFT/main미병합, CI39713684766 head6b27b14 1452passed success확인. 별도독립검토의세션밖시각·시장/가격정합성/검사후재조회 결함을동일readonlysnapshot·실거래일세션검사로수정. 독립최종전체1469 passed/1 skipped·관련73개·WAL동시변경/CSV·DB불변·fakeGUI실행검사통과로명시범위만수락. 실제GUI/첫거래원천인증·수집완전성/계좌·Telegram실증은미확인. 다음최우선은공식시세전용수신과근거보관,후속가격·실제입력분리·객관성과/시장초과수익·실제자료WFO48조건흐름이다. exact8파일비밀검사/commit/push/remoteCI를확인하고WORK최신기록을따른다.

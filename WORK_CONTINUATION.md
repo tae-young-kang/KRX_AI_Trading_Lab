@@ -908,3 +908,25 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - 이전 `/가상시초근거` HEAD `44d22be660bd6bbaca61ad43ab36db5276a4d24b`의 GitHub Actions **1,434 passed** 검증. 이번 새 기능의 최신 GitHub Actions는 **결과 확인 전까지 미검증**(run 39713487401 포함). 기존 CI 성공을 신규 기능 성공으로 주장하지 않음. 별도 독립 verification agent 수락도 **대기**.
 - 운영 단위 미완료: 검증 가능한 공식 KRX 최초 거래 원문 확보·원문 서명/연속 수집·장중 시세, Windows GUI 실제 클릭, 사용자 본인 CSV의 독립성, 키움 모의 체결/HTS 대조, 실계좌 주문. 실 주문 금지와 비밀정보 업로드 금지 유지.
 - 집 Work는 우선 현재 HEAD/diff/CI를 확인하고 실패를 고치고, 별도 검증 담당자가 변경된 정확한 SHA를 리뷰하게 한 후에만 이 소목표 완료로 처리. Draft PR #1 별도 브랜치 유지.
+
+## 2026-10-22 최신 원격 개발 이어하기 · D-첫거래대조검증-1 착수 기준
+- 최신 사용자 우선순위: 추천 정확도/신뢰할 첫 거래 근거→가상 진입·후속가격→실제입력 분리→성과·시장초과수익→실제자료 Walk-Forward/48조건→Windows/Telegram→승인 전 주문 없는 모의 준비 순서. 기존 0~12/A~F 유지, 무관한 기능 추가보다 이 흐름을 우선한다.
+- 현재 HEAD/원격/PR #1 head: 6b27b14c2433315fe6f47df6522fd9cc46273050. 로컬51078ca에서 같은 작업브랜치만 fast-forward, main 미변경. 기존 로컬 WORK 초안은 .git/codex_pre_sync_WORK.md와 .git/codex_pre_sync_WORK.patch 및 named stash에 보존했으며 원격 신규 기록 위에 덮지 않았다. 예전 D 일봉가상성과 구현은 시작되지 않았고 최신 요구와 현재 코드를 우선한다. 개인CSV4파일 미접근/미추적 유지.
+- 지정 CI39713684766은 해당 HEAD 기준 test-offline 실행 중임을 실제 API/gh 조회 확인, 실패/성공을 추정하지 않는다. 완료 후 결과를 다시 확인한다. PR #1은 OPEN/DRAFT/unmerged.
+- 요구사항 D/단계7·8·10: 직전 receipt 비교 기능의 안전한 소프트웨어 일관성 검증. 개발 /root/development, 독립검증 /root/verification, 조정자 /root. 원본 기능 비교범위44d22be660bd6bbaca61ad43ab36db5276a4d24b..6b27b14c2433315fe6f47df6522fd9cc46273050, 참조 inspect 모듈/GUI 포함.
+- 기준1: 사용자 CSV를 공인 첫 체결로 인증하지 않으며 일치·불일치/누락·가상 진입 없음·수집미확인을 정확히 표시. 첫 체결·일봉 시가·가상 체결·실체결/승패를 혼동하거나 새 값을 만들어내지 않는다.
+- 기준2: 비교에 사용한 frozen plan과 저장 진입행의 모드/종목/시장/출처/시각/가격 근거를 동일한 읽기 스냅샷에서 검증하고 비교한다. 검사 후 다시 읽은 비검증 행을 신뢰하지 않는다. 손상·세션범위 위배는 오류/미확인. 기존 inspect 동작과 legacy분리 보존.
+- 기준3: CSV 크기/행/컬럼·시간대/미래/거래일·종목/시장·가격/해시 제약, 원본/DB 바이트 불변·없는 DB 생성0. GUI busy/취소/선택·작업 callback을 실제GUI 없이 가짜 UI/AST로 실행검사하여 source 문자열 검사만으로 충분하다고 보지 않는다.
+- 기준4: 개발 자체 관련/전체 offline suite·compileall/diff, 별도 검증담당의 정확한 HEAD+고정변경독립검토/임시자료 재현/전체 suite. CI는 정확한 SHA와 결과로 기록. 실패시 수정후 영향범위 재검증. 실GUI/실제시장·계좌·Telegram·개인자료/키 접근·실제모의/실계좌 주문 금지.
+- 실제 데이터 원천 인증/최초 수집 완전성·시퀀스 및 실환경은 이 비교만으로 미완료. 검증 후 원래 최우선 데이터/성과 흐름의 다음 안전한 연결을 이어간다. 독립검증 불가시 대기로 남기고 자체검사만 수락하지 않는다.
+- CI39713684766 최종 결과: HEAD6b27b14c2433315fe6f47df6522fd9cc46273050, test-offline completed/success, 실제 job 로그1452 passed in363.12s 확인. 이 결과는 앞으로 수정할 코드의 CI 성공을 의미하지 않는다.
+- 독립 초기검토 기준2 보완필요: (a) 개장 하한만 검사하여 당일23시 CSV/저장근거를 수용, (b) row.market/entry_json.price를 변경해도 정상CSV와 MATCHED_USER_CLAIM으로 표시되는 시장/가격 근거 불일치 재현. 개발 담당에 세션상한·시장/가격 일관성 및 각각 회귀검사를 반환. 검사 뒤 별도 재조회하는 snapshot 문제도 함께 수정 중이며 아직 독립 수락하지 않았다.
+
+## 2026-10-22 D-첫거래대조검증-1 독립 검증 완료
+- 원본6b27b14 기능의 독립검토에서 확인한 세션밖23시 수용·저장시장/entry가격 불일치 및 검사후재조회 snapshot 결함을 수정. plan 파싱은 기존 MorningVirtual 검사를 재사용하고 단일 readonly BEGIN에서 검증한 plan/진입행만 비교한다. 실제 XKRX 정규장 개장~종료 정각 포함, 특수일/달력실패와 원래설정/조회시각도 검사한다. CSV는 stat뿐 아니라 제한바이트 읽기의 실제크기를 확인한다.
+- 개발 자체 관련103 passed(13.50s), 전체1469 passed/1 skipped(69.96s), compileall/diff 통과. 독립 /root/verification 직접 관련73 passed(13.14s), 전체1469 passed/1 skipped(71.76s), compileall/diff 통과. 실제GUI를 켜지 않고 AST/fake UI로 busy/날짜·파일 취소/선택→작업→결과 callback 실행을 검증했다.
+- 별도 독립 WAL writer 재현: plan을 읽은 직후 다른 연결이 행을 변경해도 같은 스냅샷의 검증된 옛 자료만 비교, 다음 새 조회는 손상 거절. 23시/entry가격 손상 거절, 임시원본CSV/DB 바이트 불변·없는DB 생성0 확인.
+- 기준1 충족: 5상태를 구분하며 사용자 주장 일치가 공식 인증/실체결/수익률 증거는 아님. 기준2 충족: 동일snapshot·시장/가격/설정모드·시각/정규장 정합성. 기준3 충족: CSV제약·읽기전용·fake GUI경로. 기준4 충족: exactHEAD6b27b14+수정4파일 독립검토·별도검사/해시불변. 조정자는 이 오프라인범위만 수락한다. 실제첫거래 원천인증·수집완전성/실GUI·실계좌/모의계좌·Telegram·실환경은 미확인이다.
+- 제품4파일최종해시: morning_virtual515a4ac644ea4b1b9d73aacfff35eb22a26053fe7b8fdff88888b3d8c8a0de40, evidence_status2889f4ff87f785a01ebf68e3cfd735856f69c656da88943106005f25f55d41f6, receipt_compare67441288c560dd6b6c3d217a69487ef64809fe0eba1076e00ebc3ba16603be8d, test7d28546432a87e2bc09fab5dc6058a2a3d05f88caa4d9c2325870fd401724ef2.
+- docs/MORNING_OPEN_RECEIPT_COMPARE.md 검증범위 추가와 기록3파일 재검토 후 정확한8파일 staged검사·commit/push·원격SHA·새CI 확인 예정. PR #1은OPEN/DRAFT/unmerged이며 main에 병합하지 않는다. baseline CI39713684766의1452 성공과 새수정 검증을 구분한다.
+- 다음 우선순위1: 공식 시세전용0B 수신→출처/세션/등록·끊김·수신근거 보관의 읽기전용 경로 설계/구현. 첫수신은 후보이며 공식최초체결로승격하지 않는다. 공식스키마의순번/누락복구/등록효력/서버정렬 보장 부족은 미검증으로 남긴다. 이후 가격 연결→실제입력 분리→객관성과·시장초과수익→실제자료 Walk-Forward/48조건 순서를 유지한다.

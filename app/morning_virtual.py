@@ -98,7 +98,11 @@ class MorningVirtual:
         return payload
 
     def plan(self):
-        with self.db.connect() as db:row=db.execute('SELECT payload FROM morning_cohort WHERE id=1').fetchone()
+        with self.db.connect() as db:return self.plan_from_connection(db)
+
+    @staticmethod
+    def plan_from_connection(db):
+        row=db.execute('SELECT payload FROM morning_cohort WHERE id=1').fetchone()
         if row is None:raise ValueError('먼저 아침 추천 목록을 고정해 주세요.')
         plan=json.loads(row['payload'])
         if plan.get('kind')!='VIRTUAL_ONLY':raise ValueError('별도의 아침 가상 추적 기록이 필요해요.')

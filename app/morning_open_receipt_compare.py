@@ -8,15 +8,13 @@ import argparse
 import csv
 from datetime import date, datetime
 import json
+import io
 from math import isfinite
 from pathlib import Path
 import re
 
-from app.morning_open_evidence_status import inspect as inspect_cohort
-from app.morning_venue_policy import KRX_OPEN, deadline
-from app.morning_virtual import MorningVirtual, aware, record_path
-from app.morning_quote_router import _safe_path
-from app.storage import Database
+from app.morning_open_evidence_status import validated_snapshot, session_bounds
+from app.morning_virtual import aware
 from app.trading_clock import KST
 
 HEADERS = ('day', 'market', 'code', 'venue', 'first_at', 'price_won',
@@ -43,9 +41,12 @@ def read_receipts(path, *, day, now):
     path = Path(path)
     found = {}
     try:
+        opened,closed=session_bounds(day)
         if not path.is_file() or path.stat().st_size > MAX_BYTES:
             raise ValueError()
-        with path.open('r', encoding='utf-8-sig', newline='') as fp:
+        with path.open('rb') as fp:blob=fp.read(MAX_BYTES+1)
+        if len(blob)>MAX_BYTES:raise ValueError()
+        with io.StringIO(blob.decode('utf-8-sig'),newline='') as fp:
             records = csv.DictReader(fp)
             if records.fieldnames != list(HEADERS):
                 raise ValueError()
@@ -61,7 +62,7 @@ def read_receipts(path, *, day, now):
                     raise ValueError()
                 stamp = datetime.fromisoformat(row['first_at'])
                 if (not aware(stamp) or stamp.astimezone(KST).date().isoformat()!=day
-                        or stamp < deadline(day, KRX_OPEN) or stamp > now):
+                        or not opened<=stamp<=closed or stamp > now):
                     raise ValueError()
                 key = (row['market'], row['code'])
                 if key in found:
@@ -82,51 +83,43 @@ def compare_saved(root, mode, day, csv_path, *, now):
     """Compare only against a previously saved, read-only morning cohort."""
     if not isinstance(day,str):
         raise ValueError('고정 목록 날짜를 확인해 주세요.')
-    cohort = inspect_cohort(root, mode, day, now=now)
-    if cohort is None:
-        return None
-    if cohort['legacy']:
-        return {'legacy': True, 'day': day, 'mode': mode, 'results': []}
-    claims = read_receipts(csv_path, day=day, now=now)
-    path = record_path(Path(root), mode, day)
-    _safe_path(Path(root), path)
-    reader = Database(path, read_only=True)
-    plan = MorningVirtual(reader).plan()
-    targets = {(x['market'],x['code']):x for x in plan['targets']}
-    if any(key not in targets for key in claims):
-        raise ValueError('대조 파일에 고정 추천 목록 밖의 종목이 있어요.')
-    with reader.connect() as db:
-        saved = {r['code']: r for r in db.execute(
-            'SELECT code,buy_ref,opened_at,entry_json FROM paper_trades')}
-    results = []
-    for key, target in targets.items():
-        receipt = claims.get(key)
-        stored = saved.get(target['code'])
-        if receipt is None:
-            status = 'NO_RECEIPT'
-        elif stored is None:
-            status = 'NO_VIRTUAL_ENTRY'
-        else:
-            try:
-                entry = json.loads(stored['entry_json'])
-                stamp = datetime.fromisoformat(stored['opened_at'])
-                price = stored['buy_ref']
-            except (TypeError, ValueError, json.JSONDecodeError):
-                raise ValueError('가상 진입의 저장 형식이 올바르지 않아요.') from None
-            if (type(price) not in (int,float) or not isfinite(price)
-                    or price != receipt['price']
-                    or stamp != receipt['first_at']
-                    or entry.get('evidence_hash') != receipt['hash']):
-                status = 'RECEIPT_MISMATCH'
-            elif receipt['capture_status'] != 'CLAIMED_COMPLETE':
-                status = 'USER_CAPTURE_UNVERIFIED'
+    with validated_snapshot(root,mode,day,now=now) as snapshot:
+        if snapshot is None:return None
+        cohort,plan,rows=snapshot
+        if cohort['legacy']:return {'legacy':True,'day':day,'mode':mode,'results':[]}
+        claims=read_receipts(csv_path,day=day,now=now)
+        targets={(x['market'],x['code']):x for x in plan['targets']}
+        if any(key not in targets for key in claims):raise ValueError('대조 파일에 고정 추천 목록 밖의 종목이 있어요.')
+        saved={r['code']:r for r in rows}
+        results = []
+        for key, target in targets.items():
+            receipt = claims.get(key)
+            stored = saved.get(target['code'])
+            if receipt is None:
+                status = 'NO_RECEIPT'
+            elif stored is None:
+                status = 'NO_VIRTUAL_ENTRY'
             else:
-                status = 'MATCHED_USER_CLAIM'
-        results.append(dict(market=key[0],code=key[1],name=target['name'],status=status))
-    counts = {key: sum(row['status']==key for row in results) for key in LABELS}
-    return {'legacy': False, 'day': day, 'mode': mode,
-            'submitted': len(claims), 'total': len(results),
-            'counts': counts, 'results': results}
+                try:
+                    entry = json.loads(stored['entry_json'])
+                    stamp = datetime.fromisoformat(stored['opened_at'])
+                    price = stored['buy_ref']
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    raise ValueError('가상 진입의 저장 형식이 올바르지 않아요.') from None
+                if (type(price) not in (int,float) or not isfinite(price)
+                        or price != receipt['price']
+                        or stamp != receipt['first_at']
+                        or entry.get('evidence_hash') != receipt['hash']):
+                    status = 'RECEIPT_MISMATCH'
+                elif receipt['capture_status'] != 'CLAIMED_COMPLETE':
+                    status = 'USER_CAPTURE_UNVERIFIED'
+                else:
+                    status = 'MATCHED_USER_CLAIM'
+            results.append(dict(market=key[0],code=key[1],name=target['name'],status=status))
+        counts = {key: sum(row['status']==key for row in results) for key in LABELS}
+        return {'legacy': False, 'day': day, 'mode': mode,
+                'submitted': len(claims), 'total': len(results),
+                'counts': counts, 'results': results}
 
 
 def render(report, *, max_rows=8):
