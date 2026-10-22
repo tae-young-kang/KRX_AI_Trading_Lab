@@ -605,6 +605,10 @@ class MainWindow(QMainWindow):
             operations.addWidget(button)
         v.addLayout(operations)
         v.addWidget(lbl('전체 백업·복구는 프로그램 종료 후 진행해요. 키·설정은 제외하며 현재 기록을 덮지 않아요.','Muted'))
+        compare_open=QPushButton('고정 추천·외부 첫 거래 CSV 대조 (읽기 전용)')
+        compare_open.setToolTip('별도 확보한 CSV와 저장한 가상 시초 기록을 비교해요. 거래소 인증·실제 체결 아님')
+        compare_open.clicked.connect(self.compare_morning_open_csv)
+        v.addWidget(compare_open)
         self.trade_table = make_table(['ID','종목','구분','남은/처음 수량','매수가','평균 매도가','실현손익(원)',
                                        '손익률','매수일','청산일','사유','승패'])
         v.addWidget(self.trade_table)
@@ -623,6 +627,27 @@ class MainWindow(QMainWindow):
         compare.clicked.connect(self.create_optimizer)
         v.addWidget(compare)
         return page
+
+    def compare_morning_open_csv(self):
+        if self.work is not None and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 비교해 주세요.')
+            return
+        day,ok=QInputDialog.getText(
+            self,'첫 거래 CSV 대조','아침 추천 고정 날짜 (YYYY-MM-DD)')
+        if not ok or not day.strip():
+            return
+        path,_=QFileDialog.getOpenFileName(
+            self,'별도 확보한 첫 거래 CSV 선택',str(Path.home()),'CSV (*.csv)')
+        if not path:
+            return
+        from app.morning_open_receipt_compare import compare_saved, render
+        now=datetime.now(KST)
+        mode=current_mode(self.cfg).key
+        root=data_dir()
+        self.run_task(
+            lambda:render(compare_saved(root,mode,day.strip(),path,now=now)),
+            lambda msg:QMessageBox.information(self,'가상 첫 거래 원본 대조',msg),
+            '사용자 CSV 대조 완료 · 실제 체결 인증 아님')
 
     def make_shadow(self):
         page=QWidget(); v=QVBoxLayout(page)
