@@ -14,9 +14,9 @@ from app.storage import Database
 from app.market import Stock
 from app.trade_review import settings_snapshot
 from app.theme_calendar import recent_sessions
-from app.trading_clock import KST,TradingCalendar
+from app.trading_clock import KST
 from app.modes import current_mode
-from app.morning_venue_policy import KRX_OPEN,deadline,target_venue,stored_policy
+from app.morning_venue_policy import quote_session_open,KRX_OPEN,deadline,target_venue,stored_policy
 
 
 @dataclass(frozen=True)
@@ -131,11 +131,11 @@ class MorningVirtual:
         if target is None or target['venue']=='UNKNOWN' or target['venue']!=evidence.venue:
             raise ValueError('추천 목록과 확인한 NXT/KRX 거래 시장이 달라요. 미확인 시장은 진입하지 않아요.')
         day=evidence.at.astimezone(KST).date()
-        if (day.isoformat() not in recent_sessions(day) or not TradingCalendar(open_dates={day}).is_open(evidence.at,evidence.venue)
-                or (opening and day.isoformat()!=plan['day'])):
-            raise ValueError('추천일의 확인된 거래 구간을 확인해 주세요.')
         if policy==KRX_OPEN and (target['venue']!='KRX' or evidence.at<deadline(day.isoformat(),policy)):
             raise ValueError('KRX 개장 이후의 확인된 시세가 필요해요.')
+        if (day.isoformat() not in recent_sessions(day) or not quote_session_open(evidence.at,evidence.venue)
+                or (opening and day.isoformat()!=plan['day'])):
+            raise ValueError('추천일의 확인된 거래 구간을 확인해 주세요.')
         return plan,target
 
     def enter(self,evidence,*,now):

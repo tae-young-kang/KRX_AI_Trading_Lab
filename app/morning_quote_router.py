@@ -13,9 +13,9 @@ import re
 from app.morning_virtual import MorningVirtual,VenueTrade,aware,record_path
 from app.storage import Database
 from app.theme_calendar import recent_sessions
-from app.trading_clock import KST,TradingCalendar
+from app.trading_clock import KST
 from app.modes import current_mode
-from app.morning_venue_policy import KRX_OPEN,stored_policy,deadline
+from app.morning_venue_policy import quote_session_open,KRX_OPEN,stored_policy,deadline
 
 
 def validate_trade(evidence,*,now):
@@ -32,7 +32,7 @@ def validate_trade(evidence,*,now):
             or evidence.at.astimezone(KST).date()!=now.astimezone(KST).date()):
         raise ValueError('당일 일반 체결의 모드·종목·시장·시각·가격·근거를 확인해 주세요. 첫 거래는 이 경로로 진입하지 않아요.')
     day=evidence.at.astimezone(KST).date()
-    if day.isoformat() not in recent_sessions(day) or not TradingCalendar(open_dates={day}).is_open(evidence.at,evidence.venue):
+    if day.isoformat() not in recent_sessions(day) or not quote_session_open(evidence.at,evidence.venue):
         raise ValueError('확인된 거래일의 NXT/KRX 거래 구간이 아니에요.')
     return day.isoformat()
 

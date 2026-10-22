@@ -166,3 +166,76 @@ def test_optional_request_is_forwarded_by_receiver_without_importing_or_starting
     tree=ast.parse(source.read_text(encoding='utf-8'))
     calls=[node for node in ast.walk(tree) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='TelegramOrderService']
     assert len(calls)==1 and any(k.arg=='morning_quote_request' and isinstance(k.value,ast.Attribute) and k.value.attr=='morning_quote_request' for k in calls[0].keywords)
+
+
+@pytest.mark.parametrize('special',[False,True])
+def test_closing_tick_private_command_updates_today_and_carryover(tmp_path,sandbox,monkeypatch,special):
+    from datetime import datetime
+    from app import morning_venue_policy as policy
+    from app.morning_virtual import VenueTrade,MorningVirtual,record_path
+    from app.storage import Database
+    from app.config import DEFAULTS
+    from app.trading_clock import KST,TradingCalendar
+    from app.mock_telegram_orders import MockTelegramOrders
+    hour=10 if special else 9
+    close=datetime(2026,10,20,16 if special else 15,30,tzinfo=KST)
+    original=policy.session_bounds
+    if special:
+        monkeypatch.setattr(policy,'session_bounds',lambda day:(close.replace(hour=10,minute=0),close) if day=='2026-10-20' else original(day))
+    cfg=copy.deepcopy(DEFAULTS);cfg.update(data_mode='KIWOOM',kiwoom_env='REAL',paper_fee_pct=0,paper_sell_tax_pct=0,paper_slippage_pct=0)
+    trackers=[]
+    for day in ('2026-10-19','2026-10-20'):
+        at=datetime.fromisoformat(day+'T09:00:00+09:00')
+        if day=='2026-10-20':at=at.replace(hour=hour)
+        tracker=MorningVirtual(Database(record_path(tmp_path,'REAL_QUOTES',day)))
+        tracker.prepare(day=day,mode='REAL_QUOTES',origin='closing',targets=[dict(code='900001',name='합성',market='KOSPI',nxt_eligible=True)],settings=cfg,total_won=10000,now=at.replace(hour=7,minute=30),venue_policy=policy.KRX_OPEN)
+        tracker.enter(VenueTrade('REAL_QUOTES','900001','KRX',1000,at,at,'FIRST_TRADE','a'*64),now=at)
+        trackers.append(tracker)
+    service,broker,_,_=sandbox;request=MorningQuoteRequest('REAL_QUOTES');service.morning_quote_request=request
+    assert '조회를 요청' in service.handle(update(sandbox,1,'/가상시세갱신'))
+    client=FakeQuery(response('900001',price='1001',stamp=close.strftime('%Y%m%d%H%M%S')))
+    worker=SimpleNamespace(isRunning=lambda:True,isInterruptionRequested=lambda:False,service=service)
+    class Empty:
+        def take(self,*a,**k):return False
+    fake=SimpleNamespace(cfg=cfg,remote_scan=Empty(),remote_scan_active=False,remote_theme=None,remote_theme_active=False,
+        remote_morning_quote=request,remote_morning_quote_active=False,telegram_order_worker=worker,work=None,broker_keys=lambda env:('synthetic','synthetic'))
+    fake.remote_morning_quote_done=lambda result:request.finish(success=True,result=result)
+    fake.run_task=lambda fn,ok,label:ok(fn())
+    refresh_clock=lambda root,mode,factory,active:refresh(root,mode,factory,clock=lambda:close,active=active)
+    gui_method('poll_remote_scan',current_mode=current_mode,KiwoomMarket=lambda *a:client,data_dir=lambda:tmp_path,refresh_morning_quotes=refresh_clock)(fake)
+    assert '반영 2건' in service.handle(update(sandbox,2,'/가상시세상태')) and broker.calls==[]
+    for tracker in trackers:
+        with tracker.db.connect() as db:
+            assert db.execute('SELECT price,at FROM morning_marks WHERE day=?',('2026-10-20',)).fetchone()['price']==1001
+        assert len(tracker.db.trades())==1
+    assert not TradingCalendar(open_dates={close.date()}).is_open(close,'KRX')
+    orders=MockTelegramOrders(tmp_path/'mock-gate',confirmed_day=close.date(),clock=lambda:close)
+    assert not orders._open()
+
+
+@pytest.mark.parametrize('case',['before','after','special-before','special-after','holiday','calendar-error'])
+def test_quote_calendar_rejection_never_writes_or_creates(tmp_path,monkeypatch,case):
+    from datetime import datetime
+    from dataclasses import replace
+    from app import morning_venue_policy as policy
+    from app.morning_quote_router import route_trade
+    from app.trading_clock import KST
+    tracker,_,_=make(tmp_path,mode='REAL_QUOTES',venue='KRX')
+    before=tracker.db.path.read_bytes()
+    at=datetime(2026,10,20,8,59,59,tzinfo=KST)
+    if case=='after':at=at.replace(hour=15,minute=30,second=1)
+    if case.startswith('special-'):
+        opening=at.replace(hour=10,minute=0,second=0)
+        closing=at.replace(hour=16,minute=30,second=0)
+        monkeypatch.setattr(policy,'session_bounds',lambda day:(opening,closing))
+        at=opening-timedelta(seconds=1) if case=='special-before' else closing+timedelta(seconds=1)
+    if case=='holiday':at=at.replace(day=18,hour=10)
+    if case=='calendar-error':
+        at=at.replace(hour=10)
+        monkeypatch.setattr(policy,'session_bounds',lambda day:(_ for _ in ()).throw(ValueError('calendar unavailable')))
+    evidence=replace(mark(),mode='REAL_QUOTES',venue='KRX',at=at,fetched_at=at)
+    with pytest.raises(ValueError):route_trade(tmp_path,evidence,now=at)
+    assert tracker.db.path.read_bytes()==before
+    empty=tmp_path/'absent'
+    with pytest.raises(ValueError):route_trade(empty,evidence,now=at)
+    assert not empty.exists()

@@ -953,3 +953,21 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - 기준1~6: 명시한구현/오프라인범위충족. 기준HEAD81b8e2d11003bfc123f365bf6c5eaeb8347bf6f7의최종11파일해시불변독립확인. 최종coreCD3FEE738B83A68786255EC180E3DC7DD1502CB14CE95069D4BFBE466C110892·tests4FD250489B2D7F3C261739368C0E2B11D30DE9E30BFA3DA372F3653BAEA880CD. 조정자는이번범위만수락한다.
 - 전체우선순위1은부분구현/실환경미검증: 실제접속·원문수집/GUI·Telegram전달미실행,최초체결인증·provider순번/손실복구·서버정렬/등록효력·9081해석/독립원천인증미확인. 날짜는LOCAL_SESSION_INFERRED,첫수신은CANDIDATE_FIRST_SEEN일뿐공식KRX첫체결/정규장시초가/체결·수익률로승격하지않는다. FIRST_TRADE·신규자동진입/손익장부는미연결이다.
 - 제품/검사/가이드11파일+기록3파일총14파일최종기록재검토후exactstaged비밀검사·commit/push·remoteSHA·새CI/PR상태를확인한다. 이전81b8e2d Windows1470성공은이번11파일CI로사용하지않는다. 다음은날짜가있는기존ka10079/시세근거와후속가격을안전하게연결하는경로를점검하되원천미확인후보를가상진입으로승격하지않는다. 실제입력분리→객관성과/시장초과수익→실자료Walk-Forward/48조건의남은요구를유지한다.
+
+## 2026-10-22 D-후속시세거래일연결-1 · 착수 전 수락기준
+- 직전e3b993b435a7c9a719130f961cf77fd93f4745eb: exact staged14파일 비밀정보검사/commit/push·remoteSHA일치. PR#1 OPEN/DRAFT/unmerged로설명갱신, 새CI39717586216은해당SHA에서실행중이며완료후확인한다.
+- 요구사항 최신우선순위2/원래 D·7·10: 기존 개인수동갱신→날짜포함ka10079→오늘/이월고정보유의후속가격연결을 실제거래일시각에맞춘다. 개발 /root/development, 독립검증 /root/verification, 조정자 /root.
+- 발견된 구현 갭: 일반TRADE router와MorningVirtual._check의기존TradingCalendar KRX하드코딩[09:00,15:30)은종가경매종료정각15:30과특수일연장구간을거절한다. 새수집/CSV검사는실제XKRX정규장범위를사용하므로시세근거검사를공통확인달력으로정렬한다. 새 대조화면/중복API경로를추가하기보다이실제연결결함을우선수정한다.
+- 기준1: 시세근거용KRX검사만실제XKRX개장~종료정각포함으로통일·공통함수재사용. 특수일10시~16:30주입·정상일·휴일/달력오류·범위밖·잘못된시각을검사하며9시/15:30추정fallback없음. 계좌/주문거래시간 gate와NXT기존정책은변경하지않는다.
+- 기준2: 기존30초신선도/미래/정확날짜·종목·모드·거래소/모호한가격차단을유지. 후보0B를날짜포함근거/FIRST_TRADE로승격금지,신규가상진입/실제·모의주문0. legacy/v2목록과기존비용·익절손절/기록은보존한다.
+- 기준3: Fake개인명령→GUI소유Work→FakeQuery ka10079→마감tick오늘/이월기존보유반영→결과조회종단을검사. 종가/특수일정각은유효한보유만갱신,범위밖/달력실패는쓰기0·없는DB생성0. 주문엔진/모의게이트는기존마감후차단임을명시검사.
+- 기준4: 기존receipt/status/capture는공통세션함수변경후계약유지,관련/전체suite·compile/diff와동결독립검증. 실제GUI/API/계좌/주문/키·개인CSV접근금지. 정확한staged검사/commit/push·CI와인수인계를남긴다.
+- 로드맵맨앞을최신7우선순위로명시해기존B우선본문과의해석혼동을줄인다. 전체목표를축소하지않고실환경·공식첫체결완전성등미검증상태는그대로유지한다.
+
+## 2026-10-22 D-후속시세거래일연결-1 독립 검증 완료
+- 변경6파일: app/morning_open_evidence_status.py, app/morning_quote_router.py, app/morning_venue_policy.py, app/morning_virtual.py, tests/test_morning_quote_refresh.py, tests/test_morning_venue_policy.py. 공통 XKRX 정규장 시각으로 시세만 개장~종료 정각 포함 처리. 기존 status 함수/cache API 유지, 주문 게이트·NXT 정책 불변. 로드맵 상단은 최신 사용자 7우선순위를 명시했다.
+- 개발 자체 관련150 passed·전체1506 passed/1 skipped, compileall/diff 통과. 독립 /root/verification 기준HEAD e3b993b435a7c9a719130f961cf77fd93f4745eb+동결6파일 SHA256 전후 불변, 직접 관련150 passed(19.26s)·전체1506 passed/1 skipped(75.58s)·compileall/diff 통과.
+- 기준1 충족: 정상15:30/특수일16:30 포함 및 휴일/달력오류 추정금지, 주문/NXT 불변. 기준2 충족: 30초 신선도·미래/날짜/종목/모드/거래소 제약 보존, 후보→FIRST_TRADE 승격/신규 자동진입0. 기준3 충족: Fake 개인명령→AST GUI Work→FakeQuery ka10079→오늘/이월2보유 반영·조회 종단, 범위밖·실패0쓰기/없는DB생성0, 같은시각 주문거절. 기준4 충족: receipt/status/capture 및 공통 API 회귀·전체 검사. 조정자는 이 오프라인 범위만 수락한다.
+- 실제 GUI/API/Telegram 전달·시세 원천/공식 첫체결 인증·실제/키움모의 주문은 실행하지 않았으며 실환경 미확인이다. 우선순위1~2 전체완료가 아닌 기존 후속가격 연결결함 수정이다.
+- 최종 제품6+기록3파일 정확한 staged 비밀정보검사→commit/push→원격SHA 확인 예정. PR#1 OPEN/DRAFT/main 미병합 유지. 직전 e3b993b CI39717586216은 마지막 조회 실행중으로 아직 성공이라 보고하지 않는다.
+- 다음 우선순위3: 기존 /추천대조의 날짜·코드 일치만으로 추천 매수로 귀속하지 않고, 사용자의 명시적 실제 BUY 입력 연결/미구매 확인/미확인 분류를 별도 기록하는 연결을 검토한다. 실제·가상 손익을 합치지 않으며 입력없음은 미매수 증명이 아니다. 이후 객관성과/시장초과수익→충분한 실자료 WFO48조건 순서를 유지한다.

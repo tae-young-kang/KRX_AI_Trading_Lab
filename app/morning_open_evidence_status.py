@@ -3,9 +3,8 @@
 A paper-trade row or SHA256 is a stored software assertion, NOT independent
 exchange feed certification or real Kiwoom/mock-account execution.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from contextlib import contextmanager
-from functools import lru_cache
 from math import isfinite
 import json
 from pathlib import Path
@@ -13,7 +12,7 @@ import re
 
 from app.morning_quote_router import _plan_identity, _safe_path
 from app.morning_virtual import MorningVirtual, aware, record_path
-from app.morning_venue_policy import KRX_OPEN, stored_policy
+from app.morning_venue_policy import KRX_OPEN, stored_policy, session_bounds
 from app.storage import Database
 from app.trading_clock import KST
 
@@ -32,22 +31,6 @@ def _day(value):
     if value != result.isoformat():
         raise ValueError('고정 날짜를 확인해 주세요.')
     return result
-
-
-@lru_cache(maxsize=128)
-def session_bounds(day):
-    """Calendar-confirmed regular session; closing-auction timestamp inclusive."""
-    target=_day(day)
-    try:
-        import exchange_calendars
-        calendar=exchange_calendars.get_calendar('XKRX',start=(target-timedelta(days=7)).isoformat(),end=(target+timedelta(days=7)).isoformat())
-        opened=calendar.session_open(day).to_pydatetime()
-        closed=calendar.session_close(day).to_pydatetime()
-        if (not aware(opened) or not aware(closed) or opened>=closed
-                or opened.astimezone(KST).date().isoformat()!=day or closed.astimezone(KST).date().isoformat()!=day):raise ValueError()
-        return opened,closed
-    except Exception:
-        raise ValueError('해당 거래일의 정규장 시작·종료 시각을 확인하지 못했어요.') from None
 
 
 @contextmanager

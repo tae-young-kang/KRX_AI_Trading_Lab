@@ -51,3 +51,32 @@ def target_venue(target,policy):
             raise ValueError('기존 고정 시장과 자격 자료가 달라요.')
         return venue
     return derived
+
+
+@lru_cache(maxsize=128)
+def session_bounds(day):
+    """Calendar-confirmed regular session; closing-auction timestamp inclusive."""
+    if not isinstance(day,str):raise ValueError('고정 날짜를 확인해 주세요.')
+    target=date.fromisoformat(day)
+    if target.isoformat()!=day:raise ValueError('고정 날짜를 확인해 주세요.')
+    try:
+        import exchange_calendars
+        calendar=exchange_calendars.get_calendar('XKRX',start=(target-timedelta(days=7)).isoformat(),end=(target+timedelta(days=7)).isoformat())
+        opened=calendar.session_open(day).to_pydatetime()
+        closed=calendar.session_close(day).to_pydatetime()
+        if (opened.tzinfo is None or opened.utcoffset() is None or closed.tzinfo is None or closed.utcoffset() is None or opened>=closed
+                or opened.astimezone(KST).date().isoformat()!=day or closed.astimezone(KST).date().isoformat()!=day):raise ValueError()
+        return opened,closed
+    except Exception:
+        raise ValueError('해당 거래일의 정규장 시작·종료 시각을 확인하지 못했어요.') from None
+
+
+def quote_session_open(moment,venue):
+    """Quote evidence only. Order gates and NXT windows remain unchanged."""
+    if moment.tzinfo is None or moment.utcoffset() is None:raise ValueError('확인된 시각이 필요해요.')
+    day=moment.astimezone(KST).date()
+    if venue=='KRX':
+        opened,closed=session_bounds(day.isoformat())
+        return opened<=moment<=closed
+    from app.trading_clock import TradingCalendar
+    return TradingCalendar(open_dates={day}).is_open(moment,venue)

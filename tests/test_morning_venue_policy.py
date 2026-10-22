@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from app.config import DEFAULTS
 from app.morning_virtual import MorningVirtual,record_path
-from app.morning_venue_policy import KRX_OPEN,deadline,krx_open,stored_policy
+from app.morning_venue_policy import KRX_OPEN,deadline,krx_open,stored_policy,session_bounds
 from app.morning_quote_router import _plan_identity,route_trade
 from app.morning_virtual_cli import replay
 from app.morning_request import next_day,latest_targets,setup_text,freeze_scheduled
@@ -39,8 +39,9 @@ def special_open(monkeypatch):
     def shifted(*args,**kwargs):
         calendar=original(*args,**kwargs)
         return SimpleNamespace(sessions=calendar.sessions,
-            session_open=lambda day:calendar.session_open(day)+timedelta(hours=1))
-    krx_open.cache_clear();monkeypatch.setattr(exchange_calendars,'get_calendar',shifted)
+            session_open=lambda day:calendar.session_open(day)+timedelta(hours=1),
+            session_close=lambda day:calendar.session_close(day)+timedelta(hours=1))
+    krx_open.cache_clear();session_bounds.cache_clear();monkeypatch.setattr(exchange_calendars,'get_calendar',shifted)
 
 
 def test_new_v2_krx_policy_retains_nxt_metadata_and_never_overwrites_legacy(tmp_path):
@@ -74,7 +75,7 @@ def test_actual_opening_cutoff_and_unknown_calendar_never_guess(tmp_path,monkeyp
         with pytest.raises(ValueError,match='개장 이후'):tracker.mark(pre,now=pre.at)
         args['now']=before.replace(hour=10,minute=0)
         with pytest.raises(ValueError):tracker.prepare(**args,venue_policy=KRX_OPEN)
-    finally:krx_open.cache_clear()
+    finally:krx_open.cache_clear();session_bounds.cache_clear()
     import exchange_calendars
     monkeypatch.setattr(exchange_calendars,'get_calendar',lambda *a,**k:(_ for _ in ()).throw(ValueError()))
     with pytest.raises(ValueError,match='추측하지'):deadline('2026-10-21',KRX_OPEN)
@@ -184,4 +185,4 @@ def test_scheduled_freeze_allows_830_then_dynamic_special_open_completion(tmp_pa
         # The persisted attempt remains final even after the deadline.
         assert schedule.tick(now=at.replace(hour=10,minute=0),clock=lambda:at,active=lambda:True,
             prepare=lambda *a:pytest.fail('repeat'),send=lambda text:pytest.fail('resend'))=='FROZEN'
-    finally:krx_open.cache_clear()
+    finally:krx_open.cache_clear();session_bounds.cache_clear()
