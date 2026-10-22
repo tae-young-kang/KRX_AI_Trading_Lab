@@ -126,3 +126,39 @@ def test_ingest_counts_distinguish_omitted_and_unknown_and_survive_reopen(tmp_pa
     history.fetch_range(Client([bar(day)]),day,day,markets=('KOSPI',),now=datetime(2026,10,19,19,tzinfo=KST))
     assert '수신 미확인' in history.ingest_summary('KRX')
     assert '관측이 없어요' in history.ingest_summary('CSV_USER')
+
+
+@pytest.mark.parametrize('returned_day',[None,'20261016','2026-10-19',20261019])
+def test_krx_http_response_date_must_match_before_existing_cache_changes(tmp_path,monkeypatch,returned_day):
+    from app.krx_history import KRXDailyClient
+    from io import BytesIO
+    import json
+    day='2026-10-19'
+    raw=dict(ISU_CD='900001',ISU_NM='합성',TDD_OPNPRC='100',TDD_HGPRC='110',TDD_LWPRC='99',
+             TDD_CLSPRC='105',ACC_TRDVOL='1000')
+    if returned_day is not None:raw['BAS_DD']=returned_day
+    def response(request,**kwargs):
+        assert request.full_url.endswith('basDd=20261019')
+        return BytesIO(json.dumps({'OutBlock_1':[raw]}).encode())
+    monkeypatch.setattr('app.krx_history.urlopen',response)
+    history=HistoryStore(tmp_path/'history.db');history.insert_bars([bar(day)],'KRX')
+    before=history.load_bars('KRX')
+    with pytest.raises(ValueError,match='기준일자'):
+        history.fetch_range(KRXDailyClient('fixture-key'),day,day,markets=('KOSPI',),
+            now=datetime(2026,10,20,10,tzinfo=KST))
+    assert history.load_bars('KRX')==before
+    with history.connect() as db:assert db.execute('SELECT count(*) FROM fetched_days').fetchone()[0]==0
+
+
+def test_verified_krx_response_keeps_date_and_empty_response_remains_missing(monkeypatch):
+    from app.krx_history import KRXDailyClient
+    from io import BytesIO
+    import json
+    raw=dict(BAS_DD='20261019',ISU_CD='900001',ISU_NM='합성',TDD_OPNPRC='100',TDD_HGPRC='110',
+             TDD_LWPRC='99',TDD_CLSPRC='105',ACC_TRDVOL='1000')
+    payload={'OutBlock_1':[raw]}
+    monkeypatch.setattr('app.krx_history.urlopen',lambda *args,**kwargs:BytesIO(json.dumps(payload).encode()))
+    client=KRXDailyClient('fixture-key');rows=client.fetch_day('KOSPI','2026-10-19')
+    assert len(rows)==1 and rows[0].date=='2026-10-19' and rows.received_count==1
+    payload['OutBlock_1']=[]
+    assert client.fetch_day('KOSPI','2026-10-19')==[]

@@ -85,6 +85,6 @@ def create_proposals(db, cfg):
             f"{r['mode']} · {r['label']} / 비용 차감 후 앞 기록 {r['train']['count']}건 "
             f"평균 {r['train']['mean_pct']:+.2f}%, 뒤 기록 {r['test']['count']}건 "
             f"평균 {r['test']['mean_pct']:+.2f}%. 사용자 선택 기록의 탐색 비교이며 "
-            '미래 수익을 보장하지 않습니다. 추가 관찰 후 적용 여부를 결정하세요.', patch))
+            '미래 수익을 보장하지 않습니다. 추가 관찰 후 적용 여부를 결정하세요.', patch,base_settings=cfg))
     return (f'{len(reviews)}개 조건 비교 · 새 후보 {candidates}개. 조건별 앞 기록 {min_n}건·5일 이상, '
             '뒤 기록 10건·3일 이상 및 양쪽 수익이 필요합니다. 데이터 축적·추가 검증 중이며 자동 적용하지 않습니다.')

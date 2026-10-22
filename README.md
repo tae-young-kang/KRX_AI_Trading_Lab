@@ -28,6 +28,10 @@
 
 ## 설치 · GUI 3분 테스트
 
+**설치만 하고 화면을 열지 않으려면** 프로젝트 폴더에서 `install_windows.bat`를 실행하세요.
+설치 후 `python -m app.environment_check`로 패키지·Windows 보안 저장 구성·거래일 달력을 점검할 수 있습니다.
+점검은 키/계좌정보를 읽거나 시세·텔레그램·주문을 실행하지 않습니다. 사용법은 [설치 준비 점검](docs/WINDOWS_SETUP_CHECK.md)을 참고하세요.
+
 1. Windows에 **Python 3.11+** 설치하고 ZIP 압축 해제.
 2. `run_windows.bat` 더블클릭 (PySide6·requests·keyring 설치 후 실행).
 3. 좌측 **[종목 선정 연구]** → **[합성 예제 가져오기]** → **[48개 조건 검증]**.
@@ -36,6 +40,18 @@
 6. 사용자별 SQLite DB는 `%LOCALAPPDATA%\KOSPI_AI_Trading\research.db`에 보존 (기존 `trading.db` 삭제/덮어쓰기 없음).
 
 GUI 미설치 환경에서도 연구 엔진만 확인하려면 `run_research_demo.bat` 실행. 이 방식에는 추가 Python 패키지가 필요하지 않음.
+
+### 처음 연결 키를 저장할 때 오류가 나면
+
+`keyring`은 입력한 키를 Windows 보안 보관함에 저장하는 구성요소입니다.
+없다는 안내는 키가 틀렸다는 뜻이 아닙니다.
+
+- 소스 폴더로 실행한다면 `main.py` 대신 **run_windows.bat**를 더블클릭하세요. 같은 Python에 필요한 구성요소를 설치하고 보안 저장 구성요소를 확인한 뒤 엽니다.
+- 받은 **exe 파일**로 실행한다면 보안 저장 기능이 포함된 최신 빌드가 필요합니다. 사용자의 Python에 패키지를 설치해도 이미 만들어진 exe 내부는 바뀌지 않습니다.
+- 개발자는 `build_windows.bat`로 빌드합니다. Windows 저장소 backend와 관련 패키지·metadata를 포함합니다. 새 PC에서 exe 저장·재실행 후 불러오기는 별도 확인해야 합니다.
+
+키를 메신저로 보내거나 설정 파일에 직접 적지 마세요. 설치 확인 명령
+`python -m app.credential_check`는 구성요소만 확인하며 인증정보를 읽거나 저장하지 않습니다.
 
 ## 선택 시장 전체 종목 스크리닝
 

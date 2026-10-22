@@ -112,6 +112,31 @@ class MockWatchSession:
             raise UncertainResponse('주문 전 모의 계좌를 다시 확인해야 해요.')
         return capture
 
+    def preview_market_buy(self, *, code, name, market, fee_bps, quantity=None, budget_won=None):
+        """Reuse the verified account owner for fresh funds and quote evidence.
+
+        This is a calculation, not user confirmation or permission to dispatch.
+        Fee provenance and the confirmation/dispatch path remain separate.
+        """
+        from app.mock_market_budget import preview_buy
+        capture = self.capture_for_order()
+        quote, upper = self.transport.read_market_quote(code)
+        self._guard()
+        return preview_buy(capture, quote, upper, code=code, name=name, market=market,
+            profile_id=self._profile, auth_generation=self._generation,
+            account_tag=self._account_tag, now=self._now(), fee_bps=fee_bps,
+            quantity=quantity, budget_won=budget_won)
+
+    def preview_market_sell(self, *, code, name, market, quantity=None, budget_won=None):
+        """Fresh same-account sellable shares and quote; no order permission."""
+        from app.mock_market_budget import preview_sell
+        capture=self.capture_for_order()
+        quote,upper=self.transport.read_market_quote(code)
+        self._guard()
+        return preview_sell(capture,quote,upper,code=code,name=name,market=market,
+            profile_id=self._profile,auth_generation=self._generation,account_tag=self._account_tag,
+            now=self._now(),quantity=quantity,budget_won=budget_won)
+
     def start(self):
         if self.state != 'VERIFIED':
             raise ContractError('먼저 모의 계좌를 확인해 주세요.')

@@ -1,11 +1,13 @@
 import csv
 import json
 import sqlite3
+import hashlib
+import re
 from math import isfinite, fsum
 from datetime import datetime
 from pathlib import Path
 from app.db import ClosingConnection
-from app.trade_review import settings_snapshot, review_conditions, outcome
+from app.trade_review import settings_snapshot, review_conditions, outcome, SNAPSHOT_KEYS
 from app import recommendations
 from app import recommendation_overview
 from app import paper_exits
@@ -17,13 +19,16 @@ def now():
 
 
 class Database:
-    def __init__(self, path):
+    def __init__(self, path,*,read_only=False):
         self.path = Path(path)
+        self.read_only=read_only is True
+        if self.read_only:return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
     def connect(self):
-        db = sqlite3.connect(str(self.path), timeout=20, factory=ClosingConnection)
+        db = sqlite3.connect(self.path.resolve().as_uri()+'?mode=ro' if self.read_only else str(self.path),
+                             uri=self.read_only,timeout=20,factory=ClosingConnection)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA busy_timeout=10000')
         return db
@@ -64,14 +69,17 @@ class Database:
                   title TEXT NOT NULL, rationale TEXT NOT NULL,
                   patch_json TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'PENDING',
                   reviewed_at TEXT);
+                CREATE TABLE IF NOT EXISTS proposal_context(
+                  proposal_id INTEGER PRIMARY KEY,mode TEXT NOT NULL,base_json TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS audit(
                   id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,
                   kind TEXT NOT NULL, message TEXT NOT NULL);
             ''')
             columns = {r['name'] for r in db.execute('PRAGMA table_info(paper_trades)')}
-            for column in ('entry_json', 'exit_settings_json'):
+            for column in ('entry_json', 'exit_settings_json','entry_key','entry_digest'):
                 if column not in columns:
                     db.execute(f'ALTER TABLE paper_trades ADD COLUMN {column} TEXT')
+            db.execute('CREATE UNIQUE INDEX IF NOT EXISTS ix_paper_entry_key ON paper_trades(entry_key)')
             recommendations.initialize(db)
             paper_exits.initialize(db)
 
@@ -128,22 +136,40 @@ class Database:
             db.execute('BEGIN')
             return recommendation_overview.summary(db,mode)
 
-    def recommendation_search_result(self, mode, scan_id, *, page=1):
+    def recommendation_search_result(self, mode, scan_id, *, page=1, details=False):
         with self.connect() as db:
             db.execute('BEGIN')
-            return recommendations.search_result(db,mode,scan_id,page=page)
+            return recommendations.search_result(db,mode,scan_id,page=page,details=details)
 
     def recommendation_page_count(self, mode):
         with self.connect() as db:
             return recommendations.page_count(db,mode)
 
-    def paper_open(self, stock, qty, stop, take, max_days, fee_pct, slippage_pct, settings, max_positions):
+    def paper_open(self, stock, qty, stop, take, max_days, fee_pct, slippage_pct, settings, max_positions,
+                   *,entry_key=None,observed_at=None,venue=None,price_basis='OBSERVED_TRADE',evidence_hash=None):
         if (type(qty) is not int or qty<1 or type(stock.price) not in (int,float)
                 or not isfinite(stock.price) or stock.price<=0
                 or not all(type(v) in (int,float) and isfinite(v) and 0<=v<100 for v in (fee_pct,slippage_pct))):
             raise ValueError('종목 가격 또는 수량을 확인하세요.')
+        if observed_at is not None and (not isinstance(observed_at,datetime) or observed_at.tzinfo is None or observed_at.utcoffset() is None):
+            raise ValueError('가상 진입 근거의 시간대를 확인해 주세요.')
+        if entry_key is not None and (not isinstance(entry_key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',entry_key) or observed_at is None):
+            raise ValueError('고정된 가상 진입 요청 번호와 관측 시각이 필요해요.')
+        if venue is not None and venue not in ('KRX','NXT'):raise ValueError('가상 진입 시장을 확인해 주세요.')
+        if price_basis not in ('OBSERVED_TRADE','VENUE_FIRST_TRADE'):raise ValueError('가상 진입 가격 기준을 확인해 주세요.')
+        if evidence_hash is not None and (not isinstance(evidence_hash,str) or not re.fullmatch('[a-f0-9]{64}',evidence_hash)):
+            raise ValueError('가상 진입 가격의 근거 해시를 확인해 주세요.')
+        opened=observed_at.astimezone(KST).isoformat() if observed_at is not None else now()
+        digest=hashlib.sha256(json.dumps(dict(code=stock.code,source=stock.source,price=stock.price,qty=qty,
+            stop=stop,take=take,max_days=max_days,fee=fee_pct,slip=slippage_pct,
+            settings=settings_snapshot(settings),opened=opened,venue=venue,basis=price_basis,evidence=evidence_hash),sort_keys=True).encode()).hexdigest()
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            if entry_key is not None:
+                prior=db.execute('SELECT entry_digest,buy_fill FROM paper_trades WHERE entry_key=?',(entry_key,)).fetchone()
+                if prior:
+                    if prior['entry_digest']!=digest:raise ValueError('같은 가상 진입 요청의 내용이 달라요. 중복 매수하지 않았어요.')
+                    return prior['buy_fill']
             n = db.execute('SELECT COUNT(*) AS n FROM paper_trades WHERE closed_at IS NULL').fetchone()['n']
             if n >= max_positions:
                 raise ValueError('최대 가상 보유종목 수 제한에 도달했습니다.')
@@ -160,22 +186,26 @@ class Database:
             entry = {k: getattr(stock, k, None) for k in
                      ('price', 'change_pct', 'trade_value_eok', 'vol_ratio_pct', 'cap_eok',
                       'volume', 'source', 'stamp', 'quote_stamp', 'is_etf')}
+            if venue is not None:entry.update(venue=venue,price_basis=price_basis)
+            if evidence_hash is not None:entry['evidence_hash']=evidence_hash
             db.execute('''INSERT INTO paper_trades(code,name,market,opened_at,qty,buy_ref,buy_fill,buy_fee,
-                stop_pct,take_pct,max_days,highwater,source,strat_json,entry_json,remaining_qty,realized_pnl)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                (stock.code, stock.name, stock.market, now(), qty, stock.price, fill, fee,
+                stop_pct,take_pct,max_days,highwater,source,strat_json,entry_json,remaining_qty,realized_pnl,entry_key,entry_digest)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (stock.code, stock.name, stock.market, opened, qty, stock.price, fill, fee,
                  stop, take, max_days, stock.price, stock.source, json.dumps(snapshot, ensure_ascii=False),
-                 json.dumps(entry, ensure_ascii=False),qty,0))
+                 json.dumps(entry, ensure_ascii=False),qty,0,entry_key,digest if entry_key is not None else None))
         return fill
 
-    def paper_close(self, trade_id, observed_price, reason, fee_pct, tax_pct, slip_pct, *, request_key=None):
-        return self.paper_sell(trade_id,None,observed_price,reason,fee_pct,tax_pct,slip_pct,request_key=request_key)
+    def paper_close(self, trade_id, observed_price, reason, fee_pct, tax_pct, slip_pct, *, request_key=None,observed_at=None):
+        return self.paper_sell(trade_id,None,observed_price,reason,fee_pct,tax_pct,slip_pct,request_key=request_key,observed_at=observed_at)
 
-    def paper_sell(self, trade_id, quantity, observed_price, reason, fee_pct, tax_pct, slip_pct, *, request_key=None):
+    def paper_sell(self, trade_id, quantity, observed_price, reason, fee_pct, tax_pct, slip_pct, *, request_key=None,observed_at=None):
+        if observed_at is not None and (not isinstance(observed_at,datetime) or observed_at.tzinfo is None or observed_at.utcoffset() is None):
+            raise ValueError('가상 매도 근거의 시간대를 확인해 주세요.')
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             return paper_exits.sell(db,trade_id,quantity,observed_price,reason,fee_pct,tax_pct,slip_pct,
-                                    stamp=now(),request_key=request_key)
+                                    stamp=observed_at.astimezone(KST).isoformat() if observed_at is not None else now(),request_key=request_key)
 
     def paper_exit_history(self, trade_id):
         with self.connect() as db:
@@ -261,22 +291,36 @@ class Database:
         with self.connect() as db:
             return [dict(x) for x in db.execute('SELECT * FROM proposals ORDER BY id DESC LIMIT 100')]
 
-    def propose(self, title, rationale, patch):
+    def propose(self, title, rationale, patch,*,base_settings=None):
+        context=None
+        if base_settings is not None:
+            from app.modes import current_mode
+            base=settings_snapshot(base_settings)
+            if (set(base)!=set(SNAPSHOT_KEYS) or base['data_mode'] not in ('DEMO','KIWOOM')
+                    or base['kiwoom_env'] not in ('MOCK','REAL')):
+                raise ValueError('개선안 생성 당시의 조건·모드를 확인해 주세요.')
+            context=(current_mode(base).key,json.dumps(base,ensure_ascii=False,sort_keys=True,allow_nan=False))
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
             # prevent identical unreviewed proposal duplication
             p = json.dumps(patch, ensure_ascii=False, sort_keys=True)
-            if db.execute('SELECT 1 FROM proposals WHERE patch_json=? AND state=?', (p, 'PENDING')).fetchone():
+            duplicate=(db.execute('SELECT 1 FROM proposals p JOIN proposal_context c ON c.proposal_id=p.id WHERE p.patch_json=? AND p.state=? AND c.mode=? AND c.base_json=?',
+                                 (p,'PENDING',*context)).fetchone() if context else
+                       db.execute('SELECT 1 FROM proposals WHERE patch_json=? AND state=?',(p,'PENDING')).fetchone())
+            if duplicate:
                 return False
-            db.execute('INSERT INTO proposals(created_at,title,rationale,patch_json,state) VALUES(?,?,?,?,?)',
+            cursor=db.execute('INSERT INTO proposals(created_at,title,rationale,patch_json,state) VALUES(?,?,?,?,?)',
                        (now(), title, rationale, p, 'PENDING'))
+            if context:db.execute('INSERT INTO proposal_context VALUES(?,?,?)',(cursor.lastrowid,*context))
             return True
 
-    def review(self, proposal_id, accepted):
+    def review(self, proposal_id, accepted,*,authorize=None):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT * FROM proposals WHERE id=?', (proposal_id,)).fetchone()
             if row is None or row['state'] != 'PENDING':
                 raise ValueError('대기 중인 전략 개선안이 아닙니다.')
+            if authorize is not None:authorize()
             db.execute('UPDATE proposals SET state=?,reviewed_at=? WHERE id=?',
                        ('APPROVED' if accepted else 'REJECTED', now(), proposal_id))
             return json.loads(row['patch_json'])

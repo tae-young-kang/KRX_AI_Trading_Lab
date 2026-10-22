@@ -30,9 +30,13 @@ class DailyBatch(list):
         self.received_count=received_count
 
 
-def normalize_day(block,market,day):
+def normalize_day(block,market,day,*,require_date=False):
     if not isinstance(block,list):
         raise ValueError('일별 응답 목록을 확인해야 합니다.')
+    expected=session_day(day).strftime('%Y%m%d')
+    if any((require_date and (not isinstance(raw,dict) or 'BAS_DD' not in raw))
+           or (isinstance(raw,dict) and 'BAS_DD' in raw and raw['BAS_DD']!=expected) for raw in block):
+        raise ValueError('KRX 응답의 기준일자가 요청 날짜와 다르거나 없어요. 기존 자료는 바꾸지 않았어요.')
     rows=[bar for raw in block if isinstance(raw,dict)
           if (bar:=normalize_krx(raw,market,day)) is not None]
     return DailyBatch(rows,len(block))
@@ -115,7 +119,7 @@ class KRXDailyClient:
         block = raw.get('OutBlock_1') if isinstance(raw,dict) else None
         if not isinstance(block,list):
             raise RuntimeError('KRX 응답 형식 오류: 서비스 승인과 요청 날짜를 확인해 주세요.')
-        return normalize_day(block,market,day)
+        return normalize_day(block,market,day,require_date=True)
 
 
 class HistoryStore:

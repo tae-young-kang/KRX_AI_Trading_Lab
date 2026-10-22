@@ -13,6 +13,7 @@ from app.order_engine import OrderEngine, OrderRequest, OrderError, connect
 from app.trading_clock import KST
 from app import order_safety
 from app import telegram_menu
+from app.theme_one import RULES_TEXT as THEME_ONE_RULES
 
 HELP = ('[가짜 서버 주문 연습 · 실제 돈 사용 안 함]\n'
         '/매수 900001 1 1000 또는 /매도 900001 1 1000\n'
@@ -30,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None,morning_quote_request=None,theme_opening=None,quote_capture=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -51,15 +52,30 @@ class TelegramOrderService:
         self.recommendation_overview = recommendation_overview
         self.practice_sales = practice_sales
         self.theme_report = theme_report
+        self.theme_request = theme_request
+        self.outcome_request=outcome_request
         self.theme_status = theme_status
         self.theme_budget = theme_budget
+        self.theme_plan=theme_plan
+        self.theme_opening=theme_opening
+        self.quote_capture=quote_capture
         self.practice_daily = practice_daily
+        self.actual_daily=actual_daily
+        self.morning_daily=morning_daily
+        self.morning_setup=morning_setup
+        self.mock_daily=mock_daily
+        self.morning_freeze=morning_freeze
+        self.condition_report=condition_report
+        self.analysis_request=analysis_request
+        self.morning_quote_request=morning_quote_request
         self.recommendation_request = recommendation_request
         self.recommendation_status = recommendation_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
+        self.watch_delivery=watch_delivery
         from app.theme_delivery import destination_scope
         self.theme_destination = destination_scope(bot_id,chat_id)
         self.broker_identity = engine.broker.identity
+        self.daily_mode=daily_mode
         self.clock = clock or (lambda: datetime.now(KST))
         if self.clock().tzinfo is None:
             raise ValueError('시간대가 포함된 시각이 필요합니다.')
@@ -70,6 +86,10 @@ class TelegramOrderService:
         self.session = uuid.uuid4().hex
         self.catalog = dict(catalog)
         self.catalog.setdefault('900001', '연습종목')
+        from app.daily_report_delivery import DailyReportDelivery
+        self.daily_delivery=DailyReportDelivery(self.path,self.scope,daily_mode) if daily_mode else None
+        from app.morning_schedule import MorningSchedule
+        self.morning_schedule=MorningSchedule(self.path,self.scope,daily_mode) if daily_mode else None
         with connect(self.path) as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS tg_sessions(scope TEXT PRIMARY KEY,session TEXT,active INTEGER,cursor INTEGER);
@@ -91,13 +111,19 @@ class TelegramOrderService:
     def stop(self):
         if self.watch_cancel_orders:
             self.watch_cancel_orders(self.scope,self.session)
-        if self.conditions is not None:
-            self.conditions.cancel_session(self.scope, self.session)
+        self.cancel_pending_changes()
         with connect(self.path) as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute('UPDATE tg_sessions SET active=0 WHERE scope=? AND session=?', (self.scope, self.session))
             db.execute("UPDATE tg_intents SET state='CANCELED' WHERE scope=? AND session=? AND state='WAITING'",
                        (self.scope, self.session))
+
+    def cancel_pending_changes(self):
+        if self.quote_capture is not None:self.quote_capture.cancel(owner=(self.scope,self.session))
+        if self.morning_quote_request is not None:self.morning_quote_request.cancel()
+        if self.conditions is not None:self.conditions.cancel_session(self.scope,self.session)
+        review=getattr(self.analysis_request,'review',None)
+        if review is not None:review.cancel_session(self.scope,self.session)
 
     def cursor(self, new=None):
         with connect(self.path) as db:
@@ -111,6 +137,31 @@ class TelegramOrderService:
             row = db.execute('SELECT active FROM tg_sessions WHERE scope=? AND session=?',
                              (self.scope, self.session)).fetchone()
             return bool(row and row['active'])
+
+    def send_daily_notice(self,transport):
+        if not self.daily_delivery:return 'DISABLED'
+        from app.daily_report_delivery import pages
+        def build(day):
+            if not self.actual_daily or not self.morning_setup:raise ValueError('결산 조회 연결이 없어요.')
+            mock_note=('키움 모의 기록도 별도로 보내며 비용/체결 근거 누락은 손익 미확인으로 표시해요.\n' if self.mock_daily else
+                '키움 모의계좌 하루 결산은 아직 자동 집계되지 않아요. /모의기록 · /잔고에서 별도로 확인하세요.\n')
+            return ([f'[20:30 저장 기록 결산] {day}\n실제 체결 입력과 아침 가상 기록을 분리해 보내요.\n'
+                +mock_note+
+                '실제 기록은 사용자 입력이며 증권사 자동 대조 전, 가상은 공급된 시세 근거 계산이에요.']
+                +pages(lambda d,p:self.actual_daily(d,page=p),day,'/실제결산')
+                +pages(lambda d,p:self.morning_setup(f'/가상하루 {d} {p}'),day,'/가상하루')
+                +(pages(lambda d,p:self.mock_daily(d,scope=self.scope,page=p),day,'/모의결산') if self.mock_daily else []))
+        try:
+            return self.daily_delivery.tick(now=self.clock(),active=self.accepts_search_requests,build=build,
+                send=lambda text:transport.send(self.chat_id,text))
+        except Exception:return 'ERROR'
+
+    def run_morning_schedule(self,transport):
+        if not self.morning_schedule or not self.morning_freeze:return 'DISABLED'
+        try:
+            return self.morning_schedule.tick(now=self.clock(),clock=self.clock,active=self.accepts_search_requests,
+                prepare=self.morning_freeze,send=lambda text:transport.send(self.chat_id,text))
+        except Exception:return 'ERROR'
 
     def _authorized(self, update, now):
         if not isinstance(update, dict) or type(update.get('update_id')) is not int or update['update_id'] < 0:
@@ -152,6 +203,25 @@ class TelegramOrderService:
         with self._action_lock:
             return self._handle(update)
 
+    def send_order_notice(self, transport):
+        """Only to the configured private destination of the active receiver."""
+        if self.orders_enabled or self.watch_delivery is None:return
+        with self._action_lock:
+            with connect(self.path) as db:
+                owner=db.execute('SELECT session,active FROM tg_sessions WHERE scope=?',(self.scope,)).fetchone()
+            if not owner or owner['session']!=self.session or not owner['active']:return
+            context=dict(scope=self.scope,session=self.session)
+            notice=self.watch_delivery('claim',**context)
+            if notice is None:return
+            delivered=False
+            try:
+                receipt=transport.send(self.chat_id,notice['text'])
+                delivered=type(receipt) is int and receipt>0
+            except Exception:
+                pass
+            finally:
+                self.watch_delivery('finish',key=notice['key'],delivered=delivered,**context)
+
     def _handle(self, update):
         now = self.clock().timestamp()
         if not self._authorized(update, now):
@@ -161,6 +231,7 @@ class TelegramOrderService:
             return '연습 서버 연결이 달라져 수신을 중지했습니다. 주문하지 않았습니다.'
         uid, text = update['update_id'], update['message']['text'].strip()
         text=telegram_menu.COMMANDS.get(text,text)
+        text=telegram_menu.CONDITION_COMMANDS.get(text,text)
         action = None
         operation = None
         with connect(self.path) as db:
@@ -177,12 +248,48 @@ class TelegramOrderService:
                 reply=telegram_menu.text(practice=self.orders_enabled,active=bool(owner['active']))
             elif text=='/메뉴숨기기':
                 reply=telegram_menu.HIDDEN
+            elif text=='/조건바꾸기':
+                reply=telegram_menu.condition_text()
             elif not self.orders_enabled and mock_command:
                 reply = (self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                          if self.watch_orders and (owner['active'] or text.split(' ',1)[0] in ('/주문상태','/주문점검','/긴급중지','/주문목록','/미체결')) else '주문은 할 수 없어요. 키움 모의 주문이 중지됐거나 연결되지 않았어요.')
             elif text.split(' ',1)[0] == '/보호상태':
                 reply=(self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                        if not self.orders_enabled and self.watch_orders else '모의 보호 기록 연결이 없어요. 자동 매도는 아직 연결되지 않았어요.')
+            elif text=='/결산알림상태':
+                reply=self.daily_delivery.summary(self.clock(),mock_available=self.mock_daily is not None) if self.daily_delivery else '20:30 결산 알림 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+            elif text.split(' ',1)[0] in ('/아침가상예약','/아침가상상태','/아침가상중지'):
+                if not self.morning_schedule or not self.morning_freeze:reply='아침 가상 예약 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                elif text.split(' ',1)[0]=='/아침가상예약' and not owner['active']:reply='새 아침 가상 예약을 중지했어요. PC에서 개인 수신을 다시 시작해 주세요.'
+                else:reply=self.morning_schedule.handle(text,now=self.clock(),database=db)
+            elif text.split(' ',1)[0]=='/모의결산':
+                match=re.fullmatch(r'/모의결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
+                if not match:reply='사용법: /모의결산 또는 /모의결산 YYYY-MM-DD [페이지]'
+                elif not self.mock_daily:reply='모의 결산 조회 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                else:
+                    try:reply=self.mock_daily(match[1] or self.clock().astimezone(KST).date().isoformat(),scope=self.scope,page=int(match[2] or 1))
+                    except Exception:reply='모의 결산 날짜와 별도 접수·체결/비용 장부를 확인해 주세요. 손익을 추측하지 않았어요.'
+            elif text.split(' ',1)[0] in ('/가상추적','/가상추적상태','/가상하루','/가상목록','/추천대조','/가상일봉','/가상시초근거'):
+                if not self.morning_setup:reply='가상 추적 목록 연결이 아직 없어요.'
+                elif text.split(' ',1)[0]=='/가상추적' and not owner['active']:reply='새 가상 목록 고정을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
+                else:
+                    try:reply=self.morning_setup(text)
+                    except ValueError as error:reply=str(error)
+                    except Exception:reply='저장 추천·시세 모드·가상 추적 기록을 확인해 주세요. 실제 주문은 하지 않았어요.'
+            elif text.split(' ',1)[0]=='/가상결산':
+                match=re.fullmatch(r'/가상결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
+                if not match:reply='사용법: /가상결산 또는 /가상결산 아침목록날짜 [페이지]'
+                elif not self.morning_daily:reply='아침 추천 가상 추적 조회가 아직 연결되지 않았어요.'
+                else:
+                    try:reply=self.morning_daily(match[1] or self.clock().astimezone(KST).date().isoformat(),page=int(match[2] or 1))
+                    except Exception:reply='가상 추적 날짜와 별도 저장 기록을 확인해 주세요. 실제 체결 손익이 아닙니다.'
+            elif text.split(' ',1)[0]=='/실제결산':
+                match=re.fullmatch(r'/실제결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
+                if not match:reply='사용법: /실제결산 또는 /실제결산 YYYY-MM-DD [페이지]'
+                elif not self.actual_daily:reply='실제 체결 입력 조회가 연결되지 않았어요. 가상·키움 모의 성과와 다릅니다.'
+                else:
+                    try:reply=self.actual_daily(match[1] or self.clock().astimezone(KST).date().isoformat(),page=int(match[2] or 1))
+                    except Exception:reply='실제 체결 입력 기록을 확인하지 못했어요. 날짜와 로컬 기록을 확인해 주세요.'
             elif text.split(' ',1)[0] == '/연습결산':
                 match=re.fullmatch(r'/연습결산(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
                 if not match:
@@ -196,8 +303,18 @@ class TelegramOrderService:
                         reply=self.practice_daily(day) if page==1 else self.practice_daily(day,page=page)
                     except (ValueError,TypeError,OverflowError):
                         reply='날짜와 연습 결산 기록을 확인해야 해요. 실제 계좌 결산은 아닙니다.'
+            elif text.split(' ',1)[0] in ('/테마1예약','/예약확인','/예약철회','/테마1예약목록','/테마1예약상태'):
+                if not self.theme_opening:reply='개장 요청 기록 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                else:
+                    try:reply=self.theme_opening(text,database=db,scope=self.scope,session=self.session,now=self.clock(),active=bool(owner['active']))
+                    except Exception:reply='개장 요청 기록을 확인하지 못했어요. 주문은 하지 않았어요.'
+            elif text.split(' ',1)[0]=='/테마1계획':
+                if not self.theme_plan:reply='테마1 계획 연결이 없어요. PC 프로그램을 업데이트하고 다시 실행해 주세요.'
+                else:
+                    try:reply=self.theme_plan(text)
+                    except ValueError as error:reply=str(error)
             elif text.split(' ',1)[0] == '/테마1예산':
-                match=re.fullmatch(r'/테마1예산 ([1-9][0-9]{0,14}) ([0-9]{1,3}(?:\.[0-9]{1,2})?) ([0-9]{1,3}(?:\.[0-9]{1,2})?)(?: ([1-9][0-9]{0,5}))?(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?',text)
+                match=re.fullmatch(r'/테마1예산 ([1-9][0-9]{0,14}) ([0-9]{1,3}(?:\.[0-9]{1,2})?) ([0-9]{1,3}(?:\.[0-9]{1,2})?)(?: ([1-9][0-9]{0,5}))?(?: 익절 ([0-9]{1,2}(?:\.[0-9]{1,2})?) 손절 ([0-9]{1,2}(?:\.[0-9]{1,2})?))?(?: 판정 ([1-9][0-9]{0,8}))?',text)
                 if not match:
                     reply='사용법: /테마1예산 총예산 수수료% 가격여유% [페이지] [익절 % 손절 %]\n예: /테마1예산 1000000 0.02 2 익절 4 손절 3\n기본 익절 2%·손절 3%. 예상 계획이며 주문하지 않아요.'
                 elif not self.theme_budget:
@@ -206,10 +323,25 @@ class TelegramOrderService:
                     from decimal import Decimal
                     try:
                         args=(int(match[1]),int(Decimal(match[2])*100),int(Decimal(match[3])*100),int(match[4] or 1))
-                        reply=(self.theme_budget(*args,take_bps=int(Decimal(match[5])*100),stop_bps=int(Decimal(match[6])*100))
-                               if match[5] else self.theme_budget(*args))
+                        options={}
+                        if match[5]:options.update(take_bps=int(Decimal(match[5])*100),stop_bps=int(Decimal(match[6])*100))
+                        if match[7]:options['run_id']=int(match[7])
+                        reply=self.theme_budget(*args,**options)
                     except ValueError:
                         reply='테마1 판정과 총예산·수수료·가격 여유·익절/손절 비율을 확인해 주세요. 주문하지 않았어요.'
+            elif text=='/테마1조건':
+                reply=THEME_ONE_RULES
+            elif text in ('/테마1검색','/테마1검색상태','/테마1검색취소'):
+                if self.theme_request is None:
+                    reply='테마1 검색 연결이 없어요. PC에서 수신을 다시 시작해 주세요.'
+                elif text=='/테마1검색상태':
+                    reply=self.theme_request.summary()
+                elif text=='/테마1검색취소':
+                    reply=self.theme_request.cancel()
+                elif not owner['active']:
+                    reply='새 테마1 검색 요청을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
+                else:
+                    reply=self.theme_request.request()
             elif text == '/테마1알림상태':
                 reply=self.theme_status(self.theme_destination) if self.theme_status else '테마1 알림 상태 연결이 없어요. 집 PC에서 확인해 주세요.'
             elif text.split(' ',1)[0] == '/테마1':
@@ -239,14 +371,22 @@ class TelegramOrderService:
                     reply = '새 검색 요청을 중지했어요. 집 PC에서 수신을 다시 시작해 주세요.'
                 else:
                     reply = self.recommendation_request.request()
-            elif text.split(' ',1)[0] == '/추천결과':
-                match = re.fullmatch(r'/추천결과 ([1-9][0-9]{0,11})(?: ([1-9][0-9]{0,5}))?', text)
+            elif text.split(' ',1)[0] in ('/추천결과','/추천상세'):
+                detail=text.startswith('/추천상세 ')
+                match = re.fullmatch(r'/(?:추천결과|추천상세) ([1-9][0-9]{0,11})(?: ([1-9][0-9]{0,5}))?', text)
                 if not match:
-                    reply = '사용법: /추천결과 검색번호 [페이지] · 예: /추천결과 12 2'
+                    reply = '사용법: /추천결과 검색번호 [페이지] · 예: /추천결과 12 2\n자세히: /추천상세 12 2'
                 elif not self.recommendation_report:
                     reply = '추천 기록 연결이 없어요. 집 PC에서 확인해 주세요.'
                 else:
-                    reply = self.recommendation_report(False,scan_id=int(match[1]),page=int(match[2] or 1))
+                    args=dict(scan_id=int(match[1]),page=int(match[2] or 1))
+                    reply = self.recommendation_report(False,**args,details=True) if detail else self.recommendation_report(False,**args)
+            elif text in ('/성적갱신','/성적갱신상태','/성적자료보완'):
+                if self.outcome_request is None:
+                    reply='성적 갱신 연결이 없어요. PC에서 프로그램을 업데이트하고 수신을 다시 시작해 주세요.'
+                elif text=='/성적갱신상태':reply=self.outcome_request.summary()
+                elif not self.accepts_search_requests():reply='수신이 중지됐어요. PC에서 다시 시작해 주세요.'
+                else:reply=self.outcome_request.request(collect=text=='/성적자료보완')
             elif text == '/평가상태':
                 reply=self.recommendation_status() if self.recommendation_status else '추천 성적 상태 연결이 없어요. 집 PC에서 수신을 다시 시작해 주세요.'
             elif text == '/추천요약':
@@ -282,15 +422,76 @@ class TelegramOrderService:
                          else '모의 잔고 조회 결과가 없어요.')
             elif text in ('/프로그램상태','/모의상태') or (text == '/상태' and not self.orders_enabled):
                 reply = self.watch_status() if self.watch_status is not None else '프로그램이 켜져 있어요. 모의 알림 상태 연결은 아직 없어요. 주문은 보내지 않았어요.'
-            elif text.startswith('/조건') and self.conditions is not None:
+            elif text.split(' ',1)[0] in ('/개선안승인','/개선안거부','/개선안확인','/개선안철회','/개선안처리상태'):
+                review=getattr(self.analysis_request,'review',None)
+                if review is None:reply='개선안 검토 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                elif not owner['active'] and text.split(' ',1)[0] not in ('/개선안처리상태','/개선안철회'):reply='개선안 변경을 중지했어요. PC에서 수신을 다시 시작해 주세요.'
+                else:
+                    try:reply=review.handle(text,scope=self.scope,session=self.session,uid=uid,now=now)
+                    except Exception:reply='개선안의 생성 기준·확인 기록을 읽지 못했어요. 적용하지 않았어요.'
+            elif text in ('/조건비교','/조건비교상태') or text.split(' ',1)[0]=='/개선안':
+                if not self.analysis_request:reply='조건 비교 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                elif text=='/조건비교상태':reply=self.analysis_request.summary()
+                elif text=='/조건비교':reply=self.analysis_request.request() if owner['active'] else '새 조건 비교를 중지했어요. PC에서 개인 수신을 다시 시작해 주세요.'
+                else:
+                    match=re.fullmatch(r'/개선안(?: ([1-9][0-9]{0,5}))?',text)
+                    if not match:reply='사용법: /개선안 또는 /개선안 페이지'
+                    else:
+                        try:reply=self.analysis_request.report(int(match[1] or 1))
+                        except Exception:reply='개선안의 생성 당시 조건·모드를 확인하지 못했어요. 조건을 적용하지 않았어요.'
+            elif text in ('/시세수집시작','/시세수집상태','/시세수집중지'):
+                if self.quote_capture is None:reply='시세 수집 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                elif text=='/시세수집상태':reply=self.quote_capture.report()
+                elif text=='/시세수집중지':reply=self.quote_capture.cancel(owner=(self.scope,self.session),explicit=True)
+                elif not owner['active']:reply='수신을 중지했어요. PC에서 개인 수신을 다시 시작해 주세요.'
+                else:reply=self.quote_capture.request(mode=self.daily_mode,owner=(self.scope,self.session))
+            elif text in ('/가상시세갱신','/가상시세상태'):
+                if self.morning_quote_request is None:reply='가상 시세 갱신 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                elif text=='/가상시세상태':reply=self.morning_quote_request.summary()
+                elif not owner['active']:reply='새 가상 시세 조회를 중지했어요. PC에서 개인 수신을 다시 시작해 주세요.'
+                else:reply=self.morning_quote_request.request()
+            elif text.split(' ',1)[0]=='/조건성적':
+                match=re.fullmatch(r'/조건성적(?: ([1-9][0-9]{0,5}))?',text)
+                if not match:reply='사용법: /조건성적 또는 /조건성적 페이지'
+                elif not self.condition_report:reply='조건 성적 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                else:
+                    try:reply=self.condition_report(int(match[1] or 1))
+                    except Exception:reply='조건별 가상 기록을 확인하지 못했어요. 성과를 추측하지 않았어요.'
+            elif (text.startswith('/조건') or text.startswith('/청산조건') or text.startswith('/가상비용')) and self.conditions is not None:
                 reply = (self.conditions.handle(text, scope=self.scope, session=self.session, uid=uid, now=now)
-                         if owner['active'] or text in ('/조건','/조건도움말') else '조건 변경을 중지했어요. 프로그램에서 수신을 다시 시작해 주세요.')
+                         if owner['active'] or text in ('/조건','/조건도움말','/청산조건','/가상비용') or text.split(' ',1)[0] in ('/조건기록','/청산조건기록','/가상비용기록') else '조건 변경을 중지했어요. 프로그램에서 수신을 다시 시작해 주세요.')
+            elif text in ('/도움말','/help','/매매안내','/결산안내','/가상안내','/개선안내'):
+                reply=telegram_menu.guide(text,practice=self.orders_enabled)
+            elif text == '/전체명령':
+                reply = (HELP if self.orders_enabled else '[시세 관리·키움 모의 주문 안내 · 실제 돈 주문 잠김]\n/매매안내: 연결·허용·확인 순서') + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
+                reply += '\n/추천검색: 새 검색 요청 · /검색상태: 진행 확인'
+                reply += '\n/검색취소: 대기·진행 중인 원격 검색 취소'
+                reply += '\n/보호상태: 모의 보호 판단·요청 기록 (자동매도는 별도 사전 확인 필요)'
+                reply += '\n/평가상태: 추천 성적 자동 갱신 상태'
+                reply += '\n/성적갱신: 저장 자료로 추천 성적 다시 계산 · /성적갱신상태: 진행 확인'
+                reply += '\n/성적자료보완: 빠진 KRX 일봉 수집 후 다시 평가 (별도 KRX 키 필요)'
+                reply += '\n/실제결산: 입력한 실제 체결의 하루 기록 · 증권사 자동 대조 전'
+                reply += '\n/가상결산: 저장한 아침 추천 목록의 가상 성과'
+                reply += '\n/가상하루: 이전 아침 목록의 이월 보유까지 오늘 기준 조회'
+                reply += '\n/가상일봉 목록날짜 평가날짜 KRX: 사후 일봉 범위만 관측 · 실제 체결 아님'
+                reply += '\n/가상시초근거 목록날짜: 고정 추천의 가상 첫 거래 근거 첨부 여부 조회'
+                reply += '\n/모의결산: 개인 모의 요청의 저장된 체결·비용 근거 하루 기록'
+                reply += '\n/결산알림상태: 거래일20:30 저장 결산 발송 상태'
+                reply += '\n/가상추적 일반 100만원: 다음 아침 가상 목록 고정 · 실제 주문 안 함'
+                reply += '\n/가상목록: 고정한 종목·시장·가상 예산·조건 보기'
+                reply += '\n/추천대조: 추천 목록과 같은 날짜·코드의 실제 매수 입력 비교'
+                reply += '\n/조건성적: 내가 사용한 조건별 가상 승패·앞/뒤 기록 비교'
+                reply += '\n/조건비교 · /조건비교상태 · /개선안: 저장 기록 비교와 후보 확인'
+                reply += '\n/아침가상예약 일반 100만원: 매일07:50 저장 추천의 가상 목록 고정 · 실제 주문 안 함'
+                reply += '\n/테마1계획 종목명 10주 또는 전체 100만원: 매수 계획 보기 (주문 안 함)'
+                reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
+                reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
+                reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
             elif not self.orders_enabled:
                 if text == '/중지':
                     if self.watch_cancel_orders:
                         self.watch_cancel_orders(self.scope,self.session)
-                    if self.conditions is not None:
-                        self.conditions.cancel_session(self.scope, self.session)
+                    self.cancel_pending_changes()
                     db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
                     reply = '조건 변경·새 모의 주문 요청을 중지하고 대기 중인 변경·모의 주문 확인을 철회했어요. 이미 전송한 주문을 취소한 것은 아니에요.'
                 else:
@@ -298,15 +499,6 @@ class TelegramOrderService:
                     reply += '\n/모의자금: 예수금·주문 가능 금액·다음 결제일 예상값 구분'
                     reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
                     reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
-            elif text in ('/도움말', '/start', '/help'):
-                reply = HELP + ('\n/조건 · /조건도움말: 추천 기준 확인·변경' if self.conditions else '')
-                reply += '\n/추천검색: 새 검색 요청 · /검색상태: 진행 확인'
-                reply += '\n/검색취소: 대기·진행 중인 원격 검색 취소'
-                reply += '\n/보호상태: 모의 보호 판단 기록 (자동 매도 미연결)'
-                reply += '\n/평가상태: 추천 성적 자동 갱신 상태'
-                reply += '\n/추천결과 검색번호: 해당 검색의 종목만 보기'
-                reply += '\n/추천기록 · /추천성적: 저장된 추천과 이후 가격 관측'
-                reply += '\n/추천요약: 조건별 관측 수·가격 변화·자료 부족 보기\n/연습내역: 앱 안의 연습 매도 내역\n/연습결산: 연습 하루 금액·실현손익·승패\n/테마1: 저장된 감지 결과 조회\n/테마1알림상태: 발송 응답·미확인·미시도\n/테마1예산: 총예산 미리보기 사용법'
             elif text == '/상태':
                 account = self.engine.account()
                 last = db.execute('SELECT * FROM tg_intents WHERE scope=? ORDER BY rowid DESC LIMIT 1', (self.scope,)).fetchone()
@@ -330,8 +522,7 @@ class TelegramOrderService:
                     order_safety.latch(db, self.broker_identity, 'USER_EMERGENCY')
                 reply = '안전 상태 확인 중 · 주문을 새로 보내지 않습니다.'
             elif text == '/중지':
-                if self.conditions is not None:
-                    self.conditions.cancel_session(self.scope, self.session)
+                self.cancel_pending_changes()
                 db.execute('UPDATE tg_sessions SET active=0 WHERE scope=?', (self.scope,))
                 db.execute("UPDATE tg_intents SET state='CANCELED' WHERE scope=? AND state='WAITING'", (self.scope,))
                 reply = '새 주문을 중지하고 확인 대기를 철회했습니다. 이미 접수한 미체결 주문을 취소한 것은 아닙니다. 다시 시작하려면 프로그램에서 수신을 중지한 뒤 시작하세요.'

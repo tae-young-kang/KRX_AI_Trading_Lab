@@ -7,6 +7,34 @@ import re
 import requests
 from app.telegram_menu import markup
 
+ERROR_GUIDANCE={
+    'AUTH':'봇 연결 키가 거절됐어요. BotFather에서 받은 Bot Token을 연결 설정에 다시 저장한 뒤 시작해 주세요.',
+    'CONFLICT':'다른 프로그램의 봇 수신 또는 웹훅과 충돌했어요. 같은 봇을 쓰는 다른 수신을 중지한 뒤 시작해 주세요. 웹훅을 자동 삭제하지 않았어요.',
+    'FORBIDDEN':'봇의 접근이 거절됐어요. 봇 차단을 풀고 본인이 만든 봇 대화방에서 시작을 누른 뒤 Chat ID를 확인해 주세요.',
+    'CHAT':'메시지를 보낼 수 없어요. 본인이 만든 봇 대화방에서 시작을 누르고 개인 Chat ID를 확인해 주세요.',
+    'RATE_LIMIT':'텔레그램 요청이 너무 많아요. 잠시 기다렸다가 직접 다시 시작해 주세요.',
+    'SERVER':'텔레그램 서버 응답에 문제가 있어요. 잠시 뒤 직접 다시 시작해 주세요.',
+    'NETWORK':'텔레그램에 연결하지 못했어요. 인터넷·방화벽·프록시를 확인한 뒤 시작해 주세요.',
+    'RESPONSE':'텔레그램 응답을 확인하지 못했어요. 연결 설정을 확인한 뒤 시작해 주세요.',
+}
+
+
+class TelegramConnectionError(RuntimeError):
+    """Only fixed local guidance, never remote descriptions, URLs or credentials."""
+    def __init__(self,code):
+        self.code=code if code in ERROR_GUIDANCE else 'RESPONSE'
+        super().__init__(ERROR_GUIDANCE[self.code]+' 자동 재시도하지 않습니다.')
+
+
+def response_error(status,method):
+    if status==401:return 'AUTH'
+    if status==409:return 'CONFLICT'
+    if status==403:return 'FORBIDDEN'
+    if status==400 and method=='sendMessage':return 'CHAT'
+    if status==429:return 'RATE_LIMIT'
+    if type(status) is int and 500<=status<=599:return 'SERVER'
+    return 'RESPONSE'
+
 
 class TelegramTransport:
     def __init__(self, token, session=None):
@@ -21,13 +49,18 @@ class TelegramTransport:
         try:
             response = self.session.post(self._root+method, json=body, timeout=(3, 8), allow_redirects=False)
             if response.status_code != 200:
-                raise ValueError()
+                raise TelegramConnectionError(response_error(response.status_code,method))
             data = response.json()
             if not isinstance(data, dict) or data.get('ok') is not True:
-                raise ValueError()
+                status=data.get('error_code') if isinstance(data,dict) else None
+                raise TelegramConnectionError(response_error(status,method))
             return data['result']
+        except TelegramConnectionError:
+            raise
+        except requests.RequestException:
+            raise TelegramConnectionError('NETWORK') from None
         except Exception:
-            raise RuntimeError('텔레그램 통신이 실패했습니다. 연결 키·네트워크·다른 수신 프로그램을 확인하세요. 자동 재시도하지 않습니다.') from None
+            raise TelegramConnectionError('RESPONSE') from None
 
     def identity(self):
         result = self._call('getMe', {})

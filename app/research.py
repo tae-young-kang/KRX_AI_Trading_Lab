@@ -78,7 +78,15 @@ def build_features(bars, window=20):
         arr.sort(key=lambda b:b.date)
         for i in range(window,len(arr)):
             b=arr[i];prev=arr[i-window:i]
-            # Missing day bars / corporate actions: no synthetic interpolation.
+            session_index=market_dayindex[market][b.date]
+            # Require the IMMEDIATELY preceding market sessions. A suspended
+            # stock's last 20 recorded bars may span months and otherwise make
+            # volume spikes/MA look comparable to continuously traded stocks.
+            # Never bridge an absent day or manufacture an interpolated bar.
+            if (session_index < window or
+                    [bar.date for bar in prev] != market_dates[market][session_index-window:session_index]):
+                invalid+=1
+                continue
             if min(x.volume for x in prev)<=0:invalid+=1;continue
             vr=b.volume/(sum(x.volume for x in prev)/window)*100
             change=pct(b.close,arr[i-1].close)
@@ -91,7 +99,6 @@ def build_features(bars, window=20):
             pscore=clamp(1-abs(change-3)/8)
             score=round(45*vscore+30*lscore+25*pscore,4)
             future={}
-            session_index=market_dayindex[market][b.date]
             for horizon in HORIZONS:
                 # The next h-th session is defined by the MARKET calendar.
                 # If a stock stopped trading, never shift its entry/exit later.
@@ -128,6 +135,8 @@ def mean_or_none(a):return mean(a) if a else None
 
 
 def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,min_train_days=12,minimum_history=20):
+    from app.research_stability import split_test_stability
+    from app.research_observation import signal_coverage
     if not 1<=topk<=50:raise ValueError('Top-K는 1~50만 지원합니다.')
     if not .5<=train_fraction<=.85:raise ValueError('학습 비율은 50~85%만 지원합니다.')
     if cost_roundtrip_pct<0 or cost_roundtrip_pct>=10:raise ValueError('비용 설정이 올바르지 않습니다.')
@@ -146,6 +155,7 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
     for v in make_variants():
         market=v['market'];cut=cuts.get(market)
         if cut is None:continue
+        variant_signals=[]
         for day in market_days[market]:
             arr=by_day.get((market,day),[])
             if not arr:continue
@@ -157,8 +167,10 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
                 values={f'r{h}':round(r['future'][h]-cost_roundtrip_pct,5)
                         if r['future'][h] is not None and (split=='TEST' or (r['date_exit'][h] is not None and r['date_exit'][h]<=cut))
                         else None for h in HORIZONS}
-                signals.append({'strategy':v['id'],'split':split,'day':day,'code':r['code'],
-                                'name':r['name'],'market':market,'rank':pos,'score':r['score'],**values})
+                signal={'strategy':v['id'],'split':split,'day':day,'code':r['code'],
+                        'name':r['name'],'market':market,'rank':pos,'score':r['score'],**values}
+                signals.append(signal)
+                variant_signals.append(signal)
             if not selected:continue
             benchmark=[r for r in arr if r['future'][3] is not None and r['close']>=v['min_price']
                        and r['cap_eok'] is not None and r['value_eok'] is not None
@@ -182,6 +194,7 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
                     'losers':sum(r['future'][3]-cost_roundtrip_pct<=0 for r in valid)})
         summary={'id':v['id'],'name':v['name'],'market':market,'params':{k:v[k] for k in v if k not in ('id','name')}}
         for split in ('TRAIN','TEST'):
+            summary.update(signal_coverage(variant_signals,market_days[market],split=split,cut=cut))
             d=outcomes.get((v['id'],split),[])
             prefix='train' if split=='TRAIN' else 'test'
             summary.update({f'{prefix}_days':len(d),f'{prefix}_signals':sum(x['n'] for x in d),
@@ -190,6 +203,11 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
                 f'{prefix}_ic':round(mean([x['rank_ic'] for x in d if x['rank_ic'] is not None]),4) if any(x['rank_ic'] is not None for x in d) else None,
                 f'{prefix}_win_days_pct':round(100*sum(x['net3']>0 for x in d)/len(d),1) if d else None,
                 f'{prefix}_signal_win_pct':round(100*sum(x['wins'] for x in d)/sum(x['wins']+x['losers'] for x in d),1) if d else None})
+        # TEST diagnostic, split at the same *market-session* midpoint for all
+        # variants. Never use it in the TRAIN-only ranking or candidate choice.
+        sessions=[day for day in market_days[market] if day>cut]
+        summary.update(split_test_stability(
+            sessions, outcomes.get((v['id'],'TEST'), [])))
         rows_summary.append(summary)
     # Critical: choose by TRAIN only. TEST labels may be displayed but are
     # never used to rank/select/adjust candidates. Do not automatically apply.
@@ -209,15 +227,22 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
         'symbols':quality['symbols'],'data_rows':len(bars),'invalid_history':quality['invalid_history'],
         'topk':topk,'cost_pct':cost_roundtrip_pct,'chosen_on_train_only':winner,
         'variants':ranked,'top_signals':signals,
-        'method':'Daily close signal → next day OPEN entry → day+1/3/5 CLOSE. Equal-weight per signal day; NOT compounded. Avg daily excess vs same-market eligible stocks. No intraday execution/stop. Holdout exploratory only.'}
+        'method':'Daily close signal → next day OPEN entry → day+1/3/5 CLOSE. Equal-weight per signal day; NOT compounded. Avg daily excess vs same-market eligible stocks. No intraday execution/stop. Holdout exploratory only.',
+        'stability_method':'TEST market sessions split into chronological early/late halves, identical date boundary for same-market variants. Per-day 3-session benchmark-relative excess averaged only over matured observations; no 0% fills, no selection/ranking by TEST. Repeated adjacent holding periods and same market are correlated.'}
 
 
 def export_report(report,path):
+    from app.research_comparison import compare_variants
     root=Path(path);root.mkdir(parents=True,exist_ok=True)
     with (root/'summary.csv').open('w',encoding='utf-8-sig',newline='') as f:
         fields=['id','name','market','train_days','train_signals','train_return3','train_excess3','train_ic','train_win_days_pct',
-                'test_days','test_signals','test_return3','test_excess3','test_ic','test_win_days_pct']
-        wr=csv.DictWriter(f,fields,extrasaction='ignore');wr.writeheader();wr.writerows(report['variants'])
+                'test_days','test_signals','test_return3','test_excess3','test_ic','test_win_days_pct',
+                'holdout_gap3','data_quality_label','comparison_note','adequate_train_days','adequate_test_days',
+                'test_early_days','test_late_days','test_early_excess3','test_late_excess3',
+                'test_late_gap3','test_stability_note']
+        fields.extend(prefix+'_r3_'+key for prefix in ('train','test') for key in
+                      ('selected','observed','missing','embargo','tail','complete_days','partial_days','missing_days'))
+        wr=csv.DictWriter(f,fields,extrasaction='ignore');wr.writeheader();wr.writerows(compare_variants(report))
     with (root/'signals.csv').open('w',encoding='utf-8-sig',newline='') as f:
         fields=['strategy','split','day','code','name','market','rank','score','r1','r3','r5']
         wr=csv.DictWriter(f,fields);wr.writeheader();wr.writerows(report['top_signals'])

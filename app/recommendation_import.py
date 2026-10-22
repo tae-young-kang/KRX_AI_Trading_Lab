@@ -1,5 +1,6 @@
 """Explicit local price/session package; never official certification or IO to servers."""
 from dataclasses import dataclass
+from collections import Counter
 from datetime import date, datetime
 import json
 from math import isfinite
@@ -89,9 +90,20 @@ def apply_prices(database, mode, sessions, prices, available_through, price_sour
         if not eligible:
             raise ValueError('확인한 기간에 같은 모드의 추천이 없어요. 기존 자료는 바꾸지 않았어요.')
         before = db.execute('SELECT COUNT(*) FROM recommendation_reviews').fetchone()[0]
+        states=Counter()
         for row in eligible:
-            review(db,scan_id=row['scan_id'],code=row['code'],mode=mode,
+            results=review(db,scan_id=row['scan_id'],code=row['code'],mode=mode,
                    bars=indexed.get((row['code'],row['market']),[]),sessions=sessions,
                    available_through=available_through,price_source=price_source)
+            states.update(item.state for item in results)
         after = db.execute('SELECT COUNT(*) FROM recommendation_reviews').fetchone()[0]
-    return dict(recommendations=len(eligible),added=after-before,available_through=available_through)
+    return dict(recommendations=len(eligible),added=after-before,available_through=available_through,states=dict(states))
+
+
+def evaluation_counts(result):
+    """Counts refer to 1/3/5-session observations, not distinct stocks or trades."""
+    states=result.get('states')
+    if not isinstance(states,dict):return ''
+    return (f'기간별 가격 확인 {states.get("OBSERVED",0)}건 · 날짜 대기 {states.get("NOT_DUE",0)}건\n'
+            f'가격 자료 없음 {states.get("PRICE_MISSING",0)}건 · 거래일 확인 필요 {states.get("CALENDAR_MISSING",0)}건\n'
+            '1·3·5거래일 각각의 확인 건수이며 종목 수·승률이 아니에요.')

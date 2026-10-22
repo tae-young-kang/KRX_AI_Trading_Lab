@@ -25,6 +25,7 @@ def test_acknowledged_send_is_single_attempt_across_reopen_and_concurrency(tmp_p
     with ThreadPoolExecutor(max_workers=2) as pool:
         results=list(pool.map(attempt,range(2)))
     assert len(calls)==1 and 'SENT' in results
+    assert '전체 감지 1종목 · 목록 1번째' in calls[0]
     assert attempt(None)=='SENT' and len(calls)==1
 
 
@@ -108,6 +109,8 @@ def test_multi_stock_interruption_and_explicit_continue_skip_unknown(tmp_path):
     assert deliver_run(reopened,**kwargs)==first and len(transport.calls)==2
     final=deliver_run(reopened,continue_unattempted=True,**kwargs)
     assert final==dict(SENT=2,UNKNOWN=1,remaining=0) and len(transport.calls)==3
+    for index,message in enumerate(transport.calls,1):
+        assert f'전체 감지 3종목 · 목록 {index}번째' in message
     assert '900003' in transport.calls[-1]
     assert deliver_run(reopened,continue_unattempted=True,**kwargs)==final and len(transport.calls)==3
 

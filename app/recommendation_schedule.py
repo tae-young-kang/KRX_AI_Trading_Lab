@@ -1,15 +1,23 @@
 """Opt-in daily cached evaluation, called by the open PC application only."""
 from datetime import datetime,time
-from app.recommendation_cache import evaluate_saved
+from app.recommendation_cache import evaluate_saved,evaluate_recent
 from app.theme_input import parse_selection
 from app.trading_clock import KST
 
 
-def run_due(database,history,mode,*,enabled,now):
+def calendar_source(config,mode):
+    sources=config.get('recommendation_calendar_sources',{})
+    value=sources.get(mode) if isinstance(sources,dict) else None
+    return value if mode in ('MOCK','REAL_QUOTES') and value in ('KRX','CSV_USER') else None
+
+
+def run_due(database,history,mode,*,enabled,now,automatic_source=None):
     if enabled is not True: return dict(state='DISABLED')
     if not isinstance(now,datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise ValueError('시간대가 포함된 실행 시각이 필요해요.')
     if mode not in ('DEMO','MOCK','REAL_QUOTES'): raise ValueError('평가 모드를 확인해 주세요.')
+    if automatic_source is not None and (mode=='DEMO' or automatic_source not in ('KRX','CSV_USER')):
+        raise ValueError('자동 거래일 평가의 모드·저장 자료 출처를 확인해 주세요.')
     local=now.astimezone(KST)
     if local.time()<time(20,30): return dict(state='NOT_DUE')
     day=local.date().isoformat()
@@ -19,7 +27,8 @@ def run_due(database,history,mode,*,enabled,now):
         if prior: return dict(state='ALREADY_ATTEMPTED',previous=prior['state'])
         db.execute('INSERT INTO recommendation_evaluation_jobs VALUES(?,?,?,?,NULL)',(mode,day,'RUNNING',local.isoformat()))
     try:
-        result=evaluate_saved(database,history,mode,today=local.date())
+        result=(evaluate_recent(database,history,mode,source=automatic_source,today=local.date())
+                if automatic_source else evaluate_saved(database,history,mode,today=local.date()))
         state='SUCCEEDED'
     except Exception:
         result=None
@@ -30,7 +39,7 @@ def run_due(database,history,mode,*,enabled,now):
     return dict(state=state,result=result)
 
 
-def summary(database,mode,*,enabled,now):
+def summary(database,mode,*,enabled,now,automatic_source=None):
     if mode not in ('DEMO','MOCK','REAL_QUOTES') or not isinstance(now,datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise ValueError('평가 모드와 현재 시각을 확인해 주세요.')
     local=now.astimezone(KST)
@@ -42,7 +51,10 @@ def summary(database,mode,*,enabled,now):
     label={'DEMO':'가상 연습','MOCK':'키움 모의 시세','REAL_QUOTES':'실제 시세'}[mode]
     lines=[f'[{label} · 추천 성적 갱신 상태]', '자동 갱신: '+('켜짐' if enabled is True else '꺼짐'),
            '집 PC 프로그램 실행 중 20:30 이후 확인 · 저장 자료만 사용']
-    if selection:
+    if automatic_source in ('KRX','CSV_USER') and mode!='DEMO':
+        lines.extend([f'거래일 자동 계산 · 저장 자료 {automatic_source}',
+                      '어제 이전의 마지막 거래일까지 평가 범위를 늘려요. 빠진 가격은 자료 없음으로 표시해요.'])
+    elif selection:
         try:
             data,_=parse_selection(selection['payload'].encode('utf-8'),mode,today=local.date(),minimum_sessions=1)
             lines.append(f"확인한 평가 범위: {data['calendar']['begin']} ~ {data['through']} · 가격 출처 {data['source']}")

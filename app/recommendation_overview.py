@@ -1,4 +1,5 @@
 """Descriptive price observations only; no ranking, forecasts or auto promotion."""
+from collections import Counter
 from datetime import datetime
 import hashlib
 import json
@@ -8,7 +9,8 @@ from app.trading_clock import KST
 
 
 SOURCES = {'DEMO':'가상 자료','KRX':'KRX 자료','CSV_USER':'사용자 제공','NONE':'자료 없음'}
-CALENDARS = {'DEMO':'가상 거래일','USER_CONFIRMED':'사용자 확인 거래일','OFFICIAL':'공식 거래일','NONE':'거래일 미확인'}
+CALENDARS = {'DEMO':'가상 거래일','USER_CONFIRMED':'사용자 확인 거래일','OFFICIAL':'공식 거래일','NONE':'거래일 미확인',
+             'EXCHANGE_CALENDARS_XKRX':'거래일 달력(XKRX)'}
 
 
 def change_label(value):
@@ -53,6 +55,8 @@ def groups(db,mode):
           SELECT MAX(id) FROM recommendation_reviews WHERE scan_id=b.scan_id AND code=b.code)
         ORDER BY b.scan_id DESC,b.rank''',(mode,)).fetchall()
     seen = set()
+    population_by_day = Counter()
+    selected_days_by_condition = {}
     grouped = {}
     for row in reversed(rows):
         stamp = datetime.fromisoformat(row['created_at'])
@@ -65,13 +69,15 @@ def groups(db,mode):
         if identity in seen:
             continue
         seen.add(identity)
+        population_by_day[(identity[0],condition_signature)] += 1
+        selected_days_by_condition.setdefault(condition_signature,set()).add(identity[0])
         source = row['price_source'] or 'NONE'
         calendar = row['calendar_source'] or 'NONE'
         key = (condition_signature,source,calendar)
         if key not in grouped:
             grouped[key] = dict(condition_id=hashlib.sha256(condition_signature.encode()).hexdigest()[:8],
                 label=condition_label(cfg),source=source,calendar=calendar,count=0,last_scan=0,
-                horizons={h:dict(observed=0,up=0,down=0,flat=0,waiting=0,missing=0,unreviewed=0,values=[]) for h in (1,3,5)})
+                horizons={h:dict(observed=0,up=0,down=0,flat=0,waiting=0,missing=0,unreviewed=0,values=[],by_day={}) for h in (1,3,5)})
         group = grouped[key]
         group['count'] += 1
         group['last_scan'] = max(group['last_scan'],row['scan_id'])
@@ -85,14 +91,30 @@ def groups(db,mode):
                 bucket['observed'] += 1
                 bucket['up' if change>1e-9 else 'down' if change< -1e-9 else 'flat'] += 1
                 bucket['values'].append(change)
+                bucket['by_day'].setdefault(identity[0],[]).append(change)
             elif result['state']=='NOT_DUE':
                 bucket['waiting'] += 1
             else:
                 bucket['missing'] += 1
-    for group in grouped.values():
+    for (signature,source,calendar),group in grouped.items():
         for bucket in group['horizons'].values():
+            bucket['selected_days'] = len(selected_days_by_condition[signature])
             values = bucket.pop('values')
             bucket['mean'] = mean(values) if values else None
+            by_day = bucket.pop('by_day')
+            bucket['observed_days'] = len(by_day)
+            # Each recommendation date gets equal weight, regardless of how
+            # many stocks were recommended on that date.
+            bucket['daily_mean'] = mean(mean(changes) for changes in by_day.values()) if by_day else None
+            # Complete means every selected pick for this condition/day was
+            # observed, even if another pick sits in a different source group.
+            # Completeness is limited to the recent 3,000 selected records.
+            complete = [mean(changes) for day,changes in by_day.items()
+                        if len(changes) == population_by_day[(day,signature)]]
+            bucket['complete_days'] = len(complete)
+            bucket['partial_days'] = bucket['observed_days'] - bucket['complete_days']
+            bucket['unobserved_days'] = bucket['selected_days'] - bucket['observed_days']
+            bucket['complete_daily_mean'] = mean(complete) if complete else None
     return sorted(grouped.values(),key=lambda g:g['last_scan'],reverse=True),unverified_time
 
 
@@ -110,11 +132,26 @@ def summary(db,mode):
         for horizon,bucket in group['horizons'].items():
             mean_label = '평균 미확인' if bucket['mean'] is None else '평균 변화 '+change_label(bucket['mean'])
             short = ' · 관측 20개 미만' if bucket['observed']<20 else ''
-            lines.append(f"{horizon}거래일: 관측 {bucket['observed']} · 상승 {bucket['up']}/하락 {bucket['down']}/동일 {bucket['flat']} · {mean_label}{short}")
+            daily = ('날짜별 평균 미확인' if bucket['daily_mean'] is None else
+                     '날짜별 균등 평균 '+change_label(bucket['daily_mean']))
+            if bucket['observed'] and bucket['observed_days']<10:
+                short += ' · 평가일 10일 미만'
+            lines.append(f"{horizon}거래일: 관측 {bucket['observed']}건/{bucket['observed_days']}일 · 상승 {bucket['up']}/하락 {bucket['down']}/동일 {bucket['flat']} · {mean_label} · {daily}{short}")
+            complete = ('완전 관측일 평균 미확인' if bucket['complete_daily_mean'] is None else
+                        '완전 관측일 평균 '+change_label(bucket['complete_daily_mean']))
             lines.append(f"대기 {bucket['waiting']} · 자료 부족 {bucket['missing']} · 미평가 {bucket['unreviewed']}")
+            # Show the denominator even when there is no observed return at all.
+            # These day counts are relative to this price/calendar provenance.
+            lines.append(
+                f"집계 내 완전 관측일 {bucket['complete_days']}/{bucket['selected_days']}일"
+                f" · 부분 관측 {bucket['partial_days']}일"
+                f" · 이 출처에서 미관측 {bucket['unobserved_days']}일 · {complete}")
     if len(data)>3:
         lines.append(f'나머지 {len(data)-3}개 묶음은 표시를 생략했어요.')
     if unverified:
         lines.append(f'시각 확인이 필요한 {unverified}개 기록은 집계하지 않았어요.')
-    lines.append('가격 변화는 비용·배당·분할 미반영이며 실제 승패/순수익·기대수익률이 아니에요. 겹친 종목/기간도 독립 표본이 아니며 조건을 자동 변경하지 않아요.')
+    lines.append('날짜별 균등 평균은 일부 종목만 관측된 날짜도 포함합니다. '
+                 '완전 관측일은 이 자료 출처에서 종목이 모두 확인된 날짜예요. 분모는 선택된 추천일 전체이며 시장 전체 완전성은 아니에요. '
+                 '가격 변화는 비용·배당·분할 미반영이며 실제 순수익·기대수익률이 아니에요. '
+                 '겹친 종목/보유 기간은 독립 표본이 아니며 조건을 자동 변경하지 않아요.')
     return '\n'.join(lines)

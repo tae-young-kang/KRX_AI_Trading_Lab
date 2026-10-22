@@ -34,6 +34,8 @@ class MockEmergencyStop:
                 db.execute('INSERT OR REPLACE INTO manual_halt VALUES (1,?)',(self.clock().timestamp(),))
                 db.execute('DELETE FROM resume_intent')
                 db.execute("UPDATE intents SET state='CANCELED' WHERE state IN ('WAITING','QUEUED')")
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='market_previews'").fetchone():
+                    db.execute("UPDATE market_previews SET state='CANCELED' WHERE state IN ('PENDING','PREPARING')")
             with self._signal:
                 if self._epoch==epoch: self._pending=False
         return ('[키움 모의 긴급중지]\n새 전송을 차단하고 대기 요청을 철회했어요. 재시작해도 유지해요.\n'

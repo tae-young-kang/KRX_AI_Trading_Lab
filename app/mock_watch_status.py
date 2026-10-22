@@ -10,7 +10,7 @@ from app import mock_funds_view
 
 
 class MockWatchStatus:
-    def __init__(self, clock=None, *, history_path=None):
+    def __init__(self, clock=None, *, history_path=None,symbol_lookup=None,order_root=None):
         self._clock = clock or (lambda:datetime.now(KST))
         self._lock = threading.RLock()
         self._status = '모의 알림 연결 전'
@@ -27,6 +27,8 @@ class MockWatchStatus:
         self._last_reconnect = None
         self._validation = MockValidationProgress(self._clock)
         self._orders = None
+        self._symbol_lookup=symbol_lookup
+        self._order_root=order_root
         self._funds = None
         self._history = MockObservationHistory(history_path)
 
@@ -44,6 +46,7 @@ class MockWatchStatus:
 
     def bind_orders(self, orders):
         with self._lock:
+            if orders is not None and self._symbol_lookup is not None:orders.symbol_lookup=self._symbol_lookup
             self._orders = orders
 
     def handle_orders(self, text, **context):
@@ -63,6 +66,19 @@ class MockWatchStatus:
         with self._lock:
             orders = self._orders
         if orders: orders.cancel_session(scope,session)
+
+    def order_delivery(self, action, **context):
+        with self._lock:
+            orders=self._orders
+        return orders.notice_delivery(action,**context) if orders else None
+
+    def daily_report(self,day,*,scope,page=1):
+        from app.mock_daily_report import report
+        with self._lock:
+            root=self._orders.root if self._orders is not None else self._order_root
+        if root is None:return '키움 모의 기록 경로가 아직 없어요. 모의 계좌의 저장 기록을 확인해 주세요.'
+        try:return report(root,scope,day,now=self._clock(),page=page)
+        except Exception:return '[키움 모의 하루 기록 · 대조 필요]\n날짜·개인 범위와 접수/체결/비용 기록을 확인해 주세요. 손익은 미확인이며 추측하지 않았어요. 실제 주문/조회는 실행하지 않았어요.'
 
     def validation_summary(self):
         with self._lock:

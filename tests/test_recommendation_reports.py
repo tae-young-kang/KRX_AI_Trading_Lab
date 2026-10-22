@@ -61,7 +61,7 @@ def test_report_commands_authenticated_readonly_and_bound_to_receiver_mode(tmp_p
     event=update(sandbox,2,'/추천기록')
     first=service.handle(event)
     assert service.handle(event)==first and calls==[False]
-    assert '900001' in first and '발송·체결 증명이 아니에요' in first
+    assert '900001' in first and '실제 주문은 하지 않았어요' in first
     service.handle(update(sandbox,3,'/중지'))
     assert '평가 자료 없음' in service.handle(update(sandbox,4,'/추천성적'))
     assert broker.calls==[]
