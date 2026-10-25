@@ -59,6 +59,7 @@ from app.condition_analysis_request import ConditionAnalysisRequest
 from app.morning_quote_request import MorningQuoteRequest
 from app.quote_capture_request import QuoteCaptureRequest
 from app.recommendation_classification import Classification
+from app.classified_performance import report as classified_performance_report
 from app.quote_capture_worker import QuoteCaptureWorker
 from app.theme_opening_requests import handle as theme_opening_handle
 from app.morning_quote_refresh import refresh as refresh_morning_quotes
@@ -1772,6 +1773,7 @@ class MainWindow(QMainWindow):
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
                                      analysis_request=self.remote_analysis,morning_quote_request=self.remote_morning_quote,quote_capture=self.quote_capture,
                                      recommendation_classification=self.classify_recommendation,
+                                     classified_performance=lambda day,**context:classified_performance_report(data_dir(),('REAL_QUOTES' if self.cfg.get('data_mode')=='KIWOOM' and self.cfg.get('kiwoom_env')=='REAL' else 'UNSUPPORTED'),day,**context),
                                      condition_report=lambda page=1,db=self.db,mode=current_mode(self.cfg).key:
                                          condition_report_text(db,mode,min_train=max(20,int(self.cfg['min_strategy_trades'])),page=page),
                                      recommendation_request=self.remote_scan,

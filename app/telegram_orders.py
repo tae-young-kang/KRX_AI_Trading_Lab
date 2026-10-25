@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None,morning_quote_request=None,theme_opening=None,quote_capture=None,recommendation_classification=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None,morning_quote_request=None,theme_opening=None,quote_capture=None,recommendation_classification=None,classified_performance=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -60,6 +60,7 @@ class TelegramOrderService:
         self.theme_opening=theme_opening
         self.quote_capture=quote_capture
         self.recommendation_classification=recommendation_classification
+        self.classified_performance=classified_performance
         self.practice_daily = practice_daily
         self.actual_daily=actual_daily
         self.morning_daily=morning_daily
@@ -278,6 +279,13 @@ class TelegramOrderService:
                 else:
                     try:reply=self.mock_daily(match[1] or self.clock().astimezone(KST).date().isoformat(),scope=self.scope,page=int(match[2] or 1))
                     except Exception:reply='모의 결산 날짜와 별도 접수·체결/비용 장부를 확인해 주세요. 손익을 추측하지 않았어요.'
+            elif text.split(' ',1)[0]=='/추천성적분리':
+                match=re.fullmatch(r'/추천성적분리(?: ([0-9]{4}-[0-9]{2}-[0-9]{2})(?: ([1-9][0-9]{0,5}))?)?',text)
+                if not match:reply='사용법: /추천성적분리 또는 /추천성적분리 YYYY-MM-DD [페이지]'
+                elif self.classified_performance is None:reply='추천 성적 분리 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                else:
+                    try:reply=self.classified_performance(match[1] or self.clock().astimezone(KST).date().isoformat(),now=self.clock(),page=int(match[2] or 1))
+                    except Exception:reply='추천·사용자 분류·가상 매도 근거를 확인하지 못했어요. 성과를 추측하지 않았어요.'
             elif text.split(' ',1)[0] in ('/추천매수연결','/추천미구매','/추천분류철회','/추천분류확인'):
                 if self.recommendation_classification is None:reply='추천 분류 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
                 else:
