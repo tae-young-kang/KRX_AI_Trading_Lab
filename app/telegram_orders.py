@@ -153,6 +153,14 @@ class TelegramOrderService:
         from app.daily_report_delivery import pages
         def build(day):
             if not self.actual_daily or not self.morning_setup:raise ValueError('결산 조회 연결이 없어요.')
+            classified=self.daily_delivery.mode=='REAL_QUOTES'
+            if classified and self.classified_performance is None:raise ValueError('분류별 결산 조회 연결이 없어요.')
+            def classified_page(day,page):
+                if not self.accepts_search_requests() or self.clock().astimezone(KST).date().isoformat()!=day:raise ValueError()
+                text=self.classified_performance(day,now=self.clock(),page=page)
+                if (not isinstance(text,str) or not text.startswith('[추천 성적 분리]')
+                        or not self.accepts_search_requests() or self.clock().astimezone(KST).date().isoformat()!=day):raise ValueError()
+                return text
             mock_note=('키움 모의 기록도 별도로 보내며 비용/체결 근거 누락은 손익 미확인으로 표시해요.\n' if self.mock_daily else
                 '키움 모의계좌 하루 결산은 아직 자동 집계되지 않아요. /모의기록 · /잔고에서 별도로 확인하세요.\n')
             return ([f'[20:30 저장 기록 결산] {day}\n실제 체결 입력과 아침 가상 기록을 분리해 보내요.\n'
@@ -160,6 +168,7 @@ class TelegramOrderService:
                 '실제 기록은 사용자 입력이며 증권사 자동 대조 전, 가상은 공급된 시세 근거 계산이에요.']
                 +pages(lambda d,p:self.actual_daily(d,page=p),day,'/실제결산')
                 +pages(lambda d,p:self.morning_setup(f'/가상하루 {d} {p}'),day,'/가상하루')
+                +(pages(classified_page,day,'/추천성적분리') if classified else [])
                 +(pages(lambda d,p:self.mock_daily(d,scope=self.scope,page=p),day,'/모의결산') if self.mock_daily else []))
         try:
             return self.daily_delivery.tick(now=self.clock(),active=self.accepts_search_requests,build=build,
@@ -267,7 +276,7 @@ class TelegramOrderService:
                 reply=(self.watch_orders(text,scope=self.scope,session=self.session,uid=uid,now=now)
                        if not self.orders_enabled and self.watch_orders else '모의 보호 기록 연결이 없어요. 자동 매도는 아직 연결되지 않았어요.')
             elif text=='/결산알림상태':
-                reply=self.daily_delivery.summary(self.clock(),mock_available=self.mock_daily is not None) if self.daily_delivery else '20:30 결산 알림 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                reply=self.daily_delivery.summary(self.clock(),mock_available=self.mock_daily is not None,classified_available=self.classified_performance is not None) if self.daily_delivery else '20:30 결산 알림 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
             elif text.split(' ',1)[0] in ('/아침가상예약','/아침가상상태','/아침가상중지'):
                 if not self.morning_schedule or not self.morning_freeze:reply='아침 가상 예약 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
                 elif text.split(' ',1)[0]=='/아침가상예약' and not owner['active']:reply='새 아침 가상 예약을 중지했어요. PC에서 개인 수신을 다시 시작해 주세요.'

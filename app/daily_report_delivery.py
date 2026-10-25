@@ -30,7 +30,7 @@ class DailyReportDelivery:
                 PRIMARY KEY(scope,mode,day))''')
             db.execute("UPDATE daily_report_delivery SET state='UNKNOWN' WHERE scope=? AND mode=? AND state IN ('BUILDING','SENDING')",(scope,mode))
 
-    def summary(self,now,*,mock_available=False):
+    def summary(self,now,*,mock_available=False,classified_available=False):
         day=now.astimezone(KST).date().isoformat()
         with connect(self.path) as db:
             row=db.execute('SELECT state,cursor,payload FROM daily_report_delivery WHERE scope=? AND mode=? AND day=?',
@@ -43,7 +43,8 @@ class DailyReportDelivery:
                 '거래일 20:30 이후 PC와 개인 텔레그램 수신이 켜져 있을 때 저장 기록을 보내요.\n'
                 '실제 체결 입력·아침 가상 기록을 구분해요. '
                 +('모의 결산 조회 연결 있음 · 오늘 이미 준비한 보고는 당시 페이지를 유지해요.\n' if mock_available else '키움 모의계좌 결산 자동 집계는 아직 미연결이에요.\n')+
-                '수동 조회: /실제결산 · /가상하루'+(' · /모의결산' if mock_available else '')+
+                ('실제 시세 모드의 새 결산에는 분류별 가상 성적을 따로 넣어요. 오늘 이미 준비한 내용은 바꾸지 않아요.\n' if self.mode=='REAL_QUOTES' and classified_available else '')+
+                '수동 조회: /실제결산 · /가상하루'+(' · /모의결산' if mock_available else '')+(' · /추천성적분리' if self.mode=='REAL_QUOTES' and classified_available else '')+
                 '. 발송 응답은 사용자가 읽었다는 확인이 아니에요.')
 
     def tick(self,*,now,active,build,send):

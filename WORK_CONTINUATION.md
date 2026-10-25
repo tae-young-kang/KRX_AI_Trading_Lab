@@ -1020,3 +1020,25 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - 현재사용자선택미구매그룹의승률은전체추천전략승률이아니다. 분류변경시과거조회그룹도달라질수있음을표시했다. 실제GUI/시세/Telegram전달·실제객관성과/시장벤치마크초과수익·충분실자료WFO48조건은미확인/남은목표이며실제/모의주문은실행하지않았다.
 - 제품8+기록3=11파일최종기록재검토→exactstaged비밀검사/commit/push·원격SHA/새CI확인예정. 앞선ea8a174 CI40185289521 성공1548/204의존경고와새코드검증을구분, PR#1 Draft/main미병합유지.
 - 다음 우선순위4 전체흐름: 새분류별성과callback을기존20:30결산준비·영속payload·발송응답/재시작UNKNOWN·자동재발송금지에연결. 준비된READY/SENT/UNKNOWN payload재작성금지. 이후우선순위5는단일TRAIN/TEST를재명명하지않고진짜rolling Walk-Forward/48조건선택으로개발하되충분실자료없는실제성과는미검증유지한다.
+
+## 2026-10-25 D-분류성과자동결산-1 · 착수 전 수락기준
+- 직전 e16e097e8fcd78794433770b6efe13c4cee99ca2: exact staged11파일비밀정보검사·commit/push 성공, 원격branch SHA일치. 새CI/PR은해당SHA로확인한다. 개발 /root/development, 독립검증 /root/verification, 조정자 /root.
+- 요구사항 최신우선순위4·6/원래D·10: 수동분류별성과조회를 기존거래일20:30 자동결산에 연결한다. 기존 send_daily_notice/daily_report_delivery의준비→영속payload→발송응답·재시작UNKNOWN·자동재전송금지를재사용하고새예약시스템은만들지않는다. 실제발송은이번개발검사범위가아니다.
+- 기준1: 기존20:30 거래일/활성개인수신·모드조건을그대로사용, REAL_QUOTES 새준비결산에실제입력/전체가상/분류별가상보고를명확히구분해연결. 다른모드에실제시세분류자료혼합금지, API·주문0.
+- 기준2: 분류별전체페이지를기존순서/길이/한도로수집해새payload에영속저장. 조회실패·미산출/누락을0원성과나발송성공으로숨기지않음. 현재분류/독립예산·실제손익별도·벤치마크미산출 안내보존. 합성DB에서준비만으로원본장부/분류DB변경0.
+- 기준3: 기존READY/SENT/UNKNOWN payload는변경/자동재발송하지않고업데이트후새준비분에만반영. 명시기존조회·중지·개인scope/재시작·전달실패기록계약보존, 오프라인성공을실Telegram전달로기록금지.
+- 기준4: Fakeclock/transport·임시DB에서20:30전후·휴일/모드·전체페이지·누락callback/오류·활성/중지·재시작·발송실패/기존payload불변/새준비분과원본장부불변을검사. 자체관련/전체오프라인compile/diff→동결독립검증→필요수정/재검증→exactstaged비밀검사·commit/push·remoteCI/인수인계.
+- 이후우선순위5는기존단일TRAIN/TEST의재명명아닌rolling Walk-Forward/48조건선택을개발. 충분실자료/독립평가기간없이실제최적조건·수익률완료주장금지. 시장벤치마크/공식첫체결원천·Windows/TG실환경은남은목표로유지한다.
+
+## 2026-10-26 사용자 운영 지시 변경
+- 사용자 명시 요청: 업데이트를 마칠 때마다 GUI를 실행하고 텔레그램 연동/명령 수신도 켜 둔다. 이전 GUI 실행 금지 지시는 이 운영 범위에서 변경됐다. 검증·버전관리 작업과 구분하여 커밋/푸시 후 실행·실제 수신 상태를 확인한다.
+- 실계좌·실제 키움 모의계좌 주문 금지와 비밀정보 업로드 금지는 유지한다. 자동 시작은 start_telegram_recommendations_automatically→start_telegram_orders(automatic=True)로 orders_enabled=False인 경로를 코드에서 확인했다. 실행/수신 성공은 실제 확인 전까지 미검증으로 남기며 보안 인증창을 대신 조작하지 않는다.
+- 직전 개발 에이전트는 WFO 읽기 설계 중 사용 한도로 종료됐으나 제품 자동결산5파일은 자체1580/1skip·관련103/해시와 함께 저장돼 있다. 현재 HEAD e16e097/5파일을 재확인하고 독립 검증을 재개한다. 기존4개 private shadow CSV는 열거나 stage하지 않는다.
+
+## 2026-10-26 D-분류성과자동결산-1 독립 검증 완료
+- 제품5파일: app/daily_report_delivery.py, app/telegram_orders.py, app/telegram_menu.py, tests/test_daily_report_delivery.py, docs/HOME_TELEGRAM_GUIDE.md. 기존20:30결산의REAL_QUOTES 새준비분에분류별가상성과모든페이지를추가했다. 실제입력/전체가상/분류가상은구분하고 기존예약·영속payload·응답확인/자동재전송금지 경로를재사용한다.
+- 개발자체관련103 passed·전체1580 passed/1 skipped·compileall/diff 통과. 독립 /root/verification 재개후정확HEAD e16e097e8fcd78794433770b6efe13c4cee99ca2+동결5해시 전후불변, 직접관련81 passed(16.58s)·전체1580 passed/1 skipped(83.01s)·compileall/diff 통과. 이전검사handle이소멸해최종결과를회수할수없었으므로성공추정없이같은동결본을재검사했다.
+- 기준1 충족: 기존20:30거래일·활성개인/모드조건과다른모드분류혼합0. 기준2 충족: pages순서/길이/한도/모든페이지영속, 누락callback·오류·unsupported모드/날짜변경FAILED·미산출0원대입0·원본DB불변. 기준3 충족: 기존READY미전송분동일payload계속/응답확인분재전송0·SENT/UNKNOWN불변/재시작자동재전송0. 기준4 충족: 실report2페이지를Fakeclock/transport로준비·응답, 별도frozenpayload 재시작재현·전체독립검사. 조정자는이오프라인자동결산연결범위만수락한다.
+- 앞선e16e097 CI40186144613 completed/success·Windows1565 passed/204의존폐기경고(641.00s)확인. 이CI는이번5파일성공근거가아니다. 최종제품5+기록3=8파일정확staged비밀검사·commit/push·remoteSHA·새CI/PR확인후새사용자지시에따라GUI실행·TG수신운영확인을별도로진행한다.
+- 실제20:30발송·사용자읽음/GUI·시장자료/Telegram왕복·운영스케줄실증은현재미검증. 실제API/모의·실주문0,개인자료변경/비밀업로드없음. GUI실행승인은거래승인이아니며업데이트후자동수신의orders_enabled=False경로만사용한다.
+- 다음 개발 우선순위5: 실제rolling Walk-Forward/48조건훈련선택·비중복OOS평가를기존research/preflight/저장흐름에연결하는설계확정→구현→독립검증. 충분실자료/독립평가기간/공식거래일·시장전체누락검증없이실제최적조건·수익률완료주장금지. 시장벤치마크·공식첫체결원천·Windows/TG전체실환경은남은목표다.
