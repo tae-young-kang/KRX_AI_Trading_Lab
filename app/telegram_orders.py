@@ -31,7 +31,7 @@ class TelegramOrderService:
     def __init__(self, path, engine, user_id, chat_id, bot_id, catalog, clock=None, limits=None,
                  conditions=None, orders_enabled=True, watch_status=None, watch_refresh=None, watch_result=None,
                  watch_reconnect=None, watch_validation=None, watch_orders=None, watch_cancel_orders=None,
-                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None,morning_quote_request=None,theme_opening=None,quote_capture=None):
+                 watch_history=None, watch_funds=None, recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None,morning_quote_request=None,theme_opening=None,quote_capture=None,recommendation_classification=None):
         if (type(engine) is not OrderEngine or engine.broker.environment != 'SIMULATED'):
             raise ValueError('가짜 서버 주문 엔진만 연결할 수 있습니다.')
         if any(type(x) is not int or x <= 0 for x in (user_id, chat_id, bot_id)):
@@ -59,6 +59,7 @@ class TelegramOrderService:
         self.theme_plan=theme_plan
         self.theme_opening=theme_opening
         self.quote_capture=quote_capture
+        self.recommendation_classification=recommendation_classification
         self.practice_daily = practice_daily
         self.actual_daily=actual_daily
         self.morning_daily=morning_daily
@@ -118,7 +119,15 @@ class TelegramOrderService:
             db.execute("UPDATE tg_intents SET state='CANCELED' WHERE scope=? AND session=? AND state='WAITING'",
                        (self.scope, self.session))
 
+    def classification_receiver_active(self):
+        with connect(self.path) as db:
+            row=db.execute('SELECT session,active FROM tg_sessions WHERE scope=?',(self.scope,)).fetchone()
+        return bool(row and row['session']==self.session and row['active'])
+
     def cancel_pending_changes(self):
+        if self.recommendation_classification is not None:
+            try:self.recommendation_classification('',scope=self.scope,session=self.session,active=False,now=self.clock())
+            except Exception:pass
         if self.quote_capture is not None:self.quote_capture.cancel(owner=(self.scope,self.session))
         if self.morning_quote_request is not None:self.morning_quote_request.cancel()
         if self.conditions is not None:self.conditions.cancel_session(self.scope,self.session)
@@ -269,6 +278,11 @@ class TelegramOrderService:
                 else:
                     try:reply=self.mock_daily(match[1] or self.clock().astimezone(KST).date().isoformat(),scope=self.scope,page=int(match[2] or 1))
                     except Exception:reply='모의 결산 날짜와 별도 접수·체결/비용 장부를 확인해 주세요. 손익을 추측하지 않았어요.'
+            elif text.split(' ',1)[0] in ('/추천매수연결','/추천미구매','/추천분류철회','/추천분류확인'):
+                if self.recommendation_classification is None:reply='추천 분류 연결이 없어요. PC 프로그램을 업데이트해 주세요.'
+                else:
+                    try:reply=self.recommendation_classification(text,scope=self.scope,session=self.session,active=lambda:self.classification_receiver_active(),now=self.clock())
+                    except Exception:reply='추천 분류를 저장하지 못했어요. 원본 기록과 모드를 확인해 주세요.'
             elif text.split(' ',1)[0] in ('/가상추적','/가상추적상태','/가상하루','/가상목록','/추천대조','/가상일봉','/가상시초근거'):
                 if not self.morning_setup:reply='가상 추적 목록 연결이 아직 없어요.'
                 elif text.split(' ',1)[0]=='/가상추적' and not owner['active']:reply='새 가상 목록 고정을 중지했어요. PC에서 수신을 다시 시작해 주세요.'

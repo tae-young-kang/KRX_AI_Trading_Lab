@@ -54,6 +54,8 @@ def report(root,mode,day,*,now,page=1):
     if plan['mode']!=mode or plan['day']!=day:raise ValueError('추천 목록의 날짜·모드를 확인해 주세요.')
     targets=plan['targets'];pages=max(1,(len(targets)+4)//5)
     if page>pages:return f'추천 대조는 {pages}페이지까지 있어요.'
+    from app.recommendation_classification import classifications
+    labels=classifications(root,day,now)
     buys=reported_buys(checked(root/'actual_fill_records.db',root),day,now)
     with tracker.db.connect() as db:
         virtual={r['code']:r['count'] for r in db.execute('SELECT code,COUNT(*) AS count FROM paper_trades WHERE substr(opened_at,1,10)=? GROUP BY code',(day,))}
@@ -66,11 +68,14 @@ def report(root,mode,day,*,now,page=1):
     for target in targets[(page-1)*5:page*5]:
         code=target['code'];buy=(buys or {}).get(code)
         lines.append(f'\n{" ".join(target["name"].split())} ({code})')
+        lines.append('사용자 분류: '+labels.get(code,'미확인'))
         if buy:
             venues='/'.join('시장 미확인' if value=='UNKNOWN' else value for value in sorted(buy['venues']))
             lines.append(f'매수 입력 {buy["quantity"]:,}주 · {buy["gross_won"]:,}원 (비용 전) · {venues}')
         else:lines.append('실제 매수 여부 미확인 · '+('체결 입력 파일 없음' if buys is None else '같은 날짜·코드의 매수 입력 없음'))
         lines.append(f'별도 가상 진입 기록 {virtual.get(code,0)}건 · 실제 매수와 자동 연계/제외 전')
+    lines.append('분류: /추천매수연결 날짜 코드 체결번호 · /추천미구매 날짜 코드 · /추천분류철회 날짜 코드')
+    lines.append('사용자 분류는 증권사 검증/미구매 증명이 아니며 기존 손익을 바꾸지 않아요.')
     lines.extend([f'실제 입력 손익: /실제결산 {day}',f'별도 가상 손익: /가상결산 {day}'])
     if page>1:lines.append(f'이전: /추천대조 {day} {page-1}')
     if page<pages:lines.append(f'다음: /추천대조 {day} {page+1}')

@@ -6,10 +6,12 @@ import io
 import json
 import re
 import sqlite3
-from contextlib import closing
+from contextlib import closing,contextmanager
 from datetime import datetime,date
 from pathlib import Path
 from app.trading_clock import KST
+from app.runtime_lock import ReceiverLock,ReceiverAlreadyRunning
+from app.morning_quote_router import _safe_path
 
 FIELDS=('fill_id','filled_at','code','name','venue','side','quantity','price_won','realized_pnl_won','reason')
 
@@ -39,6 +41,16 @@ def normalize(row,now):
     return row
 
 
+@contextmanager
+def input_lock(path):
+    path=Path(path);lock=path.parent/(path.name+'.import.lock')
+    _safe_path(path.parent,path);_safe_path(path.parent,lock)
+    try:
+        with ReceiverLock(lock):yield
+    except ReceiverAlreadyRunning:
+        raise ValueError('추천 분류 확인 또는 체결 입력이 진행 중이에요. 잠시 뒤 다시 입력하세요.') from None
+
+
 def import_csv(path,blob,*,now):
     """Atomic import. Account/credential columns are not accepted or retained."""
     if not isinstance(now,datetime) or now.tzinfo is None or now.utcoffset() is None:
@@ -55,7 +67,7 @@ def import_csv(path,blob,*,now):
     path.parent.mkdir(parents=True,exist_ok=True)
     added=0
     evidence_hash=hashlib.sha256(blob).hexdigest()
-    with closing(sqlite3.connect(path)) as db,db:
+    with input_lock(path),closing(sqlite3.connect(path)) as db,db:
         db.execute('BEGIN IMMEDIATE')
         tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if tables-{'actual_meta','actual_fills'}:raise ValueError('실제 체결은 별도 기록 파일에 저장해야 해요.')

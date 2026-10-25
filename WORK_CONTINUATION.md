@@ -971,3 +971,31 @@ PR #1의 백업 검증 변경을 전체 오프라인 테스트 및 합성 GUI �
 - 실제 GUI/API/Telegram 전달·시세 원천/공식 첫체결 인증·실제/키움모의 주문은 실행하지 않았으며 실환경 미확인이다. 우선순위1~2 전체완료가 아닌 기존 후속가격 연결결함 수정이다.
 - 최종 제품6+기록3파일 정확한 staged 비밀정보검사→commit/push→원격SHA 확인 예정. PR#1 OPEN/DRAFT/main 미병합 유지. 직전 e3b993b CI39717586216은 마지막 조회 실행중으로 아직 성공이라 보고하지 않는다.
 - 다음 우선순위3: 기존 /추천대조의 날짜·코드 일치만으로 추천 매수로 귀속하지 않고, 사용자의 명시적 실제 BUY 입력 연결/미구매 확인/미확인 분류를 별도 기록하는 연결을 검토한다. 실제·가상 손익을 합치지 않으며 입력없음은 미매수 증명이 아니다. 이후 객관성과/시장초과수익→충분한 실자료 WFO48조건 순서를 유지한다.
+
+## 2026-10-22 D-추천매수분류연결-1 · 착수 전 수락기준
+- 직전7a8cd0c250b3f4ac68fd32eda734f2688f0fe670: 최종9파일 exact staged 비밀정보검사·commit/push 성공, 원격 branch SHA 일치. PR#1은 Draft 유지, 새 CI는 별도로 확인한다. 앞선 시세수집 CI39717586216은 마지막 조회 실행중이었다.
+- 요구사항 최신우선순위3/원래 D·7~8: 기존 /추천대조와 실제 CSV 입력 장부를 재사용해 추천별 사용자 명시 분류를 연결한다. 개발 /root/development, 독립검증 /root/verification, 조정자 /root. 증권사 확인/실제 체결 입증/손익 합산/주문은 범위 밖이다.
+- 기준1: 검증된 REAL_QUOTES 고정 목록의 날짜·코드에 정상 실제 BUY fill_id를 사용자가 명시 연결하거나, 미구매를 명시 확인. 같은 날짜·코드만으로 자동 귀속하지 않으며 DEMO/MOCK와 혼합하지 않는다. 입력 없음은 계속 미확인이다.
+- 기준2: 허용 개인 Telegram 명령→짧은 확인→만료/소유권·모드/고정목록·실제 입력 재검사→별도 분류 이력 저장→기존 대조 조회에 실제입력 연결/미구매 확인/미확인 표시. 중복·재시작 조회·철회와 상충 상태를 처리한다. 실제입력/미구매는 동시 활성화하지 않고 변경 이력을 보존한다.
+- 기준3: 기존 실제 체결/가상 DB 원문을 수정하지 않고 별도 허용 운영기록으로 보존/백업. 안전 경로·읽기전용 원본·원자적 변경·손상 및 자료변경 시 추측 거절, 계좌/키/개인자료 출력/주문호출0. 분류는 사용자 주장이지 증권사 검증이나 미구매 증명이 아님을 안내한다.
+- 기준4: 합성 CSV/임시 DB/Fake 개인명령·확인·GUI 작업 종단에서 세 분류·취소/만료/소유권/재시작·잘못된 fill/기존장부 불변·운영백업을 검사. 자체 관련/전체 오프라인·compile/diff→동결 독립검증/수정재검증→정확 staged 비밀검사·commit/push·원격확인·인수인계. 실제 GUI/API/Telegram·모의/실계좌 실행은 하지 않는다.
+- 다음 우선순위4는 이 분류를 사용해 실제입력/미구매 가상/미확인 성과를 나누되 손익을 합치지 않는 객관 집계다. 충분한 실제 자료가 없으면 WFO/48조건 최적 성과는 미검증으로 유지한다.
+- 2026-10-23 원격 재확인: HEAD7a8cd0c250b3f4ac68fd32eda734f2688f0fe670, PR#1 OPEN/DRAFT/unmerged/head일치. 시세수집 e3b993b CI39717586216 completed/success·Windows1499 passed(637.68s), 후속시세7a8cd0c CI39718483772 completed/success·Windows1507 passed(382.98s). 로컬1506/1skip과Windows통과수를구분한다. 최초로그조회TLS타임아웃은재조회로확인했으며실패로오인하거나작업을재실행하지않았다.
+
+## 2026-10-25 D-추천매수분류연결-1 독립 첫 검토 · 수락 보류
+- 실제 파일 재확인: HEAD7a8cd0c, 분류 신규2+GUI/대조/Telegram연결/가이드5=제품7파일. 개발 자체1528 passed/1 skipped·관련77·compile/diff 및 저장본해시 일치로동결, 별도검증에전달했다. 이 자체수치는최종수락아님.
+- 독립 finding1(기준2/3): AST의실제GUI callback으로확인중 source첫조회뒤 REAL→MOCK 전환을주입해도호출초기문자열모드가고정되어분류가저장됨. 저장직전현재모드/owner/활성상태재검사와회귀를개발에반환했다.
+- 독립 finding2(기준3): 분류payload의 scope/session/confirmed_at 필수확정근거를제거하고hash를재계산해도정상사용자확인으로표시. 해시는권한증명이아니며정확스키마/타입/시각필수값검증과회귀를요청했다. 임시합성DB만사용,제품원본/개인자료수정없음.
+- 개발수정→영향범위재동결→독립재검증전까지stage/commit/push하지않는다. 전체목표와실환경미확인상태를유지한다.
+- 독립 추가 finding3: 최종 source조회 뒤 정상 실제입력 import를 주입하면 분류확정 성공 후 즉시 stale로 보임. 재조회반복만으로 commit시 원본일치가 보장되지 않아 기준3 보완요청. 단순 snapshot주장으로계약을낮춰수락하지않는다.
+- 조정자 구현방침: 원본 DB 내용 비변경은 유지하되 기존파일에 SQLite mode=rw BEGIN IMMEDIATE 예약잠금 후 내용쓰기없이 rollback하는 보호는 허용한다. WAL/DELETE writer 차단과 원본없는경우 정상앱import 생성경쟁을 공통 앱잠금으로 보호하는 범위까지검토. 실제원본내용수정/없는원본생성은금지. 이 open/잠금계약을단순 readonly연결이라고오표시하지않고테스트·기록한다. 임의외부파일치환까지완전보장한다고주장하지않는다.
+- 수정 범위는 기존 제품7파일에 app/actual_trade_records.py 공유입력잠금을 더한8파일이다. 개발 중간검사 관련111 passed·compile/diff 통과 보고. 모드/receiver 상태 callable 재검사, 정확한확정스키마·aware시각 검사, 원본SQLite예약잠금·공유import잠금, symlink차단과잠금경합CLI안전오류 회귀를추가했다. 아직전체/독립재검증전이므로수락대기다.
+
+## 2026-10-25 D-추천매수분류연결-1 독립 재검증 완료
+- 구현8파일: app/recommendation_classification.py, app/actual_trade_records.py, app/gui.py, app/morning_reconciliation.py, app/telegram_orders.py, app/telegram_worker.py, tests/test_recommendation_classification.py, docs/HOME_TELEGRAM_GUIDE.md. 개인 명령→2분 확인→원본/현재모드·receiver 재검사→research.db 별도 append→/추천대조 3분류 조회를 연결했다. 미구매는 사용자 주장일 때만 표시하며 입력없음/원본변경은 미확인이다.
+- 독립 초기3finding(확인중모드변경 저장·필수확정필드 누락 수용·최종원본조회후 변경경쟁)을 수정했다. 현재모드/receiver callable 재검사, 정확확정스키마와 aware시각 검사, 기존원본2DB의 mode=rw BEGIN IMMEDIATE 예약잠금(alwaysrollback)/없는actual파일의 공유import잠금으로 확정까지 정상writer경쟁을차단한다. 원본내용쓰기0이며 단순readonly-open이라고부르지않는다. 링크잠금경로·잠금실패/CLI오류도안전처리한다.
+- 개발 최종 자체 관련111 passed·전체1547 passed/1 skipped·compileall/diff 통과. 독립 /root/verification 기준HEAD7a8cd0c250b3f4ac68fd32eda734f2688f0fe670+동결8파일 SHA256 전후불변, 직접 관련73 passed(7.77s)·전체1547 passed/1 skipped(80.01s)·compileall/diff 통과.
+- 기준1 충족: 정상동일날짜/code BUY 명시연결·미구매주장·미확인, 자동귀속/모드혼합0. 기준2 충족: 실제callback AST/Fake개인명령·현재mode/receiver 확인·만료/중지/재시작/상충/철회 및 이력필수스키마. 기준3 충족: 독립 WAL/DELETE 마지막source4번째 뒤 원본2DB writer/정상import차단, DB바이트불변·없는원본생성0, 잠금실패분류쓰기0·운영백업포함. 기준4 충족: 합성종단·전체독립검사와3finding 수정확인. 조정자는이오프라인범위만수락한다.
+- 실제 GUI/API/Telegram전달·증권사체결/미구매증명·실환경은미확인, 임의OS파일치환완전방어주장없음. 실제/키움모의 주문0, 실제·가상손익합산0·기존장부내용변경0. 실제 체결 CSV 입력은 사용자 제공 기록으로서 자동증권사검증이아니다.
+- 최종 제품8+기록3=11파일 exact staged 비밀정보검사·commit/push·원격SHA/새CI확인 예정. 최신기존7a8cd0c CI39718483772 success1507은이번수정의CI근거가아니다. PR#1 OPEN/DRAFT/main미병합 유지.
+- 다음 최신우선순위4/원래D: 기존 /가상하루·practice_daily·사용자분류를 재사용해 실제입력연결/미구매가상/미확인 성과를 나눠 조회한다. 미구매그룹의 비용포함 가상손익·명확한분모수익률/완료승패를 집계하되 실제입력은별도결산으로분리, 미진입/열린보유/가격누락을0%나완료승률에넣지않는다. 동기간·시장 검증된벤치마크없음은시장초과수익미산출로남긴다. 이후충분한실자료WFO48조건·Windows/TG전체흐름·승인전주문없는모의준비 순서유지.

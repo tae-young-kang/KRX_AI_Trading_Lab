@@ -58,6 +58,7 @@ from app.condition_report import report as condition_report_text
 from app.condition_analysis_request import ConditionAnalysisRequest
 from app.morning_quote_request import MorningQuoteRequest
 from app.quote_capture_request import QuoteCaptureRequest
+from app.recommendation_classification import Classification
 from app.quote_capture_worker import QuoteCaptureWorker
 from app.theme_opening_requests import handle as theme_opening_handle
 from app.morning_quote_refresh import refresh as refresh_morning_quotes
@@ -161,6 +162,7 @@ class MainWindow(QMainWindow):
         self.shadow = ShadowEngine(self.db)
         self.history = HistoryStore(data_dir() / 'research.db')
         self.quote_capture=QuoteCaptureRequest(data_dir())
+        self.recommendation_classification=Classification(data_dir())
         self.quote_capture_worker=None
         self.research_report = None
         self.research_run_id = None
@@ -1769,6 +1771,7 @@ class MainWindow(QMainWindow):
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
                                      analysis_request=self.remote_analysis,morning_quote_request=self.remote_morning_quote,quote_capture=self.quote_capture,
+                                     recommendation_classification=self.classify_recommendation,
                                      condition_report=lambda page=1,db=self.db,mode=current_mode(self.cfg).key:
                                          condition_report_text(db,mode,min_train=max(20,int(self.cfg['min_strategy_trades'])),page=page),
                                      recommendation_request=self.remote_scan,
@@ -1932,6 +1935,17 @@ class MainWindow(QMainWindow):
         self.db.log('ERROR', message)
         self.statusBar().showMessage('오류: ' + message)
         QMessageBox.warning(self, '작업 실패', message)
+
+    def classify_recommendation(self,text,**context):
+        owner_active=context.pop('active')
+        def current():
+            worker=self.telegram_order_worker
+            return bool((owner_active() if callable(owner_active) else owner_active) and worker
+                and worker.isRunning() and not worker.isInterruptionRequested() and worker.service
+                and (worker.service.scope,worker.service.session)==(context['scope'],context['session']))
+        return self.recommendation_classification.handle(text,
+            mode=lambda:('REAL_QUOTES' if self.cfg.get('data_mode')=='KIWOOM' and self.cfg.get('kiwoom_env')=='REAL' else 'UNSUPPORTED'),
+            active=current,**context)
 
     def start_quote_capture(self):
         mode=current_mode(self.cfg).key if self.cfg.get('data_mode')=='KIWOOM' and self.cfg.get('kiwoom_env')=='REAL' else 'UNSUPPORTED'
