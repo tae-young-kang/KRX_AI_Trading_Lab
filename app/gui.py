@@ -851,6 +851,11 @@ class MainWindow(QMainWindow):
         box=QFrame(objectName='Panel');form=QGridLayout(box)
         self.research_source=QComboBox();self.research_source.addItems(['CSV_USER','KRX','DEMO_SYNTHETIC'])
         form.addWidget(lbl('연구 데이터'),0,0);form.addWidget(self.research_source,0,1)
+        self.research_method=QComboBox()
+        self.research_method.addItem('기간을 나눠 반복검증','ROLLING_WFO_V1')
+        self.research_method.addItem('이전 방식 · 한 번 학습/검증','HOLDOUT_V1')
+        self.research_method.currentIndexChanged.connect(self.research_source_changed)
+        form.addWidget(lbl('검증 방법'),2,0);form.addWidget(self.research_method,2,1,1,3)
         self.research_source.currentTextChanged.connect(self.research_source_changed)
         self.research_k=QSpinBox();self.research_k.setRange(1,50);self.research_k.setValue(5)
         form.addWidget(lbl('일별 추천 Top-K'),0,2);form.addWidget(self.research_k,0,3)
@@ -939,28 +944,31 @@ class MainWindow(QMainWindow):
         def run():
             result=self.history.fetch_range(KRXDailyClient(key),start,today)
             bars=self.history.load_bars('KRX')
-            if len(bars)<100:return result,None
+            if not bars:return result,('NO_BARS',None)
             from app.research_preflight import check_research_coverage, auto_research_blocked
             selected_reference=getattr(self,'research_reference',None)
             reference_path=(selected_reference[1] if selected_reference and selected_reference[0]=='KRX' else None)
-            quality=check_research_coverage(self.history,'KRX',bars,reference_path=reference_path)
+            from app.research_workflow import research_coverage
+            as_of=datetime.now(KST)
+            quality=research_coverage(self.history,'KRX',bars,reference_path=reference_path,now=as_of)
             if auto_research_blocked(quality):
                 # Automatic research must never silently promote suspect evidence.
                 return result,('COVERAGE_ALERT',quality)
-            report=evaluate_research(bars,topk=5)
-            report['coverage_quality']=quality
-            rid=self.history.save_run('KRX',{'source':'KRX','topk':5,'auto':True},report)
+            from app.research_wfo import evaluate_wfo
+            report=evaluate_wfo(bars,source='KRX',coverage_quality=quality,topk=5,now=as_of)
+            rid=self.history.save_run('KRX',{'source':'KRX','topk':5,'auto':True,'method_version':'ROLLING_WFO_V1'},report)
             return result,(rid,report)
         def finish(output):
             self.cfg['research_last_update']=today
             self.settings.save()
+            if output[1] is not None and output[1][0]=='NO_BARS':
+                self.research_status.setText('자동 연구 자료가 없어요. 반복검증과 실제 성과는 미검증이에요.');return
             if output[1] is not None and output[1][0]=='COVERAGE_ALERT':
                 from app.research_preflight import preflight_notice
                 self.statusBar().showMessage('자동 조건 연구 보류 · '+preflight_notice(output[1][1]))
                 self.research_status.setText('자동 연구 보류: '+preflight_notice(output[1][1]))
                 return
-            if output[1] is not None:
-                self.research_source.setCurrentText('KRX')
+            if output[1] is not None and self.research_source.currentText()=='KRX' and self.research_method.currentData()=='ROLLING_WFO_V1':
                 self.research_run_id=output[1][0]
                 self.show_research(output[1][1],show_message=False)
             self.statusBar().showMessage('KRX 일간 데이터·조건 평가 갱신 (승인 전 미적용)')
@@ -971,7 +979,7 @@ class MainWindow(QMainWindow):
         n=self.history.count(source)
         self.research_status.setText(f'[{source}] 저장 {n[0]:,}행 / {n[1]}거래일 / {n[2]}종목 / {n[3] or "—"} ~ {n[4] or "—"}  ·  연구 데이터 DB: research.db')
         self.research_status.setText(self.research_status.text()+'\n'+self.history.ingest_summary(source))
-        latest=self.history.last_run(source)
+        latest=self.history.last_run(source,method=self.research_method.currentData())
         if latest and self.research_report is None:
             self.research_run_id=latest[0]
             self.research_report=latest[2]
@@ -1176,27 +1184,31 @@ class MainWindow(QMainWindow):
             '저장한 거래일 추천 평가 완료')
 
     def run_research(self):
-        source=self.research_source.currentText()
-        self.research_report=None
+        from app.research_workflow import run_saved
+        source=self.research_source.currentText();method=self.research_method.currentData()
+        self.research_report=None;self.research_display_context=None
         topk=self.research_k.value()
         selected_reference=getattr(self,'research_reference',None)
         reference_path=(selected_reference[1] if selected_reference and selected_reference[0]==source else None)
-        def run():
-            from app.research_preflight import check_research_coverage
-            bars=self.history.load_bars(source)
-            if len(bars)<100:raise ValueError('자료가 부족합니다. CSV 또는 KRX 데이터를 먼저 수집하세요.')
-            # Check BEFORE research, and carry the result into the saved report.
-            quality=check_research_coverage(self.history,source,bars,reference_path=reference_path)
-            report=evaluate_research(bars,topk=topk)
-            report['coverage_quality']=quality
-            run_id=self.history.save_run(source,{'topk':topk,'source':source},report)
-            return run_id,report
+        history=self.history
         def done(output):
+            if (self.research_source.currentText(),self.research_method.currentData())!=(source,method):return
             self.research_run_id=output[0]
             self.show_research(output[1])
-        self.run_task(run,done,'종목 선정 조건 검증 완료')
+        self.run_task(lambda:run_saved(history,source,method,topk=topk,reference_path=reference_path),done,'저장 시세 조건 검증 완료')
 
     def show_research(self,report,show_message=True):
+        widget=getattr(self,'research_method',None)
+        selected=widget.currentData() if widget is not None else 'HOLDOUT_V1'
+        method=report.get('method_version','HOLDOUT_V1')
+        source=self.research_source.currentText()
+        if method!=selected or report.get('source',source)!=source:return
+        self.research_display_context=(source,method,getattr(self,'research_run_id',None))
+        if method=='ROLLING_WFO_V1':
+            self.show_wfo_research(report,show_message=show_message)
+            return
+        if hasattr(self.research_table,'setHorizontalHeaderLabels'):
+            self.research_table.setHorizontalHeaderLabels(['실험 조건','시장','학습 거래일','학습 초과수익 3일','검증 거래일','검증 초과수익 3일','검증 Rank IC','학습→검증 차이(%p)','TEST 초반→후반','자료/결과 해석','승인 상태'])
         from app.research_comparison import compare_variants, comparison_notice
         self.research_report=report
         self.research_comparisons=compare_variants(report)
@@ -1227,9 +1239,37 @@ class MainWindow(QMainWindow):
                 +preflight_notice(report.get('coverage_quality'))+'\n'
                 '이 결과는 연구용이며 적용이나 실제 주문으로 이어지지 않습니다.')
 
+    def show_wfo_research(self,report,show_message=True):
+        from app.research_wfo import NOTICE
+        from app.research_preflight import preflight_notice
+        self.research_report=report;self.research_comparisons=[]
+        states=self.history.research_states(self.research_source.currentText(),method='ROLLING_WFO_V1')
+        table=self.research_table;table.setRowCount(0)
+        states_ko={'DATA_BLOCKED':'자료 확인 필요','INSUFFICIENT_DATA':'관측 부족','SUFFICIENT_RESEARCH_UNVERIFIED':'연구 표본 충족 · 실제 성과 미검증'}
+        if hasattr(table,'setHorizontalHeaderLabels'):
+            table.setHorizontalHeaderLabels(['실험 조건','시장','최신 학습 관측일','학습 평균 3일(%)','학습 종목군 대비(%p)','최신 훈련 후보','유효 반복평가','과거 선택 횟수','과거 OOS 평가','자료 상태','연구 승인 상태'])
+        for variant in report['variants']:
+            index=table.rowCount();table.insertRow(index);market=variant['market'];stats=variant['train']
+            selected=report['latest_candidates'].get(market)==variant['id']
+            fmt=lambda value:'미산출' if value is None else f'{value:+.3f}'
+            values=[variant['name'],market,str(stats['days3']),fmt(stats['net3']),fmt(stats['basket_excess3']),
+                '후보 · 자동 적용 안 함' if selected else '—',str(report['markets'][market]['valid_folds']),
+                str(sum(f['chosen_id']==variant['id'] for f in report['folds'] if f['market']==market)),
+                '시장별 선택 흐름 · 상세 확인',states_ko.get(report['markets'][market]['state'],'확인 필요'),states.get(variant['id'],'검토 전')]
+            for column,value in enumerate(values):table.setItem(index,column,cell(value))
+        markets=' · '.join(f'{m}: 유효 {info["valid_folds"]}/3회 · '+('/'.join(info['issues']) if info['issues'] else states_ko.get(info['state'],'확인 필요'))+f' · 최소 추가 거래일 {info["remaining_sessions"]}일(조건 관측도 필요)' for m,info in report['markets'].items())
+        self.research_result.setText('기간을 나눠 반복검증 · '+markets+'\n'+preflight_notice(report.get('coverage_quality'))+'\n평가 기준 '+report['as_of']+' · 제외한 당일 잠정일 '+(', '.join(report['excluded_provisional_days']) or '없음'))
+        self.research_status.setText(f'{report["source"]} · {report["data_begin"]}~{report["data_end"]} · 60일 학습/20일 평가/20일 이동 · '+report['status'])
+        gaps='\n'.join(m+' · 누락 거래일: '+(', '.join(info['missing_sessions']) or '없음')+' · 범위 밖: '+(', '.join(info['unexpected_sessions']) or '없음') for m,info in report['markets'].items())
+        self.research_detail_label.setText(gaps+'\n'+NOTICE)
+        if show_message:QMessageBox.information(self,'반복검증 연구',markets+'\n'+NOTICE)
+
     def research_detail(self):
         i=self.research_table.currentRow()
         if not self.research_report or i<0 or i>=len(self.research_report['variants']):return
+        if self.research_report.get('method_version')=='ROLLING_WFO_V1':
+            from app.research_wfo import detail
+            self.research_detail_label.setText(detail(self.research_report,self.research_report['variants'][i]));return
         from app.research_comparison import compare_variants
         rows=getattr(self,'research_comparisons',None)
         if rows is None or len(rows)!=len(self.research_report['variants']):
@@ -1256,22 +1296,33 @@ class MainWindow(QMainWindow):
 
     def review_research(self,approve):
         ix=self.research_table.currentRow()
-        if not self.research_report or ix<0 or self.research_run_id is None:return
-        v=self.research_report['variants'][ix]
+        if not self.research_report or ix<0 or ix>=len(self.research_report['variants']) or self.research_run_id is None:return
+        method=self.research_report.get('method_version','HOLDOUT_V1')
+        if method!=self.research_method.currentData():return
+        context=(self.research_source.currentText(),method,self.research_run_id)
+        if getattr(self,'research_display_context',None)!=(self.research_source.currentText(),self.research_method.currentData(),self.research_run_id):return
+        v=self.research_report['variants'][ix];shown=self.research_report
+        if method=='ROLLING_WFO_V1' and approve and (self.research_report['markets'][v['market']]['valid_folds']<3 or self.research_report['latest_candidates'].get(v['market'])!=v['id']):
+            QMessageBox.information(self,'연구 표본 확인','최소 3번의 유효 평가와 최신 학습 후보를 먼저 확인해 주세요. 실제 성과는 미검증이에요.');return
         label='연구 프리셋 승인' if approve else '연구 조건 거부'
         if QMessageBox.question(self,label,f'{v["name"]}\n\n'
               '실제 매수·매도 또는 키움 실시간 필터로 연결되지 않습니다.\n'
               '향후 데이터로 검증할 연구 전략 상태만 저장합니다. 계속할까요?') != QMessageBox.StandardButton.Yes:return
-        self.history.decide_research(self.research_source.currentText(),self.research_run_id,v,approve)
+        if context!=(self.research_source.currentText(),self.research_method.currentData(),self.research_run_id) or self.research_report is not shown or self.research_report['variants'][ix]!=v:return
+        try:self.history.decide_research(context[0],context[2],v,approve,method=method)
+        except Exception:
+            QMessageBox.warning(self,'연구 승인 미완료','저장한 출처·방법·후보를 다시 확인해 주세요. 추천 조건은 바꾸지 않았어요.');return
         self.show_research(self.research_report,show_message=False)
 
     def export_research(self):
         if not self.research_report:
             QMessageBox.information(self,'결과 없음','먼저 조건 검증을 실행하세요.');return
+        report=self.research_report;context=getattr(self,'research_display_context',None)
         folder=QFileDialog.getExistingDirectory(self,'결과를 저장할 폴더',str(Path.home()))
+        if context!=getattr(self,'research_display_context',None) or report is not self.research_report:return
         if not folder:return
         dest=Path(folder)/('KRX_research_'+datetime.now().strftime('%Y%m%d_%H%M%S'))
-        export_report(self.research_report,dest)
+        export_report(report,dest)
         QMessageBox.information(self,'저장 완료',f'{dest}\nsummary.csv / signals.csv / manifest.json')
 
     def make_strategy(self):

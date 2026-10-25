@@ -232,6 +232,9 @@ def evaluate_research(bars,topk=5,train_fraction=0.70,cost_roundtrip_pct=0.25,mi
 
 
 def export_report(report,path):
+    if report.get('method_version')=='ROLLING_WFO_V1':
+        from app.research_wfo import export_wfo
+        return export_wfo(report,path)
     from app.research_comparison import compare_variants
     root=Path(path);root.mkdir(parents=True,exist_ok=True)
     with (root/'summary.csv').open('w',encoding='utf-8-sig',newline='') as f:

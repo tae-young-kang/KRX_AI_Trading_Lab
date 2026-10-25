@@ -45,6 +45,8 @@ def preflight_notice(quality):
     """Short, safe status for the desktop GUI and saved research reports."""
     if not isinstance(quality, dict):
         return '과거 연구 결과 · 외부 거래일/종목 수 대조 기록이 없어요.'
+    if quality.get('unconfirmed_krx_market_days',0):
+        return f"KRX 과거 시세 {quality['unconfirmed_krx_market_days']}개 시장/날짜의 재확인 자료가 없거나 평가시점 이후예요. 반복검증을 보류해요."
     state = quality.get('state')
     if state == 'NOT_CHECKED':
         return '자료 품질: 독립 거래일/종목 수 대조 안 함 · 백테스트 결과는 연구용이에요.'
