@@ -115,7 +115,7 @@ def page_count(db,mode):
     return max(1,(count+4)//5)
 
 
-def search_result(db, mode, scan_id, *, page=1):
+def search_result(db, mode, scan_id, *, page=1, details=False):
     if (mode not in ('DEMO','MOCK','REAL_QUOTES') or type(scan_id) is not int or scan_id < 1
             or type(page) is not int or not 1 <= page <= 999999):
         raise ValueError('검색 번호와 페이지를 확인해 주세요.')
@@ -128,25 +128,33 @@ def search_result(db, mode, scan_id, *, page=1):
         return f'이 검색은 {pages}페이지까지 있어요. /추천결과 {scan_id} {pages}'
     label = {'DEMO':'가상 연습','MOCK':'키움 모의 시세','REAL_QUOTES':'실제 시세'}[mode]
     lines = [f'[{label} · 검색 #{scan_id} · {page}/{pages}]',
-             f"검색 시각 {batch['created_at']} · 추천 {batch['selected_count']}개",
-             '그때의 조건: '+condition_label(json.loads(batch['conditions_json']))]
-    lines.extend(scan_scope(db,batch))
+             f"추천 {batch['selected_count']}개 · 검색 시각 {batch['created_at'][:16]}", '']
+    scope=scan_scope(db,batch)
+    if scope[0].startswith('조회 범위 기록 확인 필요'):
+        lines.extend(scope)
     metric=db.execute('SELECT * FROM scan_metrics WHERE scan_id=?',(scan_id,)).fetchone()
-    if metric:
-        lines.append(f"조회 {metric['elapsed_seconds']:.1f}초 · 목록/시세 요청 {metric['http_calls']}회 · 작은 묶음 재시도 {metric['fallbacks']}회")
     rows = db.execute('''SELECT * FROM recommendations WHERE scan_id=?
         ORDER BY rank LIMIT 5 OFFSET ?''',(scan_id,(page-1)*5)).fetchall()
     for row in rows:
         name = ''.join(c for c in row['name'] if c.isprintable())[:24]
-        lines.append(f"{row['rank']}위 {name}({row['code']}) · {row['market']} · {price_label(row['price'])}"
-                     + (' · ETF' if row['is_etf'] else ''))
+        market={'KOSPI':'코스피','KOSDAQ':'코스닥'}.get(row['market'],row['market'])
+        lines.append(f"{row['rank']}위 {name} · {market}"+(' · ETF' if row['is_etf'] else '')
+                     +f"\n추천 당시 가격 {price_label(row['price'])} · 종목코드 {row['code']}\n")
     if not rows:
         lines.append('이 검색에서는 조건에 맞는 추천이 없었어요.')
-    lines.append('저장 당시 시세예요. 새 시세 조회·체결·수익 예측이 아니에요.')
+    lines.append('저장 당시 시세예요. 실제 주문은 하지 않았어요.')
+    if details:
+        lines.extend(['','검색 기준: '+condition_label(json.loads(batch['conditions_json']))])
+        if not scope[0].startswith('조회 범위 기록 확인 필요'):
+            lines.extend(scope)
+        if metric:
+            lines.append(f"조회 {metric['elapsed_seconds']:.1f}초 · 목록/시세 요청 {metric['http_calls']}회 · 작은 묶음 재시도 {metric['fallbacks']}회")
+    else:
+        lines.append(f'조건·조회 정보 자세히: /추천상세 {scan_id} {page}')
     if page < pages:
-        lines.append(f'다음 종목: /추천결과 {scan_id} {page+1}')
+        lines.append(f'다음 종목: /'+('추천상세' if details else '추천결과')+f' {scan_id} {page+1}')
     if page > 1:
-        lines.append(f'이전 종목: /추천결과 {scan_id} {page-1}')
+        lines.append(f'이전 종목: /'+('추천상세' if details else '추천결과')+f' {scan_id} {page-1}')
     return '\n'.join(lines)
 
 
@@ -177,12 +185,12 @@ def summary(db, mode, *, performance=False,page=1):
     rows = recent(db,mode,5,offset=(page-1)*5)
     label = {'DEMO':'가상 연습','MOCK':'키움 모의 시세','REAL_QUOTES':'실제 시세'}[mode]
     lines = [f'[{label} · '+('추천 이후 가격 관측' if performance else '추천 기록')+f' · {page}/{pages}]',
-             '최근 순 5개씩 · 목록 생성 기록이며 텔레그램 발송·체결 증명이 아니에요.']
+             '최근 순 5개씩 · 저장된 추천이며 실제 주문은 하지 않았어요.']
     latest = db.execute('''SELECT * FROM recommendation_batches WHERE mode=?
         ORDER BY scan_id DESC LIMIT 1''', (mode,)).fetchone()
     if latest and not performance:
         lines.extend([f"마지막 검색 #{latest['scan_id']} · {latest['created_at']} · 추천 {latest['selected_count']}개",
-                      '그때의 조건: '+condition_label(json.loads(latest['conditions_json'])),
+                      f"검색 기준 자세히: /추천상세 {latest['scan_id']}",
                       '저장된 결과예요. 현재 시세로 새로 검색한 결과는 아니에요.'])
         if latest['selected_count'] == 0:
             lines.append('마지막 검색에서는 조건에 맞는 추천이 없었어요. 아래 항목은 이전 검색 기록이에요.')
@@ -193,7 +201,8 @@ def summary(db, mode, *, performance=False,page=1):
               'CALENDAR_MISSING':'거래일 자료 부족'}
     for row in rows:
         name = ''.join(c for c in row['name'] if c.isprintable())[:24]
-        lines.append(f"검색 #{row['scan_id']} {row['created_at'][:16]} · {row['rank']}위 {name}({row['code']}) · {price_label(row['price'])}")
+        lines.append(f"\n{row['rank']}위 {name} · {price_label(row['price'])}\n"
+                     f"검색 #{row['scan_id']} · {row['created_at'][:16]} · 종목코드 {row['code']}")
         if not performance:
             continue
         seen = db.execute('''SELECT * FROM recommendation_reviews WHERE scan_id=? AND code=?

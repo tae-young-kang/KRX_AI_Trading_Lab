@@ -43,7 +43,7 @@ def test_latest_report_drops_corrected_nonmatch_and_separates_sources(tmp_path):
     history.insert_bars([Bar(day,'900001','연습','KOSPI',100,101,99,100,1000,99,4000) for day in days],'DEMO')
     prepare(history,**args)
     text=latest_report(history,mode='DEMO',source='DEMO')
-    assert '감지 0개' in text and '종목 감지' not in text
+    assert '자료 부족' in text and '종목 감지' not in text
     with history.connect() as db:
         assert db.execute('SELECT COUNT(*) FROM theme_alerts').fetchone()[0]==1
 
@@ -74,3 +74,16 @@ def test_zero_latest_response_does_not_certify_retained_cache(tmp_path):
         db.execute('INSERT INTO daily_ingest_status VALUES(?,?,?,?,?,?,?)',('DEMO','KOSPI',days[-1],0,0,0,'2026-10-20T10:00:00+09:00'))
     result=prepare(history,sessions=SessionEvidence(days,days[0],days[-1],'DEMO'),through=days[-1],mode='DEMO',source='DEMO')
     assert result['ingest_quality']['KOSPI']['stale_days']==1
+
+
+def test_missing_day_notice_is_not_a_negative_signal_or_connection_error(tmp_path):
+    from app.theme_store import missing_data_notice
+    from app.theme_delivery import latest_snapshot
+    history=HistoryStore(tmp_path/'pending.db')
+    days=('2026-10-08','2026-10-12','2026-10-13','2026-10-14','2026-10-15','2026-10-16','2026-10-19')
+    history.insert_bars([Bar(d,'900001','가상','KOSPI',100,110,99,100,1000,100,4000) for d in days[:-1]],'DEMO')
+    result=prepare(history,sessions=SessionEvidence(days,days[0],days[-1],'DEMO'),through=days[-1],mode='DEMO',source='DEMO')
+    notice=missing_data_notice(result)
+    assert '2026-10-19' in notice and '없다는 뜻이 아니에요' in notice
+    assert latest_snapshot(history,'DEMO')['report']['missing_market_days']
+    assert missing_data_notice({'missing_market_days':[]})==''

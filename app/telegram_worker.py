@@ -1,10 +1,11 @@
 """GUI-owned receiver. Starts only after an explicit local user action."""
 from pathlib import Path
+import time
 from PySide6.QtCore import QThread, Signal
 from app.order_engine import OrderEngine
 from app.simulated_broker import SimulatedBroker
 from app.telegram_orders import TelegramOrderService
-from app.telegram_receiver import TelegramTransport, receive_once
+from app.telegram_receiver import TelegramTransport, TelegramConnectionError, receive_once
 from app.runtime_lock import ReceiverLock, ReceiverAlreadyRunning
 
 
@@ -20,7 +21,7 @@ class TelegramOrderWorker(QThread):
     def __init__(self, root, token, user_id, chat_id, catalog, conditions=None, orders_enabled=True, watch_status=None,
                  watch_refresh=None, watch_result=None, watch_reconnect=None, watch_validation=None,
                  watch_orders=None, watch_cancel_orders=None, watch_history=None, watch_funds=None,
-                 recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None):
+                 recommendation_report=None, recommendation_overview=None, practice_sales=None, theme_report=None, theme_status=None, theme_budget=None, practice_daily=None, recommendation_request=None, recommendation_status=None, theme_request=None, outcome_request=None, theme_plan=None, watch_delivery=None, actual_daily=None, morning_daily=None, morning_setup=None,daily_mode=None,mock_daily=None,morning_freeze=None,condition_report=None,analysis_request=None,morning_quote_request=None,theme_opening=None,quote_capture=None,recommendation_classification=None,classified_performance=None):
         super().__init__()
         self.root, self.token = Path(root), token
         self.user_id, self.chat_id, self.catalog = user_id, chat_id, dict(catalog)
@@ -36,12 +37,29 @@ class TelegramOrderWorker(QThread):
         self.recommendation_overview = recommendation_overview
         self.practice_sales = practice_sales
         self.theme_report = theme_report
+        self.theme_request = theme_request
+        self.outcome_request=outcome_request
         self.theme_status = theme_status
         self.theme_budget = theme_budget
+        self.theme_plan=theme_plan
+        self.theme_opening=theme_opening
+        self.quote_capture=quote_capture
+        self.recommendation_classification=recommendation_classification
+        self.classified_performance=classified_performance
         self.practice_daily = practice_daily
+        self.actual_daily=actual_daily
+        self.morning_daily=morning_daily
+        self.morning_setup=morning_setup
+        self.daily_mode=daily_mode
+        self.mock_daily=mock_daily
+        self.morning_freeze=morning_freeze
+        self.condition_report=condition_report
+        self.analysis_request=analysis_request
+        self.morning_quote_request=morning_quote_request
         self.recommendation_request = recommendation_request
         self.recommendation_status = recommendation_status
         self.watch_orders, self.watch_cancel_orders = watch_orders, watch_cancel_orders
+        self.watch_delivery=watch_delivery
 
     def stop(self):
         self.requestInterruption()
@@ -82,17 +100,38 @@ class TelegramOrderWorker(QThread):
                                                 watch_history=self.watch_history, watch_funds=self.watch_funds,
                                                 recommendation_report=self.recommendation_report,
                                                 recommendation_request=self.recommendation_request,
+                                                theme_request=self.theme_request,outcome_request=self.outcome_request,theme_plan=self.theme_plan,theme_opening=self.theme_opening,quote_capture=self.quote_capture,recommendation_classification=self.recommendation_classification,classified_performance=self.classified_performance,watch_delivery=self.watch_delivery,actual_daily=self.actual_daily,morning_daily=self.morning_daily,morning_setup=self.morning_setup,daily_mode=self.daily_mode,mock_daily=self.mock_daily,morning_freeze=self.morning_freeze,condition_report=self.condition_report,analysis_request=self.analysis_request,morning_quote_request=self.morning_quote_request,
                                                 recommendation_status=self.recommendation_status,
                                                 recommendation_overview=self.recommendation_overview, practice_sales=self.practice_sales, theme_report=self.theme_report, theme_status=self.theme_status, theme_budget=self.theme_budget, practice_daily=self.practice_daily)
             report = self.service.recovery_status(startup=True) if self.orders_enabled else None
             self.status.emit('수신 중 · '+(self.service.safety_text(report) if self.orders_enabled else '조건·조회 관리 · 키움 모의 주문은 PC의 별도 당일 허용 필요'))
             last_banner = self.service.safety_banner() if self.orders_enabled else ''
+            next_daily=0
             while not self.isInterruptionRequested():
                 receive_once(self.service, transport, self.isInterruptionRequested)
+                if not self.isInterruptionRequested():
+                    self.service.send_order_notice(transport)
+                    if time.monotonic()>=next_daily:
+                        self.service.run_morning_schedule(transport)
+                        self.service.send_daily_notice(transport)
+                        next_daily=time.monotonic()+2
                 if self.recommendation_request:
                     self.recommendation_request.send_notice(
                         lambda text: transport.send(self.chat_id, text),
                         active=not self.isInterruptionRequested() and self.service.accepts_search_requests())
+                if self.outcome_request:
+                    self.outcome_request.send_notice(lambda text:transport.send(self.chat_id,text),
+                        active=not self.isInterruptionRequested() and self.service.accepts_search_requests())
+                if self.analysis_request:
+                    self.analysis_request.send_notice(lambda text:transport.send(self.chat_id,text),
+                        active=not self.isInterruptionRequested() and self.service.accepts_search_requests())
+                if self.morning_quote_request:
+                    self.morning_quote_request.send_notice(lambda text:transport.send(self.chat_id,text),
+                        active=not self.isInterruptionRequested() and self.service.accepts_search_requests())
+                if self.theme_request:
+                    self.theme_request.send_notice(transport,self.chat_id,
+                        active=not self.isInterruptionRequested() and self.service.accepts_search_requests(),
+                        stopped=lambda:self.isInterruptionRequested() or not self.service.accepts_search_requests())
                 banner = self.service.safety_banner() if self.orders_enabled else ''
                 if banner != last_banner and not self.isInterruptionRequested():
                     self.status.emit('수신 중 · 가짜 서버만 연결\n'+banner)
@@ -100,6 +139,8 @@ class TelegramOrderWorker(QThread):
                 self.msleep(100)
         except ReceiverAlreadyRunning:
             self.status.emit('수신 중지 · 다른 창이나 프로그램에서 주문 연습 수신 중입니다. 먼저 그 창의 수신을 종료하세요.')
+        except TelegramConnectionError as error:
+            self.status.emit('수신 중지 · '+str(error))
         except Exception:
             self.status.emit('수신 중지 · 연결 정보·개인 대화방·다른 봇 수신 프로그램을 확인하세요. 자동 재시작하지 않습니다.')
         finally:

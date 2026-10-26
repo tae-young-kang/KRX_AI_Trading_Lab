@@ -1,8 +1,11 @@
 """Explicit local calendar selection for cached daily theme research."""
 from datetime import date, datetime
 import json
+import re
 from app.recommendation_outcomes import SessionEvidence, session_day
 from app.theme_store import prepare
+from app.theme_one import SETUP_GUIDANCE
+from app.theme_sources import valid_source
 from app.trading_clock import KST
 
 
@@ -29,7 +32,7 @@ def parse_selection(raw, mode, *, today=None, minimum_sessions=7):
         if mode=='DEMO':
             if data['source']!='DEMO' or calendar['source']!='DEMO':
                 raise ValueError()
-        elif data['source'] not in ('KRX','CSV_USER') or calendar['source']!='USER_CONFIRMED':
+        elif not valid_source(mode,data['source']) or calendar['source'] not in ('USER_CONFIRMED','EXCHANGE_CALENDARS_XKRX'):
             raise ValueError()
         sessions=SessionEvidence(tuple(calendar['days']),calendar['begin'],calendar['end'],calendar['source'])
         _,_,days=sessions.validate(mode)
@@ -43,4 +46,47 @@ def parse_selection(raw, mode, *, today=None, minimum_sessions=7):
 
 def prepare_selection(history,path,mode,*,today=None):
     data,sessions=load_selection(path,mode,today=today)
-    return prepare(history,sessions=sessions,through=data['through'],mode=mode,source=data['source'])
+    return prepare_confirmed(history,data,mode,today=today)
+
+
+def selection_from_days(text, mode, source, *, today=None):
+    """Build the same validated selection from explicitly confirmed dates, not DB guesses."""
+    if not isinstance(text,str) or len(text)>100000:
+        raise ValueError('확인한 거래일을 날짜로 입력해 주세요.')
+    days=[part for part in re.split(r'[\s,]+',text.strip()) if part]
+    if len(days)<7:
+        raise ValueError(f'입력한 날짜가 {len(days)}개예요. 최소 7개가 필요해요.\n'
+                         '조건 숫자가 아니라 장이 열린 날짜를 한 줄에 하나씩 입력하세요.\n'
+                         '형식 예: 2026-10-08\n최근 6거래일 + 전일 종가용 1거래일이며 주말·휴장일은 빼세요.')
+    # Retain the input order: duplicates and reversed dates must not be silently fixed.
+    data=dict(version=1,mode=mode,source=source,through=days[-1],
+              calendar=dict(days=days,begin=days[0],end=days[-1],
+                            source='DEMO' if mode=='DEMO' else 'USER_CONFIRMED'))
+    return parse_selection(json.dumps(data).encode('utf-8'),mode,today=today)
+
+
+def prepare_days(history,text,mode,source,*,today=None):
+    data,sessions=selection_from_days(text,mode,source,today=today)
+    return prepare_confirmed(history,data,mode,today=today)
+
+
+def prepare_confirmed(history,data,mode,*,today=None,remember=True,scope=None):
+    data,sessions=parse_selection(json.dumps(data).encode('utf-8'),mode,today=today)
+    result=prepare(history,sessions=sessions,through=data['through'],mode=mode,source=data['source'],scope=scope)
+    if not remember:
+        return result
+    with history.connect() as db:
+        db.execute('CREATE TABLE IF NOT EXISTS theme_selections(mode TEXT PRIMARY KEY,payload TEXT NOT NULL)')
+        db.execute('INSERT OR REPLACE INTO theme_selections VALUES(?,?)',
+                   (mode,json.dumps(data,ensure_ascii=False)))
+    return result
+
+
+def saved_selection(history,mode,*,today=None):
+    with history.connect() as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_selections'").fetchone():
+            raise ValueError('PC 홈에서 테마1 판정을 먼저 만들어 거래일과 자료 출처를 확인해 주세요.'+SETUP_GUIDANCE)
+        row=db.execute('SELECT payload FROM theme_selections WHERE mode=?',(mode,)).fetchone()
+    if row is None:
+        raise ValueError('이 모드의 테마1 거래일 설정이 없어요. PC에서 먼저 판정해 주세요.'+SETUP_GUIDANCE)
+    return parse_selection(row['payload'].encode('utf-8'),mode,today=today)[0]

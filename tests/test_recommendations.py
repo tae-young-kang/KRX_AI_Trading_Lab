@@ -83,7 +83,8 @@ def test_latest_empty_search_is_visible_above_older_recommendations(tmp_path):
     latest = save(db, rows, {**DEFAULTS, 'min_value_eok': 777})
     text = db.recommendation_summary('DEMO')
     assert f'마지막 검색 #{latest}' in text and '추천 0개' in text
-    assert '거래대금 777억 이상' in text
+    assert f'/추천상세 {latest}' in text
+    assert '거래대금 777억 이상' in db.recommendation_search_result('DEMO',latest,details=True)
     assert '이전 검색 기록' in text and f'검색 #{first}' in text
     assert '새로 검색한 결과는 아니에요' in text
     assert '마지막 검색' not in db.recommendation_summary('MOCK')
@@ -105,9 +106,13 @@ def test_exact_search_results_keep_old_symbols_prices_and_mode(tmp_path):
     assert '기록이 없어요' in db.recommendation_search_result('MOCK', first)
     assert '페이지까지' in db.recommendation_search_result('DEMO', first,page=2)
     assert len(frozen) < 3500
-    assert '저장 시세 4개 (KOSPI 4개)' in frozen
-    assert '조건 통과 3개 중 추천 3개' in frozen
-    assert '합성 예제 범위' in frozen
+    detailed=db.recommendation_search_result('DEMO',first,details=True)
+    assert '저장 시세 4개 (KOSPI 4개)' in detailed
+    assert '조건 통과 3개 중 추천 3개' in detailed
+    assert '합성 예제 범위' in detailed
+    assert '목록/시세 요청' not in frozen and '검색 기준:' not in frozen
+    assert f'/추천상세 {first} 1' in frozen
+    assert frozen.index('시험1') < frozen.index('자세히:')
 
 
 @pytest.mark.parametrize('damage', ['missing', 'source', 'market'])
@@ -147,7 +152,7 @@ def test_scan_timing_is_frozen_and_invalid_metrics_do_not_save(tmp_path):
     metrics=dict(completed=True,elapsed_seconds=12.3,http_calls=10,fallbacks=2)
     sid=db.save_scan([r.stock for r in rows],rows,deepcopy(DEFAULTS),'전체','DEMO',metrics=metrics)
     metrics['http_calls']=999
-    text=db.recommendation_search_result('DEMO',sid)
+    text=db.recommendation_search_result('DEMO',sid,details=True)
     assert '조회 12.3초' in text and '요청 10회' in text and '재시도 2회' in text
     for change in (dict(completed=False),dict(elapsed_seconds=float('nan')),dict(http_calls=True),dict(fallbacks=-1)):
         with pytest.raises(ValueError):

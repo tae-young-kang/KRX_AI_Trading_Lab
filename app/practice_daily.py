@@ -8,7 +8,7 @@ from app.practice_audit import verify
 from collections import defaultdict
 
 
-def summarize(db, day):
+def summarize(db, day, *, trade_ids=None,begin=True):
     target=session_day(day)
     def on_day(stamp):
         parsed=datetime.fromisoformat(stamp)
@@ -24,7 +24,7 @@ def summarize(db, day):
             return result
         except (TypeError,ValueError,OverflowError):
             raise ValueError('연습 결산 금액 기록을 확인해 주세요.') from None
-    db.execute('BEGIN')
+    if begin:db.execute('BEGIN')
     trades=[dict(row) for row in db.execute('SELECT * FROM paper_trades')]
     sales=[dict(row) for row in db.execute('SELECT * FROM paper_exits ORDER BY id')]
     sale_groups=defaultdict(list)
@@ -35,6 +35,9 @@ def summarize(db, day):
         sale_groups[sale['trade_id']].append(sale)
     for trade_id,records in sale_groups.items():
         verify(by_trade[trade_id],records)
+    if trade_ids is not None:
+        trades=[row for row in trades if row['id'] in trade_ids]
+        sales=[row for row in sales if row['trade_id'] in trade_ids]
     buys=[row for row in trades if on_day(row['opened_at'])]
     daily_sales=[row for row in sales if on_day(row['sold_at'])]
     recorded_ids={row['trade_id'] for row in sales}
@@ -70,7 +73,7 @@ def summarize(db, day):
                 buy_gross=total(row['buy_fill']*row['qty'] for row in buys),buy_fees=total(row['buy_fee'] for row in buys),
                 sell_gross=total(row['fill']*row['qty'] for row in daily_sales),
                 sell_fees=total(row['sell_fee'] for row in daily_sales),sell_tax=total(row['sell_tax'] for row in daily_sales),
-                realized=total(row['pnl'] for row in daily_sales),wins=wins,losses=losses,draws=draws,
+                realized=total(row['pnl'] for row in daily_sales),allocated_cost=total(row['allocated_cost'] for row in daily_sales),wins=wins,losses=losses,draws=draws,
                 unknown=outcomes.count('확인 필요'),legacy=len(legacy),symbols=symbols,reasons=reasons,
                 winrate=wins/(wins+losses+draws)*100 if wins+losses+draws else None)
 

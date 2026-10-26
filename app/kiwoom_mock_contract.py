@@ -29,7 +29,8 @@ class MockPlan:
 
     @property
     def url(self):
-        path = 'ordr' if self.api_id.startswith('kt100') else 'acnt'
+        path = ('stkinfo' if self.api_id == 'ka10095' else
+                'ordr' if self.api_id.startswith('kt100') else 'acnt')
         return 'https://mockapi.kiwoom.com/api/dostk/' + path
 
     def body(self):
@@ -76,6 +77,20 @@ def order_plan(request):
     ))
 
 
+def market_order_plan(*,code,side,quantity,venue='KRX'):
+    """Official MOCK KRX market shape; no placeholder limit price on the wire.
+
+    The owner queue separately requires fresh upper-price/funds evidence and
+    confirmation. This contract alone is never permission to dispatch.
+    """
+    if side not in ('BUY','SELL') or venue!='KRX':
+        raise ContractError('시장가 계약 준비는 KRX 매수·매도만 지원합니다.')
+    return MockPlan('kt10000' if side=='BUY' else 'kt10001',(
+        ('dmst_stex_tp','KRX'),('stk_cd',_code(code)),
+        ('ord_qty',_number(quantity)),('trde_tp','3'),
+    ))
+
+
 def amend_plan(code, original_order_no, *, remaining_quantity, limit_price):
     """Explicit broker remaining quantity, NEVER engine's total quantity.
 
@@ -94,6 +109,11 @@ def cancel_plan(code, original_order_no, *, remaining_quantity=0):
         ('dmst_stex_tp', 'KRX'), ('orig_ord_no', _order_no(original_order_no)),
         ('stk_cd', _code(code)), ('cncl_qty', _number(remaining_quantity, zero=True)),
     ))
+
+
+def market_quote_plan(code):
+    """One bare KRX code, read-only, using the existing MOCK connection."""
+    return MockPlan('ka10095', (('stk_cd', _code(code)),))
 
 
 def query_plan(kind, *, trade_date=None):

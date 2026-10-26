@@ -4,6 +4,29 @@ from math import isfinite, fsum
 from fractions import Fraction
 import re
 from app.recommendation_outcomes import session_day
+from app.theme_sources import valid_source
+
+RULES_TEXT=('테마1 · 종목을 찾는 조건\n'
+    '대상: 코스피·코스닥 종목 (ETF 제외)\n'
+    '최근 6거래일 중 아래 두 조건을 같은 날 만족한 날이 3일 이상이면 감지해요.\n'
+    '① 하루 거래대금 100억원 이상\n'
+    '② 전일 종가 대비 당일 고가 +5% 이상\n'
+    '고가 상승률 = (당일 고가 ÷ 전일 종가 − 1) × 100\n'
+    '휴장일은 제외해요. 새 거래일이 들어오면 가장 오래된 거래일을 빼요.\n'
+    '전일 종가 계산 때문에 판정에는 최소 7거래일의 일봉이 필요해요.\n'
+    '조건을 만족한 날짜는 4일 이상이어도 모두 표시해요. 날짜·요일, 고가 상승률, 거래대금을 보여줘요.\n'
+    '만족한 모든 날짜의 고가 상승률을 더해 65% 이상 / 65% 미만으로 표시해요.\n'
+    '65%는 분류 기준이며, 합계가 미만이어도 위 조건에 맞으면 감지해요. 투자 수익률이 아니에요.\n'
+    '종목명·시장·감지일 시가총액·NXT 거래 가능 여부도 함께 안내해요. 확인 근거가 없으면 미확인으로 표시해요.\n'
+    '일반 추천 조건과 별도의 발굴 방법이에요. /조건변경으로 테마1 기준이 바뀌지는 않아요.')
+
+SETUP_GUIDANCE=('\n새 검색: /테마1검색 → 진행 확인: /테마1검색상태 → 결과: /테마1\n'
+    '집 PC의 프로그램과 텔레그램 수신이 켜져 있어야 해요.\n'
+    'PC에서 검색: 홈 → 테마1 · 종목 찾기 → 테마1 검색 시작 → 키움 시세로 찾기 · 당일 조회.\n'
+    '키움 연결 정보를 저장하면 요청일 기준 거래일을 자동 계산해 조회해요. 장 시작 전에는 직전 거래일까지 확인해요.\n'
+    'KRX 일봉 수집은 별도 KRX 인증키·서비스 승인이 필요한 다른 방법이에요. CSV 판정도 고급 화면에서 이용할 수 있어요.\n'
+    '완료 후 /테마1에서 결과를 봅니다. /테마1만 보내면 새 수집을 시작하지 않아요.\n'
+    '조건 설명: /테마1조건 · 가짜 연습 자료는 실제 추천이 아니에요.')
 
 
 def detect(*, code, market, bars, sessions, through, mode, price_source):
@@ -11,7 +34,7 @@ def detect(*, code, market, bars, sessions, through, mode, price_source):
     if (market not in ('KOSPI','KOSDAQ') or mode not in ('DEMO','MOCK','REAL_QUOTES')
             or not isinstance(code,str) or not re.fullmatch(r'[A-Za-z0-9]{6}',code)):
         raise ValueError('시장과 자료 모드를 확인해 주세요.')
-    if price_source not in ('DEMO','KRX','CSV_USER') or (mode=='DEMO')!=(price_source=='DEMO'):
+    if not valid_source(mode,price_source):
         raise ValueError('가격 자료 출처를 확인해 주세요.')
     begin,end,days=sessions.validate(mode)
     target=session_day(through)

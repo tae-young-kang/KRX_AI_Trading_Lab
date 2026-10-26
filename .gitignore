@@ -29,3 +29,6 @@ paper_trades.csv
 practice_sales.csv
 krx-records-*/
 .krx-backup-*/
+krx-operations-*/
+.krx-operations-*/
+.krx-restore-*/

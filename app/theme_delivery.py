@@ -2,6 +2,8 @@
 import json
 import re
 from hashlib import sha256
+from app.theme_one import SETUP_GUIDANCE
+from app.theme_sources import valid_source
 
 
 def destination_scope(bot_id,chat_id):
@@ -40,7 +42,7 @@ def deliver_one(history, *, alert_id, mode, source, destination, send, expected_
     caller must bind it to its explicitly configured, authorized recipient.
     """
     if (type(alert_id) is not int or alert_id<=0 or mode not in ('DEMO','MOCK','REAL_QUOTES')
-            or source not in ('DEMO','KRX','CSV_USER') or (mode=='DEMO')!=(source=='DEMO')
+            or not valid_source(mode,source)
             or not isinstance(destination,str) or not re.fullmatch('[a-f0-9]{64}',destination)
             or not callable(send)):
         raise ValueError('알림 대상과 자료 모드를 확인해 주세요.')
@@ -67,7 +69,11 @@ def deliver_one(history, *, alert_id, mode, source, destination, send, expected_
                          (alert_id,mode,source)).fetchone()
         if alert is None or len(alert['message'])>4000:
             raise ValueError('알림 내용을 확인해 주세요.')
-        message=alert['message']
+        ids=json.loads(run['alert_ids_json'])
+        first,separator,rest=alert['message'].partition('\n')
+        message=first+f'\n전체 감지 {len(ids)}종목 · 목록 {ids.index(alert_id)+1}번째'+separator+rest
+        if len(message)>4000:
+            raise ValueError('종목 수 안내를 포함한 알림이 너무 길어요. 내용을 확인해 주세요.')
         db.execute('INSERT INTO theme_deliveries VALUES(?,?,?,NULL)',(alert_id,destination,'SENDING'))
     # Commit before crossing IO boundary. A crash at either side blocks retry.
     try:
@@ -87,11 +93,12 @@ def deliver_one(history, *, alert_id, mode, source, destination, send, expected_
 def latest_snapshot(history,mode):
     with history.connect() as db:
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='theme_runs'").fetchone():
-            raise ValueError('먼저 테마1 판정을 만들어 주세요.')
-        row=db.execute('SELECT id,source,day,alert_ids_json FROM theme_runs WHERE mode=? ORDER BY id DESC LIMIT 1',(mode,)).fetchone()
+            raise ValueError('먼저 테마1 판정을 만들어 주세요.'+SETUP_GUIDANCE)
+        row=db.execute('SELECT id,source,day,alert_ids_json,report_json FROM theme_runs WHERE mode=? ORDER BY id DESC LIMIT 1',(mode,)).fetchone()
         if row is None:
-            raise ValueError('현재 모드의 테마1 판정이 없어요.')
-        return dict(run_id=row['id'],source=row['source'],day=row['day'],count=len(json.loads(row['alert_ids_json'])))
+            raise ValueError('현재 모드의 테마1 판정이 없어요.'+SETUP_GUIDANCE)
+        return dict(run_id=row['id'],source=row['source'],day=row['day'],count=len(json.loads(row['alert_ids_json'])),
+                    report=json.loads(row['report_json']))
 
 
 def deliver_run(history, *, mode, run_id, transport, chat_id, continue_unattempted=False, stopped=lambda:False):

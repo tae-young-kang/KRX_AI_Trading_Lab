@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -66,6 +67,7 @@ DEFAULTS = {
     'last_optimize_day': '',
     'research_auto_daily': False,
     'recommendation_auto_evaluate': False,
+    'recommendation_calendar_sources': {},
     'research_last_update': '',
 }
 
@@ -100,14 +102,18 @@ class Settings:
         temp.write_text(json.dumps(self.values, ensure_ascii=False, indent=2), encoding='utf-8')
         os.replace(temp, self.path)
 
+    def strategy_snapshot(self):
+        """Read saved strategy keys only; never credentials or unrelated fields."""
+        from app.proposal_application import snapshot
+        return snapshot(json.loads(self.path.read_text(encoding='utf-8')))
+
 
 class Credentials:
     """Never persist secrets in JSON/SQLite; keyring is required to save credentials."""
     def __init__(self):
         self.session_secrets = {}
         try:
-            import keyring
-            self.kr = keyring
+            self.kr = secure_storage()
         except ImportError:
             self.kr = None
 
@@ -122,10 +128,9 @@ class Credentials:
         return ''
 
     def save(self, kind, value, persist=True):
-        self.session_secrets[kind] = value
         if persist:
             if self.kr is None:
-                raise RuntimeError('보안 저장을 위한 keyring 패키지가 설치되지 않았습니다.')
+                raise RuntimeError(storage_install_help())
             try:
                 if value:
                     self.kr.set_password(APP_NAME, kind, value)
@@ -134,8 +139,10 @@ class Credentials:
                         self.kr.delete_password(APP_NAME, kind)
                     except Exception:
                         pass
-            except Exception as exc:
-                raise RuntimeError('OS 보안 저장소에 접근할 수 없습니다.') from exc
+            except Exception:
+                raise RuntimeError('Windows 보안 보관함에 저장하지 못했어요.\n'
+                                   '입력한 키의 오류는 아닙니다. PC의 Windows 사용자 계정으로 로그인한 뒤 다시 시도해 주세요.') from None
+        self.session_secrets[kind] = value
 
     def delete(self, kind):
         self.session_secrets.pop(kind, None)
@@ -144,3 +151,25 @@ class Credentials:
                 self.kr.delete_password(APP_NAME, kind)
             except Exception:
                 pass
+
+
+def secure_storage():
+    """Use Windows Credential Manager explicitly, including packaged builds.
+
+    Constructing the backend does not read, write or enumerate credentials.
+    """
+    if os.name == 'nt':
+        from keyring.backends.Windows import WinVaultKeyring
+        return WinVaultKeyring()
+    import keyring
+    return keyring
+
+
+def storage_install_help():
+    if getattr(sys, 'frozen', False):
+        return ('이 실행 파일에 연결 키를 안전하게 저장하는 기능이 빠져 있어요.\n'
+                '키를 다시 발급받을 필요는 없어요. 수정된 최신 실행 파일을 받아 다시 실행해 주세요.\n'
+                '입력한 키는 저장되지 않았어요.')
+    return ('연결 키를 안전하게 저장하는 필수 구성요소가 없어요.\n'
+            '프로그램을 닫고 같은 폴더의 run_windows.bat를 더블클릭해 주세요.\n'
+            '필요한 구성요소를 설치한 뒤 다시 열립니다. 입력한 키는 저장되지 않았어요.')

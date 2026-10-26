@@ -16,19 +16,33 @@ from PySide6.QtWidgets import (
 )
 
 from app.config import Settings, Credentials, data_dir
+from app.actual_trade_records import daily_text as actual_daily_text
+from app.morning_virtual import report_saved as morning_daily_text
+from app.morning_request import setup_text as morning_setup_text,freeze_scheduled as morning_freeze_saved
 from app.storage import Database
 from app.market import DemoMarket, KiwoomMarket, Telegram, recommendation_text
-from app.strategy import evaluate, auto_paper_exit, create_proposals
+from app.strategy import evaluate, auto_paper_exit
+from app.proposal_observation import compare_and_observe as create_proposals
 from app.practice_quotes import fresh_practice_price
 from app.recommendation_request import RecommendationRequest
+from app.outcome_request import OutcomeRequest
+from app.recommendation_import import evaluation_counts
 from app.quote_batch_profile import QuoteBatchProfile
-from app.recommendation_schedule import summary as recommendation_schedule_summary
+from app.recommendation_schedule import summary as recommendation_schedule_summary,calendar_source as recommendation_calendar_source
 from app.practice_details import sale_details
 from app.theme_store import latest_report as theme_latest_report
+from app.theme_store import missing_data_notice
 from app.theme_input import prepare_selection as prepare_theme_selection
+from app.theme_input import prepare_confirmed
+from app.theme_request import ThemeRequest
+from app.theme_calendar import request_selection
+from app.theme_collection import collect_and_prepare
+from app.theme_kiwoom import collect_theme as collect_kiwoom_theme
+from app.theme_sources import KIWOOM_SOURCES
+from app.theme_one import RULES_TEXT as THEME_ONE_RULES
 from app.theme_delivery import delivery_summary as theme_delivery_summary
 from app.theme_delivery import latest_snapshot as theme_snapshot, deliver_run as theme_deliver_run
-from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text
+from app.theme_budget import preview_latest as theme_budget_preview, preview_text as theme_budget_text,plan_text as theme_plan_text
 from app.nxt_evidence import record as record_nxt_evidence
 from app.shadow import ShadowEngine
 from app.backtest import load_ohlcv_csv, run_experiments, export_results
@@ -40,6 +54,18 @@ from app.trading_clock import PRICE_BASIS_NOTICE, KST
 from app.trade_review import outcome, condition_label, settings_snapshot
 from app.telegram_worker import TelegramOrderWorker
 from app.telegram_conditions import ConditionCommands
+from app.condition_report import report as condition_report_text
+from app.condition_analysis_request import ConditionAnalysisRequest
+from app.morning_quote_request import MorningQuoteRequest
+from app.quote_capture_request import QuoteCaptureRequest
+from app.recommendation_classification import Classification
+from app.classified_performance import report as classified_performance_report
+from app.quote_capture_worker import QuoteCaptureWorker
+from app.theme_opening_requests import handle as theme_opening_handle
+from app.morning_quote_refresh import refresh as refresh_morning_quotes
+from app.proposal_report import report as proposal_report_text
+from app.proposal_application import apply as apply_proposal,recover as recover_proposals
+from app.proposal_review_commands import ProposalReviewCommands
 from app.kiwoom_mock_watch import require_mock_mode
 from app.kiwoom_mock_watch_worker import MockWatchWorker
 from app.mock_watch_status import MockWatchStatus
@@ -131,10 +157,14 @@ class MainWindow(QMainWindow):
         self.condition_commands = ConditionCommands(data_dir()/'telegram_conditions.db', self.cfg)
         self.creds = Credentials()
         self.db = Database(data_dir() / practice_db_name(self.cfg))
+        self.proposal_recovery=recover_proposals(self.db,self.settings.strategy_snapshot)
         self.demo = DemoMarket()
         self.quote_batch_profile=QuoteBatchProfile()
         self.shadow = ShadowEngine(self.db)
         self.history = HistoryStore(data_dir() / 'research.db')
+        self.quote_capture=QuoteCaptureRequest(data_dir())
+        self.recommendation_classification=Classification(data_dir())
+        self.quote_capture_worker=None
         self.research_report = None
         self.research_run_id = None
         self.shadow.initialize_defaults(dict(self.cfg), self.cfg['data_mode'])
@@ -146,10 +176,22 @@ class MainWindow(QMainWindow):
         self.work = None
         self.telegram_order_worker = None
         self.mock_watch_worker = None
-        self.mock_watch_status = MockWatchStatus(history_path=data_dir()/'kiwoom_mock_watch'/'observations.db')
+        from app.order_symbol_lookup import saved_symbol
+        self.mock_watch_status = MockWatchStatus(history_path=data_dir()/'kiwoom_mock_watch'/'observations.db',
+            order_root=data_dir()/'kiwoom_mock_watch'/'mock_orders',
+            symbol_lookup=lambda name,now,history=self.history:saved_symbol(history,'MOCK',name,now))
         self.scanning = False
         self.remote_scan = None
         self.remote_scan_active = False
+        self.remote_theme = None
+        self.remote_theme_active = False
+        self.remote_outcome=None
+        self.remote_outcome_active=False
+        self.remote_analysis=None
+        self.remote_morning_quote=None
+        self.remote_morning_quote_active=False
+        self.remote_analysis_active=False
+        self.proposal_review=None
         self.setWindowTitle('KRX 주식 도우미 · 실제 주문 잠금')
         self.resize(1390, 860)
         self.setMinimumSize(1100, 690)
@@ -178,6 +220,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(25000,self.maybe_daily_research)
         QTimer.singleShot(30000,self.maybe_daily_recommendation_evaluation)
         self.db.log('START', 'GUI 실행 - 실계좌 주문 기능 없음')
+        QTimer.singleShot(2000,self.start_telegram_recommendations_automatically)
 
     def build(self):
         main = QWidget()
@@ -303,10 +346,22 @@ class MainWindow(QMainWindow):
         live.setEnabled(False)
         shortcuts.addWidget(live)
         v.addLayout(shortcuts)
+        telegram_controls=QHBoxLayout()
+        self.home_telegram_start=QPushButton('텔레그램으로 추천 받기 시작',objectName='Primary')
+        self.home_telegram_start.clicked.connect(self.start_telegram_orders)
+        self.home_telegram_stop=QPushButton('텔레그램 수신 중지')
+        self.home_telegram_stop.setEnabled(False)
+        self.home_telegram_stop.clicked.connect(self.stop_telegram_orders)
+        telegram_controls.addWidget(self.home_telegram_start)
+        telegram_controls.addWidget(self.home_telegram_stop)
+        v.addLayout(telegram_controls)
+        self.home_telegram_status=lbl('수신 중지 · 위의 시작 버튼을 누른 뒤 봇 대화방에 /메뉴를 보내세요.','Muted')
+        self.home_telegram_status.setWordWrap(True)
+        v.addWidget(self.home_telegram_status)
         history_button = QPushButton('지난 추천 확인하기 · 기록과 이후 가격')
         history_button.clicked.connect(self.show_recommendation_history)
         v.addWidget(history_button)
-        theme_button=QPushButton('테마1 · 저장된 감지 종목 보기')
+        theme_button=QPushButton('테마1 · 종목 찾기')
         theme_button.clicked.connect(self.show_theme_history)
         v.addWidget(theme_button)
         cards = QHBoxLayout()
@@ -327,15 +382,27 @@ class MainWindow(QMainWindow):
     def show_theme_history(self):
         mode=current_mode(self.cfg)
         dialog=QDialog(self)
-        dialog.setWindowTitle(mode.title+' · 테마1 저장 결과')
+        dialog.setWindowTitle(mode.title+' · 테마1 종목 찾기')
         dialog.resize(800,600)
         layout=QVBoxLayout(dialog)
-        guide=lbl('저장된 결과만 봅니다. 새 검색·발송·주문은 실행하지 않아요. 텔레그램: /테마1','Muted')
+        guide=lbl('① 오늘 기준 검색 → ② 아래 결과 확인 → ③ 종목이 있으면 텔레그램으로 보내기','Muted')
         guide.setWordWrap(True)
         layout.addWidget(guide)
+        prepare_button=QPushButton('테마1 검색 시작 · 오늘 기준',objectName='Primary')
+        prepare_button.clicked.connect(self.prepare_theme_guided)
+        layout.addWidget(prepare_button)
+        self.theme_progress=lbl('검색을 시작하면 진행 상황이 여기에 표시됩니다.','Muted')
+        self.theme_progress.setWordWrap(True)
+        layout.addWidget(self.theme_progress)
+        cancel=QPushButton('진행 중인 검색 중지')
+        cancel.clicked.connect(self.cancel_scan)
+        layout.addWidget(cancel)
         view=QTextEdit()
         view.setReadOnly(True)
         layout.addWidget(view)
+        rules=QPushButton('테마1 조건 보기 · 6거래일 중 3일 이상 / 100억원 / 고가 +5%')
+        rules.clicked.connect(lambda:QMessageBox.information(self,'테마1 판정 조건',THEME_ONE_RULES))
+        layout.addWidget(rules)
         page=QSpinBox()
         page.setPrefix('페이지 ')
         page.setRange(1,999999)
@@ -345,7 +412,8 @@ class MainWindow(QMainWindow):
                 text=theme_latest_report(self.history,mode=mode.key,page=number)
             except Exception:
                 text='테마1 기록을 읽지 못했어요. 저장 공간과 기록 파일을 확인해 주세요.'
-            view.setPlainText(text)
+            if view.toPlainText()!=text:
+                view.setPlainText(text)
         page.valueChanged.connect(load)
         load(1)
         send_button=QPushButton('저장된 최신 테마1 종목을 텔레그램으로 보내기')
@@ -360,7 +428,15 @@ class MainWindow(QMainWindow):
         close=QPushButton('닫기')
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)
-        dialog.exec()
+        refresh=QTimer(dialog)
+        refresh.setInterval(2000)
+        refresh.timeout.connect(lambda:load(page.value()))
+        refresh.start()
+        try:
+            dialog.exec()
+        finally:
+            refresh.stop()
+            self.theme_progress=None
 
     def show_theme_budget(self):
         total,ok=QInputDialog.getInt(self,'1/3 · 총예산','전체 종목에 나눌 총예산 (원)',1000000,1,2000000000,10000)
@@ -386,10 +462,13 @@ class MainWindow(QMainWindow):
         mode=current_mode(self.cfg).key
         try:
             snapshot=theme_snapshot(self.history,mode)
+            if snapshot['count']==0:
+                notice=missing_data_notice(snapshot['report'])
+                raise ValueError(notice or '이번 검색에서 조건에 맞는 종목이 없어 보낼 알림이 없어요. 연결 오류가 아닙니다.')
             chat_id=int(self.cfg['telegram_chat_id'])
             token=self.creds.get('telegram_token')
-            if chat_id<=0 or not token or snapshot['count']==0:
-                raise ValueError('감지 종목과 저장된 텔레그램 연결 정보를 확인해 주세요.')
+            if chat_id<=0 or not token:
+                raise ValueError('알림 받을 방 번호와 봇 연결 키를 연결 설정에 저장해 주세요.')
         except (ValueError,TypeError) as error:
             QMessageBox.information(self,'테마1 알림 확인',str(error))
             return
@@ -517,10 +596,31 @@ class MainWindow(QMainWindow):
         backup_button=QPushButton('현재 모드 기록 백업하기')
         backup_button.clicked.connect(self.backup_current_records)
         row.addWidget(backup_button)
+        verify_button=QPushButton('저장한 백업 확인하기')
+        verify_button.clicked.connect(self.inspect_saved_backup)
+        row.addWidget(verify_button)
         detail = QPushButton('선택 매매의 당시 조건 보기')
         detail.clicked.connect(self.show_trade_conditions)
         row.addWidget(detail)
         v.addLayout(row)
+        operations = QHBoxLayout()
+        for title,handler in (('전체 운영 기록 백업',self.request_operating_backup),
+                              ('전체 백업 검사',self.inspect_operating_backup),
+                              ('새 폴더로 복구',self.request_operating_restore)):
+            button=QPushButton(title)
+            button.clicked.connect(handler)
+            operations.addWidget(button)
+        v.addLayout(operations)
+        v.addWidget(lbl('전체 백업·복구는 프로그램 종료 후 진행해요. 키·설정은 제외하며 현재 기록을 덮지 않아요.','Muted'))
+        compare_open=QPushButton('고정 추천·외부 첫 거래 CSV 대조 (읽기 전용)')
+        compare_open.setToolTip('별도 확보한 CSV와 저장한 가상 시초 기록을 비교해요. 거래소 인증·실제 체결 아님')
+        compare_open.clicked.connect(self.compare_morning_open_csv)
+        v.addWidget(compare_open)
+        quote_controls=QHBoxLayout()
+        for label,handler in (('시세 수집 시작',self.start_quote_capture),('수집 상태',self.show_quote_capture),('시세 수집 중지',self.stop_quote_capture)):
+            button=QPushButton(label);button.clicked.connect(handler);quote_controls.addWidget(button)
+        v.addLayout(quote_controls)
+        v.addWidget(lbl('REAL 시세만 저장해요. 처음 받은 후보는 공식 첫 거래 인증이 아니며 주문하지 않아요.','Muted'))
         self.trade_table = make_table(['ID','종목','구분','남은/처음 수량','매수가','평균 매도가','실현손익(원)',
                                        '손익률','매수일','청산일','사유','승패'])
         v.addWidget(self.trade_table)
@@ -539,6 +639,27 @@ class MainWindow(QMainWindow):
         compare.clicked.connect(self.create_optimizer)
         v.addWidget(compare)
         return page
+
+    def compare_morning_open_csv(self):
+        if self.work is not None and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 비교해 주세요.')
+            return
+        day,ok=QInputDialog.getText(
+            self,'첫 거래 CSV 대조','아침 추천 고정 날짜 (YYYY-MM-DD)')
+        if not ok or not day.strip():
+            return
+        path,_=QFileDialog.getOpenFileName(
+            self,'별도 확보한 첫 거래 CSV 선택',str(Path.home()),'CSV (*.csv)')
+        if not path:
+            return
+        from app.morning_open_receipt_compare import compare_saved, render
+        now=datetime.now(KST)
+        mode=current_mode(self.cfg).key
+        root=data_dir()
+        self.run_task(
+            lambda:render(compare_saved(root,mode,day.strip(),path,now=now)),
+            lambda msg:QMessageBox.information(self,'가상 첫 거래 원본 대조',msg),
+            '사용자 CSV 대조 완료 · 실제 체결 인증 아님')
 
     def make_shadow(self):
         page=QWidget(); v=QVBoxLayout(page)
@@ -708,6 +829,9 @@ class MainWindow(QMainWindow):
         recommendation_import.setToolTip('직접 확인한 거래일·종가 자료 파일을 저장된 추천과 대조해요. 실제 수익률이나 공식 검증 완료로 처리하지 않아요.')
         recommendation_import.clicked.connect(self.import_recommendation_prices)
         v.addWidget(recommendation_import)
+        recommendation_recent=QPushButton('추천 후 가격 확인 · 날짜 자동 계산')
+        recommendation_recent.clicked.connect(self.evaluate_recent_recommendations)
+        v.addWidget(recommendation_recent)
         recommendation_cached = QPushButton('저장된 일별 시세로 추천 성적 계산하기 (고급)')
         recommendation_cached.clicked.connect(self.evaluate_cached_recommendations)
         v.addWidget(recommendation_cached)
@@ -727,6 +851,11 @@ class MainWindow(QMainWindow):
         box=QFrame(objectName='Panel');form=QGridLayout(box)
         self.research_source=QComboBox();self.research_source.addItems(['CSV_USER','KRX','DEMO_SYNTHETIC'])
         form.addWidget(lbl('연구 데이터'),0,0);form.addWidget(self.research_source,0,1)
+        self.research_method=QComboBox()
+        self.research_method.addItem('기간을 나눠 반복검증','ROLLING_WFO_V1')
+        self.research_method.addItem('이전 방식 · 한 번 학습/검증','HOLDOUT_V1')
+        self.research_method.currentIndexChanged.connect(self.research_source_changed)
+        form.addWidget(lbl('검증 방법'),2,0);form.addWidget(self.research_method,2,1,1,3)
         self.research_source.currentTextChanged.connect(self.research_source_changed)
         self.research_k=QSpinBox();self.research_k.setRange(1,50);self.research_k.setValue(5)
         form.addWidget(lbl('일별 추천 Top-K'),0,2);form.addWidget(self.research_k,0,3)
@@ -746,6 +875,10 @@ class MainWindow(QMainWindow):
             b=QPushButton(label,objectName='Primary' if label=='48개 조건 검증' else '')
             b.clicked.connect(fn);buttons.addWidget(b)
         v.addLayout(buttons)
+        check_coverage=QPushButton('저장 일봉과 외부 거래일·최소 종목 수 대조 (고급)')
+        check_coverage.setToolTip('별도로 확인한 market,day,min_symbols CSV와 선택한 연구 DB를 읽기 전용으로 비교해요.')
+        check_coverage.clicked.connect(self.audit_research_market_coverage)
+        v.addWidget(check_coverage)
         decision=QHBoxLayout()
         a=QPushButton('선택 조건 연구 프리셋 승인');a.clicked.connect(lambda:self.review_research(True));decision.addWidget(a)
         b=QPushButton('선택 조건 거부');b.clicked.connect(lambda:self.review_research(False));decision.addWidget(b)
@@ -755,7 +888,8 @@ class MainWindow(QMainWindow):
         self.research_result=lbl('학습 구간에서만 선정한 후보 전략을 검증 구간에서 확인합니다.','H2')
         self.research_result.setWordWrap(True);v.addWidget(self.research_result)
         self.research_table=make_table(['실험 조건','시장','학습 거래일','학습 초과수익 3일','검증 거래일',
-                                        '검증 초과수익 3일','검증 Rank IC','결과'])
+                                        '검증 초과수익 3일','검증 Rank IC','학습→검증 차이(%p)',
+                                        'TEST 초반→후반','자료/결과 해석','승인 상태'])
         self.research_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         self.research_table.itemSelectionChanged.connect(self.research_detail)
         v.addWidget(self.research_table,4)
@@ -768,6 +902,8 @@ class MainWindow(QMainWindow):
     def research_source_changed(self):
         self.research_report=None
         self.research_run_id=None
+        # The external evidence applies ONLY to the source the user audited.
+        self.research_reference=None
         self.refresh_research()
 
     def save_auto_research(self,checked):
@@ -786,12 +922,15 @@ class MainWindow(QMainWindow):
         def finish(result):
             if result['state']=='SUCCEEDED':
                 self.recommendation_auto_status.setText('저장 자료로 추천 성적 갱신 완료 · 확인한 기간 끝 '+result['result']['available_through'])
+                counts=evaluation_counts(result['result'])
+                if counts:self.recommendation_auto_status.setText(self.recommendation_auto_status.text()+'\n'+counts)
             elif result['state']=='FAILED':
                 self.recommendation_auto_status.setText('자동 갱신 미완료 · 거래일/저장 자료를 확인해 수동 재평가하세요. 오늘 자동 재시도하지 않아요.')
             elif result['state']=='ALREADY_ATTEMPTED':
                 labels={'SUCCEEDED':'완료','FAILED':'실패 · 수동 재평가 필요','RUNNING':'종료 미확인 · 수동 확인 필요'}
                 self.recommendation_auto_status.setText('오늘 자동 평가 기록: '+labels.get(result['previous'],'확인 필요'))
-        self.run_task(lambda:run_due(db,history,mode,enabled=True,now=datetime.now(KST)),finish,'추천 성적 자동 갱신 점검 완료')
+        source=recommendation_calendar_source(self.cfg,mode)
+        self.run_task(lambda:run_due(db,history,mode,enabled=True,now=datetime.now(KST),automatic_source=source),finish,'추천 성적 자동 갱신 점검 완료')
 
     def maybe_daily_research(self):
         # Runs ONLY while GUI is alive; no hidden service. Does not send real orders.
@@ -805,15 +944,31 @@ class MainWindow(QMainWindow):
         def run():
             result=self.history.fetch_range(KRXDailyClient(key),start,today)
             bars=self.history.load_bars('KRX')
-            if len(bars)<100:return result,None
-            report=evaluate_research(bars,topk=5)
-            rid=self.history.save_run('KRX',{'source':'KRX','topk':5,'auto':True},report)
+            if not bars:return result,('NO_BARS',None)
+            from app.research_preflight import check_research_coverage, auto_research_blocked
+            selected_reference=getattr(self,'research_reference',None)
+            reference_path=(selected_reference[1] if selected_reference and selected_reference[0]=='KRX' else None)
+            from app.research_workflow import research_coverage
+            as_of=datetime.now(KST)
+            quality=research_coverage(self.history,'KRX',bars,reference_path=reference_path,now=as_of)
+            if auto_research_blocked(quality):
+                # Automatic research must never silently promote suspect evidence.
+                return result,('COVERAGE_ALERT',quality)
+            from app.research_wfo import evaluate_wfo
+            report=evaluate_wfo(bars,source='KRX',coverage_quality=quality,topk=5,now=as_of)
+            rid=self.history.save_run('KRX',{'source':'KRX','topk':5,'auto':True,'method_version':'ROLLING_WFO_V1'},report)
             return result,(rid,report)
         def finish(output):
             self.cfg['research_last_update']=today
             self.settings.save()
-            if output[1] is not None:
-                self.research_source.setCurrentText('KRX')
+            if output[1] is not None and output[1][0]=='NO_BARS':
+                self.research_status.setText('자동 연구 자료가 없어요. 반복검증과 실제 성과는 미검증이에요.');return
+            if output[1] is not None and output[1][0]=='COVERAGE_ALERT':
+                from app.research_preflight import preflight_notice
+                self.statusBar().showMessage('자동 조건 연구 보류 · '+preflight_notice(output[1][1]))
+                self.research_status.setText('자동 연구 보류: '+preflight_notice(output[1][1]))
+                return
+            if output[1] is not None and self.research_source.currentText()=='KRX' and self.research_method.currentData()=='ROLLING_WFO_V1':
                 self.research_run_id=output[1][0]
                 self.show_research(output[1][1],show_message=False)
             self.statusBar().showMessage('KRX 일간 데이터·조건 평가 갱신 (승인 전 미적용)')
@@ -824,11 +979,35 @@ class MainWindow(QMainWindow):
         n=self.history.count(source)
         self.research_status.setText(f'[{source}] 저장 {n[0]:,}행 / {n[1]}거래일 / {n[2]}종목 / {n[3] or "—"} ~ {n[4] or "—"}  ·  연구 데이터 DB: research.db')
         self.research_status.setText(self.research_status.text()+'\n'+self.history.ingest_summary(source))
-        latest=self.history.last_run(source)
+        latest=self.history.last_run(source,method=self.research_method.currentData())
         if latest and self.research_report is None:
             self.research_run_id=latest[0]
             self.research_report=latest[2]
             self.show_research(latest[2],show_message=False)
+
+    def audit_research_market_coverage(self):
+        if self.work is not None and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 자료를 확인해 주세요.')
+            return
+        path,_=QFileDialog.getOpenFileName(
+            self,'외부에서 확인한 거래일·최소 종목 수 CSV 선택',str(Path.home()),'CSV (*.csv)')
+        if not path:
+            return
+        from app.market_coverage import audit_coverage, render_audit
+        source=self.research_source.currentText()
+        history=self.history
+        def done(message):
+            if self.research_source.currentText()==source:
+                # Session-only selection. Do not persist local paths/contents.
+                # The CSV and database are both checked again before research.
+                self.research_reference=(source,path)
+            QMessageBox.information(
+                self,'저장 시세 누락 대조',
+                message+'\n\n이 출처의 다음 48개 조건 검증에도 이 대조 자료를 다시 적용해요.')
+        self.run_task(
+            lambda: render_audit(audit_coverage(history,source,path)),
+            done,
+            '외부 입력과 저장 일봉의 누락 대조 완료')
 
     def import_research_csv(self):
         path,_=QFileDialog.getOpenFileName(self,'실제 OHLCV CSV 불러오기',str(Path.home()),'CSV (*.csv)')
@@ -860,17 +1039,76 @@ class MainWindow(QMainWindow):
                                 QMessageBox.information(self,'KRX 저장',f'신규 응답 {r["requests"]}회 / {r["rows"]:,}행 저장')),
                       'KRX 수집 완료')
 
+    def prepare_theme_guided(self):
+        mode=current_mode(self.cfg).key
+        sources=['DEMO'] if mode=='DEMO' else ['키움 시세로 찾기 · 당일 조회','KRX 수집 후 판정','KRX 저장 자료','CSV_USER']
+        choice,ok=QInputDialog.getItem(self,'1/2 · 테마1 자료 선택',
+            '오늘 종목은 첫 번째 키움 시세로 찾기를 선택하세요.\nKRX/CSV는 별도로 제공된 일봉 자료를 이용하는 방법이에요.',sources,0,False)
+        if not ok:return
+        if choice=='키움 시세로 찾기 · 당일 조회':
+            include_etf=False  # 테마1은 일반 추천 설정과 관계없이 ETF 제외
+            if QMessageBox.question(self,'테마1 · 오늘 기준 검색',
+                '코스피·코스닥 전체를 조회한 뒤 테마1 조건으로 고릅니다.\n'
+                +('ETF 포함\n' if include_etf else 'ETF 제외\n')+
+                '키움 일봉으로 오늘 자료를 확인합니다. 실제 주문은 하지 않아요. 시작할까요?')!=QMessageBox.StandardButton.Yes:return
+            key,secret=self.broker_keys('MOCK' if mode=='MOCK' else 'REAL')
+            requested_at=datetime.now(KST)
+            def fetch(progress,cancelled):
+                client=KiwoomMarket(key,secret,'MOCK' if mode=='MOCK' else 'REAL',batch_profile=self.quote_batch_profile)
+                try:return collect_kiwoom_theme(self.history,client,mode,now=requested_at,progress=progress,cancelled=cancelled,include_etf=include_etf)
+                finally:client.session.close()
+            self.run_task(fetch,self.theme_prepared,'테마1 검색 완료',with_progress=True)
+            return
+        collect=choice=='KRX 수집 후 판정'
+        source='KRX' if choice.startswith('KRX') else choice
+        requested_at=datetime.now(KST)
+        key=None
+        if collect:
+            key=self.secrets['krx_api_key'].text().strip() or self.creds.get('krx_api_key')
+            if not key:
+                QMessageBox.information(self,'KRX 인증키 필요','API · 텔레그램에서 별도의 KRX OPEN API 인증키를 등록해 주세요.');return
+        action=('최근 7거래일의 코스피·코스닥 일봉을 KRX에 요청합니다.\n'
+                '두 시장의 서비스 이용 승인과 데이터 사용 약관을 확인했나요?\n'
+                '오늘 자료는 잠정치이며 다음 날 다시 확인해야 해요.\n' if collect else '저장 시세로만 판정합니다.\n')
+        if QMessageBox.question(self,'테마1 판정 시작',
+            f'자료 {source} · 요청일 {requested_at.date().isoformat()}\n'
+            '요청일 기준 최근 6거래일과 전일 종가용 1일을 자동 계산해요. 휴장일이면 직전 거래일까지 봅니다.\n'
+            +action+'전체 시장 수집 완료를 보증하지 않아요.\n'
+            '완료되면 테마1 결과창이 자동으로 바뀝니다.') != QMessageBox.StandardButton.Yes:return
+        if collect:
+            self.run_task(lambda progress,cancelled:collect_and_prepare(self.history,KRXDailyClient(key),
+                          request_selection(mode,source,now=requested_at),mode,
+                          progress=progress,cancelled=cancelled),self.theme_prepared,
+                          '테마1 수집 및 판정 완료',with_progress=True)
+        else:
+            self.run_task(lambda:prepare_confirmed(self.history,request_selection(mode,source,now=requested_at),mode),
+                          self.theme_prepared,'테마1 저장 시세 판정')
+
+    def theme_prepared(self,result):
+        if getattr(self,'theme_progress',None) is not None:
+            self.theme_progress.setText('자료 확인 필요' if missing_data_notice(result) else f'검색 완료 · 감지 {result["matched"]}개')
+        notice=missing_data_notice(result)
+        if notice:
+            QMessageBox.information(self,'테마1 · 자료 확인 필요',notice+f'\n확인된 감지 종목 {result["matched"]}개 · 아래 결과에서 확인하세요.')
+            return
+        collection=result.get('collection')
+        collected=(f'KRX 신규 응답 {collection["requests"]}회 · 저장 {collection["rows"]:,}행\n'
+                   +('오늘 자료 포함 · 잠정치예요.\n' if collection['provisional'] else '') if collection else '')
+        QMessageBox.information(self,'테마1 판정 완료',
+            collected+
+            f'저장된 종목 {result["symbols"]}개 · 감지 {result["matched"]}개\n'
+            f'자료 부족 종목 {result["states"].get("PRICE_MISSING",0)}개\n'
+            f'시장별 일별 자료가 없는 구간 {len(result["missing_market_days"])}개\n'
+            '전체 시장 자료 완료는 미확인입니다. 홈의 테마1 결과 또는 /테마1에서 확인하세요.\n'
+            '실제 발송·주문은 하지 않았어요.')
+
     def prepare_theme_one(self):
         mode=current_mode(self.cfg).key
         path,_=QFileDialog.getOpenFileName(self,'테마1 거래일·자료 출처 선택','','테마1 자료 선택 (*.json)')
         if not path:
             return
         self.run_task(lambda:prepare_theme_selection(self.history,path,mode),
-                      lambda result:QMessageBox.information(self,'테마1 판정 완료',
-                          f'저장된 종목 {result["symbols"]}개 · 감지 {result["matched"]}개\n'
-                          f'자료 부족 종목 {result["states"].get("PRICE_MISSING",0)}개\n'
-                          '전체 시장 자료 완료는 미확인입니다. 홈의 테마1 결과 또는 /테마1에서 확인하세요.\n'
-                          '실제 발송·주문은 하지 않았어요.'),'테마1 저장 시세 판정')
+                      self.theme_prepared,'테마1 저장 시세 판정')
 
     def import_recommendation_prices(self):
         if self.work is not None and self.work.isRunning():
@@ -888,6 +1126,29 @@ class MainWindow(QMainWindow):
                 '텔레그램 /추천성적에서 확인할 수 있어요. 실제 거래 수익률이 아니에요.'),
             '추천 가격 자료 대조 완료')
 
+    def evaluate_recent_recommendations(self):
+        mode=current_mode(self.cfg).key
+        if mode=='DEMO':
+            QMessageBox.information(self,'실제 시세 기록 확인','연결 설정에서 실제 시세 또는 키움 모의 시세 모드를 선택해 주세요. 가상 연습은 고급 자료 평가를 이용하세요.')
+            return
+        source,ok=QInputDialog.getItem(self,'추천 후 가격 확인','저장된 일봉 자료를 고르세요. 없는 가격은 자료 없음으로 표시해요.\n저녁 자동 갱신을 켜면 이 자료로 새 거래일까지 평가해요.',
+                                     ['거래소 일봉 · KRX','직접 넣은 일봉 · CSV'],0,False)
+        if not ok:return
+        source='KRX' if source=='거래소 일봉 · KRX' else 'CSV_USER'
+        from app.recommendation_cache import evaluate_recent
+        db,history=self.db,self.history
+        def done(result):
+            sources=self.cfg.get('recommendation_calendar_sources',{})
+            sources=dict(sources) if isinstance(sources,dict) else {}
+            sources[mode]=source
+            self.cfg['recommendation_calendar_sources']=sources
+            self.settings.save()
+            QMessageBox.information(self,'추천 후 가격 확인',
+                f'추천 {result["recommendations"]}개 확인 · 새 평가 {result["added"]}개\n'
+                f'자료 확인일 {result["available_through"]}\n1·3·5거래일 뒤 가격은 /추천성적에서 확인하세요.\n'
+                +evaluation_counts(result)+'\n저녁 자동 갱신을 켠 경우 새 거래일까지 자동 계산해요. 실제 매매 수익률이 아니에요.')
+        self.run_task(lambda:evaluate_recent(db,history,mode,source=source),done,'추천 후 가격 확인 완료')
+
     def evaluate_cached_recommendations(self):
         if self.work is not None and self.work.isRunning():
             self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 평가해 주세요.')
@@ -897,12 +1158,17 @@ class MainWindow(QMainWindow):
             return
         from app.recommendation_cache import evaluate_selection
         db,history,mode = self.db,self.history,current_mode(self.cfg).key
-        self.run_task(lambda:evaluate_selection(db,history,path,mode),
-            lambda result:QMessageBox.information(self,'저장 시세로 추천 평가',
+        def done(result):
+            sources=self.cfg.get('recommendation_calendar_sources',{})
+            sources=dict(sources) if isinstance(sources,dict) else {}
+            sources.pop(mode,None)
+            self.cfg['recommendation_calendar_sources']=sources
+            self.settings.save()
+            QMessageBox.information(self,'저장 시세로 추천 평가',
                 f"추천 {result['recommendations']}개 대조 · 새 평가 {result['added']}개\n"
                 f"자료 확인 완료일 {result['available_through']}\n"
-                '빠진 가격은 자료 없음으로 표시해요. /추천성적 에서 확인하세요.\n실제 거래 수익률이 아니에요.'),
-            '저장 시세 추천 평가 완료')
+                '빠진 가격은 자료 없음으로 표시해요. /추천성적 에서 확인하세요.\n선택 파일의 평가 기간을 유지해요. 실제 거래 수익률이 아니에요.')
+        self.run_task(lambda:evaluate_selection(db,history,path,mode),done,'저장 시세 추천 평가 완료')
 
     def repeat_cached_recommendations(self):
         if self.work is not None and self.work.isRunning():
@@ -918,71 +1184,145 @@ class MainWindow(QMainWindow):
             '저장한 거래일 추천 평가 완료')
 
     def run_research(self):
-        source=self.research_source.currentText()
-        self.research_report=None
+        from app.research_workflow import run_saved
+        source=self.research_source.currentText();method=self.research_method.currentData()
+        self.research_report=None;self.research_display_context=None
         topk=self.research_k.value()
-        def run():
-            bars=self.history.load_bars(source)
-            if len(bars)<100:raise ValueError('자료가 부족합니다. CSV 또는 KRX 데이터를 먼저 수집하세요.')
-            report=evaluate_research(bars,topk=topk)
-            run_id=self.history.save_run(source,{'topk':topk,'source':source},report)
-            return run_id,report
+        selected_reference=getattr(self,'research_reference',None)
+        reference_path=(selected_reference[1] if selected_reference and selected_reference[0]==source else None)
+        history=self.history
         def done(output):
+            if (self.research_source.currentText(),self.research_method.currentData())!=(source,method):return
             self.research_run_id=output[0]
             self.show_research(output[1])
-        self.run_task(run,done,'종목 선정 조건 검증 완료')
+        self.run_task(lambda:run_saved(history,source,method,topk=topk,reference_path=reference_path),done,'저장 시세 조건 검증 완료')
 
     def show_research(self,report,show_message=True):
+        widget=getattr(self,'research_method',None)
+        selected=widget.currentData() if widget is not None else 'HOLDOUT_V1'
+        method=report.get('method_version','HOLDOUT_V1')
+        source=self.research_source.currentText()
+        if method!=selected or report.get('source',source)!=source:return
+        self.research_display_context=(source,method,getattr(self,'research_run_id',None))
+        if method=='ROLLING_WFO_V1':
+            self.show_wfo_research(report,show_message=show_message)
+            return
+        if hasattr(self.research_table,'setHorizontalHeaderLabels'):
+            self.research_table.setHorizontalHeaderLabels(['실험 조건','시장','학습 거래일','학습 초과수익 3일','검증 거래일','검증 초과수익 3일','검증 Rank IC','학습→검증 차이(%p)','TEST 초반→후반','자료/결과 해석','승인 상태'])
+        from app.research_comparison import compare_variants, comparison_notice
         self.research_report=report
+        self.research_comparisons=compare_variants(report)
         self.research_table.setRowCount(0)
         states=self.history.research_states(self.research_source.currentText())
-        for r in report['variants']:
+        for r in self.research_comparisons:
             i=self.research_table.rowCount();self.research_table.insertRow(i)
             def fmt(x):return '—' if x is None else f'{x:+.3f}'
             values=[r['name'],r['market'],str(r['train_days']),fmt(r['train_excess3']),
                     str(r['test_days']),fmt(r['test_excess3']),fmt(r['test_ic']),
+                    fmt(r['holdout_gap3']),
+                    fmt(r.get('test_early_excess3'))+' → '+fmt(r.get('test_late_excess3')),
+                    r['data_quality_label']+' · '+r['comparison_note'],
                     states.get(r['id'], ('표본 부족' if r['train_days']<12 or r['test_days']<5 else '관찰 중'))]
             for j,t in enumerate(values):self.research_table.setItem(i,j,cell(t))
         chosen=next((x for x in report['variants'] if x['id']==report['chosen_on_train_only']),None)
-        self.research_result.setText('학습 구간 우선 후보: '+(chosen['name'] if chosen else '표본 부족으로 선정하지 않음'))
+        from app.research_preflight import preflight_notice
+        self.research_result.setText(
+            '학습 구간 우선 후보: '+(chosen['name'] if chosen else '표본 부족으로 선정하지 않음')
+            +'\n'+preflight_notice(report.get('coverage_quality'))
+            +'\n'+comparison_notice(report))
         self.research_status.setText(f'{report["data_begin"]} ~ {report["data_end"]} | '
                      f'{report["symbols"]}종목, {report["data_rows"]:,}행, {len(report["variants"])}개 조건 | '
                      'TRAIN으로 조건 순위 선정 / TEST는 미사용 기간 평가')
         if show_message:
             QMessageBox.information(self,'조건 검증 완료',
                 '조건별 일별 추천·검증 수익을 DB에 기록했습니다.\n'
+                +preflight_notice(report.get('coverage_quality'))+'\n'
                 '이 결과는 연구용이며 적용이나 실제 주문으로 이어지지 않습니다.')
+
+    def show_wfo_research(self,report,show_message=True):
+        from app.research_wfo import NOTICE
+        from app.research_preflight import preflight_notice
+        self.research_report=report;self.research_comparisons=[]
+        states=self.history.research_states(self.research_source.currentText(),method='ROLLING_WFO_V1')
+        table=self.research_table;table.setRowCount(0)
+        states_ko={'DATA_BLOCKED':'자료 확인 필요','INSUFFICIENT_DATA':'관측 부족','SUFFICIENT_RESEARCH_UNVERIFIED':'연구 표본 충족 · 실제 성과 미검증'}
+        if hasattr(table,'setHorizontalHeaderLabels'):
+            table.setHorizontalHeaderLabels(['실험 조건','시장','최신 학습 관측일','학습 평균 3일(%)','학습 종목군 대비(%p)','최신 훈련 후보','유효 반복평가','과거 선택 횟수','과거 OOS 평가','자료 상태','연구 승인 상태'])
+        for variant in report['variants']:
+            index=table.rowCount();table.insertRow(index);market=variant['market'];stats=variant['train']
+            selected=report['latest_candidates'].get(market)==variant['id']
+            fmt=lambda value:'미산출' if value is None else f'{value:+.3f}'
+            values=[variant['name'],market,str(stats['days3']),fmt(stats['net3']),fmt(stats['basket_excess3']),
+                '후보 · 자동 적용 안 함' if selected else '—',str(report['markets'][market]['valid_folds']),
+                str(sum(f['chosen_id']==variant['id'] for f in report['folds'] if f['market']==market)),
+                '시장별 선택 흐름 · 상세 확인',states_ko.get(report['markets'][market]['state'],'확인 필요'),states.get(variant['id'],'검토 전')]
+            for column,value in enumerate(values):table.setItem(index,column,cell(value))
+        markets=' · '.join(f'{m}: 유효 {info["valid_folds"]}/3회 · '+('/'.join(info['issues']) if info['issues'] else states_ko.get(info['state'],'확인 필요'))+f' · 최소 추가 거래일 {info["remaining_sessions"]}일(조건 관측도 필요)' for m,info in report['markets'].items())
+        self.research_result.setText('기간을 나눠 반복검증 · '+markets+'\n'+preflight_notice(report.get('coverage_quality'))+'\n평가 기준 '+report['as_of']+' · 제외한 당일 잠정일 '+(', '.join(report['excluded_provisional_days']) or '없음'))
+        self.research_status.setText(f'{report["source"]} · {report["data_begin"]}~{report["data_end"]} · 60일 학습/20일 평가/20일 이동 · '+report['status'])
+        gaps='\n'.join(m+' · 누락 거래일: '+(', '.join(info['missing_sessions']) or '없음')+' · 범위 밖: '+(', '.join(info['unexpected_sessions']) or '없음') for m,info in report['markets'].items())
+        self.research_detail_label.setText(gaps+'\n'+NOTICE)
+        if show_message:QMessageBox.information(self,'반복검증 연구',markets+'\n'+NOTICE)
 
     def research_detail(self):
         i=self.research_table.currentRow()
         if not self.research_report or i<0 or i>=len(self.research_report['variants']):return
-        r=self.research_report['variants'][i]
+        if self.research_report.get('method_version')=='ROLLING_WFO_V1':
+            from app.research_wfo import detail
+            self.research_detail_label.setText(detail(self.research_report,self.research_report['variants'][i]));return
+        from app.research_comparison import compare_variants
+        rows=getattr(self,'research_comparisons',None)
+        if rows is None or len(rows)!=len(self.research_report['variants']):
+            rows=compare_variants(self.research_report)
+        r=rows[i]
         def f(k):return '자료 없음' if r.get(k) is None else f'{r[k]:+.3f}'
         self.research_detail_label.setText(
             f'학습(이전 기간): {r["train_days"]}일 / {r["train_signals"]}추천 · 평균 순수익 {f("train_return3")}% · '
             f'초과수익 {f("train_excess3")}%p  |  '
             f'검증(미사용 기간): {r["test_days"]}일 / {r["test_signals"]}추천 · '
             f'평균 순수익 {f("test_return3")}% · 초과수익 {f("test_excess3")}%p · Rank IC {f("test_ic")} · 종목별 수익 비율 {f("test_signal_win_pct")}%\n'
-            '성과는 날짜별 추천 종목의 동일 가중 평균이며 실계좌 투자수익률이 아닙니다.')
+            f'학습→검증 초과수익 차이 {f("holdout_gap3")}%p · '
+            f'자료 품질 {r["data_quality_label"]} · 해석 {r["comparison_note"]}\n'
+            f'TEST 초반 시장대비 초과수익 {f("test_early_excess3")}%p'
+            f' ({r.get("test_early_days",0)}일) → 후반 {f("test_late_excess3")}%p'
+            f' ({r.get("test_late_days",0)}일) · 후반 변화 {f("test_late_gap3")}%p'
+            f' · {r.get("test_stability_note","구간 분리 기록 없음")}\n'
+            +(f"3거래일 추천 가격 관측: {r['test_r3_observed']}/{r['test_r3_selected']}종목 · "
+              f"가격 누락 {r['test_r3_missing']} · 자료 끝쪽 {r['test_r3_tail']}\n"
+              f"3거래일 경과한 추천일: 완전 {r['test_r3_complete_days']} / 일부 {r['test_r3_partial_days']} / "
+              f"전체 누락 {r['test_r3_missing_days']}일\n" if 'test_r3_selected' in r else '추천별 가격 확보 집계 기록 없음\n')
+            +
+            '같은 검증 구간을 앞/뒤로 나눈 진단으로 독립적인 추가 검증이나 실제 투자수익은 아닙니다.')
 
     def review_research(self,approve):
         ix=self.research_table.currentRow()
-        if not self.research_report or ix<0 or self.research_run_id is None:return
-        v=self.research_report['variants'][ix]
+        if not self.research_report or ix<0 or ix>=len(self.research_report['variants']) or self.research_run_id is None:return
+        method=self.research_report.get('method_version','HOLDOUT_V1')
+        if method!=self.research_method.currentData():return
+        context=(self.research_source.currentText(),method,self.research_run_id)
+        if getattr(self,'research_display_context',None)!=(self.research_source.currentText(),self.research_method.currentData(),self.research_run_id):return
+        v=self.research_report['variants'][ix];shown=self.research_report
+        if method=='ROLLING_WFO_V1' and approve and (self.research_report['markets'][v['market']]['valid_folds']<3 or self.research_report['latest_candidates'].get(v['market'])!=v['id']):
+            QMessageBox.information(self,'연구 표본 확인','최소 3번의 유효 평가와 최신 학습 후보를 먼저 확인해 주세요. 실제 성과는 미검증이에요.');return
         label='연구 프리셋 승인' if approve else '연구 조건 거부'
         if QMessageBox.question(self,label,f'{v["name"]}\n\n'
               '실제 매수·매도 또는 키움 실시간 필터로 연결되지 않습니다.\n'
               '향후 데이터로 검증할 연구 전략 상태만 저장합니다. 계속할까요?') != QMessageBox.StandardButton.Yes:return
-        self.history.decide_research(self.research_source.currentText(),self.research_run_id,v,approve)
+        if context!=(self.research_source.currentText(),self.research_method.currentData(),self.research_run_id) or self.research_report is not shown or self.research_report['variants'][ix]!=v:return
+        try:self.history.decide_research(context[0],context[2],v,approve,method=method)
+        except Exception:
+            QMessageBox.warning(self,'연구 승인 미완료','저장한 출처·방법·후보를 다시 확인해 주세요. 추천 조건은 바꾸지 않았어요.');return
         self.show_research(self.research_report,show_message=False)
 
     def export_research(self):
         if not self.research_report:
             QMessageBox.information(self,'결과 없음','먼저 조건 검증을 실행하세요.');return
+        report=self.research_report;context=getattr(self,'research_display_context',None)
         folder=QFileDialog.getExistingDirectory(self,'결과를 저장할 폴더',str(Path.home()))
+        if context!=getattr(self,'research_display_context',None) or report is not self.research_report:return
         if not folder:return
         dest=Path(folder)/('KRX_research_'+datetime.now().strftime('%Y%m%d_%H%M%S'))
-        export_report(self.research_report,dest)
+        export_report(report,dest)
         QMessageBox.information(self,'저장 완료',f'{dest}\nsummary.csv / signals.csv / manifest.json')
 
     def make_strategy(self):
@@ -1433,7 +1773,19 @@ class MainWindow(QMainWindow):
                                     '\n\n'.join(report['steps']) + '\n\n' + report['notice'])
         self.run_task(run_order_demo, done, '오프라인 가짜 주문 흐름 확인 완료')
 
-    def start_telegram_orders(self):
+    def start_telegram_recommendations_automatically(self):
+        """One startup attempt using saved credentials; never enables orders."""
+        if self.telegram_order_worker and self.telegram_order_worker.isRunning():return
+        try:
+            if min(int(self.cfg['telegram_user_id']),int(self.cfg['telegram_chat_id']))<=0:
+                raise ValueError()
+            if not self.creds.get('telegram_token'):raise ValueError()
+        except (ValueError,TypeError):
+            self.set_telegram_status('자동 수신 대기 · 연결 설정에서 텔레그램 정보를 저장해 주세요.')
+            return
+        self.start_telegram_orders(automatic=True)
+
+    def start_telegram_orders(self,checked=False,*,automatic=False):
         if self.telegram_order_worker and self.telegram_order_worker.isRunning():
             return
         if self.mode_select.currentData() != current_mode(self.cfg).key:
@@ -1449,19 +1801,39 @@ class MainWindow(QMainWindow):
         except (ValueError, TypeError):
             QMessageBox.information(self, '연결 정보 필요', '봇 연결 키·허용 User ID·개인 대화 Chat ID를 입력하고 저장하세요.')
             return
-        orders_enabled = self.cfg['data_mode'] == 'DEMO'
-        if QMessageBox.question(self, '텔레그램 명령 받기',
+        orders_enabled = not automatic and self.cfg['data_mode'] == 'DEMO'
+        if not automatic and QMessageBox.question(self, '텔레그램 명령 받기',
                 telegram_start_guidance(self.cfg) + '\n텔레그램 명령 받기를 시작할까요?') != QMessageBox.StandardButton.Yes:
             return
         catalog = {s.code:s.name for s in self.stocks if s.source == 'DEMO'}
         self.condition_commands.sync(self.cfg, self.settings.save, now=datetime.now().timestamp(), busy=True)
-        if self.remote_scan_active:
+        if self.remote_scan_active or self.remote_theme_active or self.remote_analysis_active or self.remote_morning_quote_active:
             return
         self.remote_scan = RecommendationRequest(current_mode(self.cfg).key)
+        self.remote_theme = ThemeRequest(self.history,current_mode(self.cfg).key)
+        try:self.proposal_review=ProposalReviewCommands(self.condition_commands.path,self.db,self.cfg)
+        except ValueError:
+            self.set_telegram_status('기본 조건값을 확인하고 저장한 뒤 텔레그램 수신을 시작해 주세요.')
+            return
+        self.remote_analysis=ConditionAnalysisRequest(current_mode(self.cfg).key,
+            lambda page,db=self.db,mode=current_mode(self.cfg).key:proposal_report_text(db,mode,page=page),review=self.proposal_review)
+        self.remote_morning_quote=MorningQuoteRequest(current_mode(self.cfg).key)
+        self.remote_outcome=OutcomeRequest(current_mode(self.cfg).key,
+            source=lambda mode=current_mode(self.cfg).key:recommendation_calendar_source(self.cfg,mode))
         worker = TelegramOrderWorker(data_dir()/'telegram_offline', token, user_id, chat_id, catalog,
                                      conditions=self.condition_commands, orders_enabled=orders_enabled,
+                                     analysis_request=self.remote_analysis,morning_quote_request=self.remote_morning_quote,quote_capture=self.quote_capture,
+                                     recommendation_classification=self.classify_recommendation,
+                                     classified_performance=lambda day,**context:classified_performance_report(data_dir(),('REAL_QUOTES' if self.cfg.get('data_mode')=='KIWOOM' and self.cfg.get('kiwoom_env')=='REAL' else 'UNSUPPORTED'),day,**context),
+                                     condition_report=lambda page=1,db=self.db,mode=current_mode(self.cfg).key:
+                                         condition_report_text(db,mode,min_train=max(20,int(self.cfg['min_strategy_trades'])),page=page),
                                      recommendation_request=self.remote_scan,
-                                     recommendation_status=lambda db=self.db, mode=current_mode(self.cfg).key: recommendation_schedule_summary(db,mode,enabled=self.cfg.get('recommendation_auto_evaluate'),now=datetime.now(KST)),
+                                     theme_request=self.remote_theme,
+                                     outcome_request=self.remote_outcome,
+                                     theme_opening=lambda text,history=self.history,mode=current_mode(self.cfg).key,**kwargs:
+                                         theme_opening_handle(history,mode,text,**kwargs) if current_mode(self.cfg).key==mode else '시세 모드가 바뀌었어요. 개인 수신을 다시 시작해 주세요.',
+                                     theme_plan=lambda text,history=self.history,mode=current_mode(self.cfg).key:theme_plan_text(history,mode,text),
+                                     recommendation_status=lambda db=self.db, mode=current_mode(self.cfg).key: recommendation_schedule_summary(db,mode,enabled=self.cfg.get('recommendation_auto_evaluate'),now=datetime.now(KST),automatic_source=recommendation_calendar_source(self.cfg,mode)),
                                      watch_status=self.mock_watch_status.summary,
                                      watch_refresh=self.mock_watch_status.request_refresh,
                                      watch_result=self.mock_watch_status.refresh_result,
@@ -1469,22 +1841,33 @@ class MainWindow(QMainWindow):
                                      watch_validation=self.mock_watch_status.validation_summary,
                                      watch_history=self.mock_watch_status.history_summary,
                                      watch_funds=self.mock_watch_status.funds_summary,
-                                     recommendation_report=lambda performance, page=1, scan_id=None, db=self.db, mode=current_mode(self.cfg).key:
-                                         (db.recommendation_search_result(mode,scan_id,page=page) if scan_id is not None else
+                                     recommendation_report=lambda performance, page=1, scan_id=None, details=False, db=self.db, mode=current_mode(self.cfg).key:
+                                         (db.recommendation_search_result(mode,scan_id,page=page,details=details) if scan_id is not None else
                                           db.recommendation_summary(mode,performance=performance,page=page)),
-                                     theme_budget=lambda total, fee, buffer, page, take_bps=200, stop_bps=300, history=self.history, mode=current_mode(self.cfg).key: theme_budget_text(theme_budget_preview(history,mode=mode,total_won=total,fee_bps=fee,buffer_bps=buffer,take_bps=take_bps,stop_bps=stop_bps),page=page),
+                                     theme_budget=lambda total, fee, buffer, page, take_bps=200, stop_bps=300, run_id=None, history=self.history, mode=current_mode(self.cfg).key: theme_budget_text(theme_budget_preview(history,mode=mode,total_won=total,fee_bps=fee,buffer_bps=buffer,take_bps=take_bps,stop_bps=stop_bps,run_id=run_id),page=page),
                                      theme_status=lambda destination, history=self.history, mode=current_mode(self.cfg).key: theme_delivery_summary(history,mode=mode,destination=destination),
                                      theme_report=lambda page=1, history=self.history, mode=current_mode(self.cfg).key: theme_latest_report(history,mode=mode,page=page),
                                      practice_daily=lambda day, page=1, db=self.db: db.practice_daily_report(day,page=page),
+                                     actual_daily=lambda day,page=1: actual_daily_text(data_dir()/'actual_fill_records.db',day,page=page),
+                                     daily_mode=current_mode(self.cfg).key,
+                                     mock_daily=self.mock_watch_status.daily_report,
+                                     morning_daily=lambda day,page=1,mode=current_mode(self.cfg).key: morning_daily_text(data_dir(),mode,day,page=page),
+                                     morning_setup=lambda text,db=self.db,history=self.history,mode=current_mode(self.cfg).key:
+                                         morning_setup_text(data_dir(),db,history,mode,dict(self.cfg),text,now=datetime.now(KST)),
+                                     morning_freeze=lambda day,text,db=self.db,history=self.history,mode=current_mode(self.cfg).key:
+                                         morning_freeze_saved(data_dir(),db,history,mode,dict(self.cfg),day,text,now=datetime.now(KST)),
                                      practice_sales=lambda trade_id=None, page=1, db=self.db: db.practice_sale_report(trade_id,page),
                                      recommendation_overview=lambda db=self.db, mode=current_mode(self.cfg).key:
                                          db.recommendation_overview(mode),
                                      watch_orders=self.mock_watch_status.handle_orders,
+                                     watch_delivery=self.mock_watch_status.order_delivery,
                                      watch_cancel_orders=self.mock_watch_status.cancel_orders)
         self.telegram_order_worker = worker
         worker.status.connect(self.telegram_orders_status)
         worker.finished.connect(self.telegram_orders_finished)
-        self.telegram_order_status.setText('연결 확인 중 · '+current_mode(self.cfg).title)
+        self.set_telegram_status('연결 확인 중 · '+current_mode(self.cfg).title)
+        self.home_telegram_start.setEnabled(False)
+        self.home_telegram_stop.setEnabled(True)
         self.telegram_order_start.setEnabled(False)
         self.telegram_order_stop.setEnabled(True)
         worker.start()
@@ -1495,10 +1878,15 @@ class MainWindow(QMainWindow):
         self.telegram_order_stop.setEnabled(False)
         self.telegram_emergency.setEnabled(False)
         self.telegram_resume.setEnabled(False)
-        self.telegram_order_status.setText('수신 중지 요청 · 확인 대기 철회 · 이미 접수한 주문 취소는 별도입니다.')
+        self.home_telegram_stop.setEnabled(False)
+        self.set_telegram_status('수신 중지 요청 · 확인 대기 철회 · 이미 접수한 주문 취소는 별도입니다.')
+
+    def set_telegram_status(self,text):
+        self.telegram_order_status.setText(text)
+        self.home_telegram_status.setText(text)
 
     def telegram_orders_status(self, text):
-        self.telegram_order_status.setText(text)
+        self.set_telegram_status(text)
         worker = self.telegram_order_worker
         ready = bool(worker and worker.service is not None and worker.isRunning()
                      and not worker.isInterruptionRequested() and text.startswith('수신 중 ·'))
@@ -1511,10 +1899,10 @@ class MainWindow(QMainWindow):
             return
         try:
             report = worker.emergency_stop()
-            self.telegram_order_status.setText(report)
+            self.set_telegram_status(report)
             QMessageBox.information(self, '긴급 중지 · 가짜 서버만 연결', report)
         except Exception:
-            self.telegram_order_status.setText('긴급 중지 기록·주문 상태 확인이 필요합니다. 수신을 중지하고 재시작해 복구 확인하세요.')
+            self.set_telegram_status('긴급 중지 기록·주문 상태 확인이 필요합니다. 수신을 중지하고 재시작해 복구 확인하세요.')
 
     def resume_telegram_orders(self):
         worker = self.telegram_order_worker
@@ -1525,20 +1913,22 @@ class MainWindow(QMainWindow):
                 '실제 계좌에 주문하지 않습니다. 계속할까요?') != QMessageBox.StandardButton.Yes:
             return
         try:
-            self.telegram_order_status.setText(worker.resume_after_review())
+            self.set_telegram_status(worker.resume_after_review())
         except ValueError as exc:
             QMessageBox.information(self, '재개하지 않음', str(exc))
         except Exception:
             QMessageBox.information(self, '재개하지 않음', '복구 기록을 확인하지 못했습니다. 수신을 중지하세요.')
 
     def telegram_orders_finished(self):
+        self.home_telegram_start.setEnabled(True)
+        self.home_telegram_stop.setEnabled(False)
         self.telegram_order_start.setEnabled(True)
         self.telegram_order_stop.setEnabled(False)
         self.telegram_emergency.setEnabled(False)
         self.telegram_resume.setEnabled(False)
         if ('확인하세요' not in self.telegram_order_status.text()
                 and not self.telegram_order_status.text().startswith('수신 중지 ·')):
-            self.telegram_order_status.setText('수신 중지 · 자동으로 다시 시작하지 않습니다.')
+            self.set_telegram_status('수신 중지 · 자동으로 다시 시작하지 않습니다.')
 
     def run_task(self, fn, ok, success_text='완료', with_progress=False):
         if self.work is not None and self.work.isRunning():
@@ -1563,6 +1953,28 @@ class MainWindow(QMainWindow):
             self.task_failed(str(ex))
 
     def task_failed(self, message):
+        if getattr(self,'remote_morning_quote_active',False):
+            self.remote_morning_quote.finish(success=False)
+            self.remote_morning_quote_active=False
+            self.statusBar().showMessage('가상 보유 시세 갱신 미완료 · 기록을 확인하세요.')
+            return
+        if getattr(self,'remote_analysis_active',False):
+            self.remote_analysis.finish(success=False)
+            self.remote_analysis_active=False
+            self.statusBar().showMessage('조건 비교 미완료 · 저장 기록을 확인하세요.')
+            return
+        if getattr(self,'remote_outcome_active',False):
+            self.remote_outcome.finish(success=False)
+            self.remote_outcome_active=False
+            self.statusBar().showMessage('추천 성적 갱신 미완료 · 저장 자료를 확인하세요.')
+            return
+        if getattr(self,'theme_progress',None) is not None:
+            self.theme_progress.setText('검색 미완료 · 오류 안내를 확인해 주세요.')
+        if self.remote_theme_active:
+            self.remote_theme.finish(success=False)
+            self.remote_theme_active=False
+            self.statusBar().showMessage('테마1 판정 미완료 · 저장 자료를 확인하세요.')
+            return
         if self.remote_scan_active:
             self.remote_scan.finish(success=False)
             self.remote_scan_active = False
@@ -1577,8 +1989,58 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage('오류: ' + message)
         QMessageBox.warning(self, '작업 실패', message)
 
+    def classify_recommendation(self,text,**context):
+        owner_active=context.pop('active')
+        def current():
+            worker=self.telegram_order_worker
+            return bool((owner_active() if callable(owner_active) else owner_active) and worker
+                and worker.isRunning() and not worker.isInterruptionRequested() and worker.service
+                and (worker.service.scope,worker.service.session)==(context['scope'],context['session']))
+        return self.recommendation_classification.handle(text,
+            mode=lambda:('REAL_QUOTES' if self.cfg.get('data_mode')=='KIWOOM' and self.cfg.get('kiwoom_env')=='REAL' else 'UNSUPPORTED'),
+            active=current,**context)
+
+    def start_quote_capture(self):
+        mode=current_mode(self.cfg).key if self.cfg.get('data_mode')=='KIWOOM' and self.cfg.get('kiwoom_env')=='REAL' else 'UNSUPPORTED'
+        QMessageBox.information(self,'시세 전용 수집',self.quote_capture.request(mode=mode))
+
+    def stop_quote_capture(self):
+        self.quote_capture.cancel()
+        if self.quote_capture_worker is not None:self.quote_capture_worker.stop()
+
+    def show_quote_capture(self):
+        QMessageBox.information(self,'시세 수집 상태',self.quote_capture.report())
+
+    def poll_quote_capture(self):
+        control=getattr(self,'quote_capture',None)
+        if control is None:return
+        running=getattr(self,'quote_capture_worker',None)
+        if running is not None and running.isRunning():return
+        receiver=self.telegram_order_worker
+        owner=control.owner
+        def current():
+            if self.cfg.get('data_mode')!='KIWOOM' or self.cfg.get('kiwoom_env')!='REAL':return False
+            if owner is None:return True
+            return bool(receiver and receiver is self.telegram_order_worker and receiver.isRunning()
+                and not receiver.isInterruptionRequested() and receiver.service
+                and (receiver.service.scope,receiver.service.session)==owner and receiver.service.accepts_search_requests())
+        generation=control.take(mode=current_mode(self.cfg).key,busy=bool(self.work and self.work.isRunning()),active=current())
+        if generation is None:return
+        active=lambda:control.active(generation) and current()
+        def auth():
+            if not active():raise ValueError('시세 수집 소유권이 바뀌었어요.')
+            key,secret=self.broker_keys('REAL')
+            return KiwoomMarket(key,secret,env='REAL')
+        worker=QuoteCaptureWorker(data_dir(),auth,active=active)
+        worker.completed.connect(lambda state:control.finish(generation,state))
+        self.quote_capture_worker=worker;worker.start()
+
     def poll_remote_scan(self):
+        if hasattr(self,'poll_quote_capture'):self.poll_quote_capture()
         worker = self.telegram_order_worker
+        if getattr(self,'remote_theme_active',False) and self.remote_theme.cancellation_requested():
+            if self.work and self.work.isRunning():self.work.requestInterruption()
+            return
         if not self.remote_scan:
             return
         if self.remote_scan_active and self.remote_scan.cancellation_requested():
@@ -1589,9 +2051,89 @@ class MainWindow(QMainWindow):
                       and not worker.isInterruptionRequested())
         if active:
             active = worker.service.accepts_search_requests()
+        if self.remote_theme is not None:
+            data=self.remote_theme.take(current_mode(self.cfg).key,
+                busy=bool(self.work and self.work.isRunning()),active=active)
+            if data is not None:
+                self.remote_theme_active=True
+                if data['source'] in KIWOOM_SOURCES.values():
+                    mode=self.remote_theme.mode
+                    include_etf=False  # 테마1은 일반 추천 설정과 관계없이 ETF 제외
+                    key,secret=self.broker_keys('MOCK' if mode=='MOCK' else 'REAL')
+                    def fetch(progress,cancelled):
+                        client=KiwoomMarket(key,secret,'MOCK' if mode=='MOCK' else 'REAL',batch_profile=self.quote_batch_profile)
+                        try:return collect_kiwoom_theme(self.history,client,mode,selection=data,progress=progress,
+                            cancelled=lambda:cancelled() or self.remote_theme.cancellation_requested(),include_etf=include_etf)
+                        finally:client.session.close()
+                    self.run_task(fetch,self.remote_theme_done,'테마1 검색 완료',with_progress=True)
+                else:
+                    self.run_task(lambda:prepare_confirmed(self.history,data,self.remote_theme.mode,remember=False),
+                                  self.remote_theme_done,'테마1 판정 저장 완료')
+                return
         if self.remote_scan.take(current_mode(self.cfg).key,
                                  busy=bool(self.work and self.work.isRunning()), active=active):
             self.scan(remote=True)
+            return
+        morning=getattr(self,'remote_morning_quote',None)
+        if morning is not None and morning.take(current_mode(self.cfg).key,
+                busy=bool(self.work and self.work.isRunning()),active=active):
+            self.remote_morning_quote_active=True
+            mode=morning.mode
+            def permitted():
+                return (morning.running() and current_mode(self.cfg).key==mode
+                    and self.telegram_order_worker is worker and worker.isRunning()
+                    and not worker.isInterruptionRequested() and worker.service is not None
+                    and worker.service.accepts_search_requests())
+            def client_factory():
+                environment='MOCK' if mode=='MOCK' else 'REAL'
+                key,secret=self.broker_keys(environment)
+                return KiwoomMarket(key,secret,environment)
+            self.run_task(lambda:refresh_morning_quotes(data_dir(),mode,client_factory,active=permitted),
+                self.remote_morning_quote_done,'가상 보유 시세 확인 완료')
+            return
+        analysis=getattr(self,'remote_analysis',None)
+        if analysis is not None and analysis.take(current_mode(self.cfg).key,
+                busy=bool(self.work and self.work.isRunning()),active=active):
+            self.remote_analysis_active=True
+            db,cfg=self.db,dict(self.cfg)
+            self.run_task(lambda:create_proposals(db,cfg),self.remote_analysis_done,'저장 조건 비교 완료')
+            return
+        outcome=getattr(self,'remote_outcome',None)
+        if outcome is not None:
+            data=outcome.take(current_mode(self.cfg).key,busy=bool(self.work and self.work.isRunning()),active=active)
+            if data is not None:
+                from app.recommendation_cache import evaluate_requested
+                self.remote_outcome_active=True
+                db,history,mode=self.db,self.history,outcome.mode
+                source=data['source']
+                if data.get('collect'):
+                    from app.outcome_recovery import collect_missing
+                    key=self.creds.get('krx_api_key')
+                    def collect(progress,cancelled):
+                        return collect_missing(db,history,KRXDailyClient(key or ''),mode,source=source,
+                            today=data['today'],progress=progress,cancelled=cancelled)
+                    self.run_task(collect,self.remote_outcome_done,'추천 성적 자료 보완 완료',with_progress=True)
+                    return
+                self.run_task(lambda:evaluate_requested(db,history,mode,source=source,today=data['today']),
+                    self.remote_outcome_done,'추천 성적 갱신 완료')
+
+    def remote_outcome_done(self,result):
+        self.remote_outcome.finish(success=True,result=result)
+        self.remote_outcome_active=False
+
+    def remote_morning_quote_done(self,result):
+        self.remote_morning_quote.finish(success=True,result=result)
+        self.remote_morning_quote_active=False
+
+    def remote_analysis_done(self,result):
+        self.remote_analysis.finish(success=True,result=result)
+        self.remote_analysis_active=False
+        self.refresh_proposals()
+        self.refresh_shadow()
+
+    def remote_theme_done(self,result):
+        self.remote_theme.finish(success=True,result=result)
+        self.remote_theme_active=False
 
     def scan(self, remote=False):
         if self.work and self.work.isRunning():
@@ -1619,9 +2161,13 @@ class MainWindow(QMainWindow):
         self.run_task(fetch, lambda output: self.on_scan(output[0],cfg,mode,metrics=output[1]), '전체 대상 검색 및 DB 저장 완료', with_progress=True)
 
     def show_scan_progress(self, message):
+        if getattr(self,'remote_theme_active',False):
+            self.remote_theme.progress(message)
         if self.remote_scan_active:
             self.remote_scan.progress(message)
         self.count_info.setText(message)
+        if getattr(self,'theme_progress',None) is not None:
+            self.theme_progress.setText(message)
         self.statusBar().showMessage(message)
 
     def cancel_scan(self):
@@ -1879,7 +2425,17 @@ class MainWindow(QMainWindow):
             busy = busy or value != self.cfg[key]
         try:
             changed = self.condition_commands.sync(self.cfg, self.settings.save,
-                now=datetime.now().timestamp(), busy=busy)
+                now=datetime.now().timestamp(), busy=busy,read_saved=self.settings.strategy_snapshot)
+            review=getattr(self,'proposal_review',None)
+            if review is not None:
+                worker=self.telegram_order_worker
+                review_changed=review.sync(self.cfg,self.settings.save,self.settings.strategy_snapshot,
+                    now=datetime.now().timestamp(),busy=busy,
+                    active=lambda:bool(worker and worker.isRunning() and not worker.isInterruptionRequested()
+                        and worker.service and worker.service.accepts_search_requests()))
+                if review_changed:
+                    self.condition_commands.sync(self.cfg,self.settings.save,now=datetime.now().timestamp(),busy=True)
+                changed=review_changed or changed
             if changed:
                 self.stocks, self.results = [], []
                 self.fill_stock_tables()
@@ -1894,7 +2450,7 @@ class MainWindow(QMainWindow):
             self.count_info.setText('추천 조건 저장을 확인해야 해요. 프로그램에서 조건을 다시 확인해 주세요.')
 
     def save_strategy(self):
-        if self.scanning:
+        if self.scanning or (self.work and self.work.isRunning()):
             QMessageBox.information(self, '조회 진행 중', '조회가 끝나거나 취소한 뒤 조건을 저장하세요.')
             return
         cfg = dict(self.cfg)
@@ -1934,11 +2490,6 @@ class MainWindow(QMainWindow):
 
     def create_optimizer(self):
         status = create_proposals(self.db, self.cfg)
-        for proposal in self.db.proposals():
-            if proposal['state']=='PENDING':
-                candidate=dict(self.cfg)
-                candidate.update(json.loads(proposal['patch_json']))
-                self.shadow.add_proposal_variant(candidate,proposal['id'],self.cfg['data_mode'])
         self.refresh_shadow()
         self.refresh_proposals()
         QMessageBox.information(self,'전략 분석',status)
@@ -1951,8 +2502,13 @@ class MainWindow(QMainWindow):
                 self.proposal_table.setItem(i,j,cell(x))
         n = len(self.db.closed_trades())
         self.opt_status.setText(f'연습 매도 완료 {n}건 · 조건별 앞 기록 {max(20,self.cfg["min_strategy_trades"])}건 + 뒤 기록 10건부터 비교')
+        if getattr(self,'proposal_recovery',{}).get('UNKNOWN',0):
+            self.opt_status.setText(self.opt_status.text()+' · 이전 적용 상태 미확인: 저장 조건을 먼저 확인해 주세요.')
 
     def review_proposal(self, accept):
+        if self.scanning or (self.work and self.work.isRunning()):
+            QMessageBox.information(self,'작업 진행 중','진행 중인 작업이 끝난 뒤 개선안을 검토해 주세요.')
+            return
         row = self.proposal_table.currentRow()
         if row < 0:
             return
@@ -1964,17 +2520,12 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self,'전략 개선안 검토',f'{prop["title"]}\n\n{prop["rationale"]}\n\n{verb}할까요?') != QMessageBox.StandardButton.Yes:
             return
         try:
-            patch = json.loads(prop['patch_json'])
-            if accept and any(k not in self.cfg for k in patch):
-                raise ValueError('알 수 없는 전략 변경값입니다.')
-            patch = self.db.review(pid,accept)
             if accept:
-                self.cfg.update(patch)
-                self.cfg['strategy_version'] += 1
-                self.settings.save()
+                apply_proposal(self.db,self.cfg,pid,self.settings.save,self.settings.strategy_snapshot)
                 self.refresh_strategy_fields()
                 self.shadow.ensure_active_reference(dict(self.cfg),self.cfg['data_mode'])
                 self.refresh_shadow()
+            else:self.db.review(pid,False)
             self.db.log('PROPOSAL',f'{pid}: {verb}')
             self.refresh_proposals()
         except Exception as ex:
@@ -2066,11 +2617,6 @@ class MainWindow(QMainWindow):
             key = now.strftime('%Y-%m-%d')
             if self.cfg.get('last_optimize_day','') != key:
                 create_proposals(self.db, self.cfg)
-                for prop in self.db.proposals():
-                    if prop['state']=='PENDING':
-                        variant=dict(self.cfg)
-                        variant.update(json.loads(prop['patch_json']))
-                        self.shadow.add_proposal_variant(variant,prop['id'],self.cfg['data_mode'])
                 self.refresh_shadow()
                 self.cfg['last_optimize_day'] = key
                 self.settings.save()
@@ -2094,6 +2640,74 @@ class MainWindow(QMainWindow):
             self.timer.start()
             self.auto_button.setText('자동 검색 중지')
             self.scan()
+
+    def defer_operating_request(self,request):
+        self.pending_operating_request=None
+        try:
+            request.validate()
+            detail=('전체 운영 기록을 백업해요.' if request.action=='backup' else
+                    '새 폴더에만 복구해요. 현재 데이터 위치는 바뀌지 않아요.')
+            location=str(request.folder if request.action=='backup' else request.target)
+            answer=QMessageBox.question(self,'종료 후 기록 작업',
+                detail+'\n프로그램을 종료한 뒤 실행합니다.\n저장 위치: '+location+
+                '\n키·설정은 포함하지 않으며 주문을 실행하지 않아요. 계속할까요?',
+                QMessageBox.Yes|QMessageBox.No,QMessageBox.No)
+            if answer!=QMessageBox.Yes:return
+            self.pending_operating_request=request
+            if not self.close():self.pending_operating_request=None
+        except Exception:
+            self.pending_operating_request=None
+            QMessageBox.information(self,'기록 작업 보류','폴더·진행 중인 작업을 확인해 주세요. 종료 후 작업을 예약하지 않았어요.')
+
+    def request_operating_backup(self):
+        self.pending_operating_request=None
+        folder=QFileDialog.getExistingDirectory(self,'전체 백업을 저장할 폴더 · 현재 기록 폴더 밖')
+        if not folder:return
+        from app.operating_backup_request import OperatingRequest
+        self.defer_operating_request(OperatingRequest('backup',data_dir(),Path(folder)))
+
+    def request_operating_restore(self):
+        self.pending_operating_request=None
+        folder=QFileDialog.getExistingDirectory(self,'검사한 전체 운영 백업 폴더 선택')
+        if not folder:return
+        parent=QFileDialog.getExistingDirectory(self,'새 복구 폴더를 만들 위치 · 현재 기록 폴더 밖')
+        if not parent:return
+        import uuid
+        from app.operating_backup_request import OperatingRequest
+        target=Path(parent)/('krx-restored-'+uuid.uuid4().hex)
+        self.defer_operating_request(OperatingRequest('restore',data_dir(),Path(folder),target))
+
+    def inspect_operating_backup(self):
+        if self.work and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 백업을 검사해 주세요.')
+            return
+        folder=QFileDialog.getExistingDirectory(self,'검사할 전체 운영 백업 폴더 선택')
+        if not folder:return
+        from app.operating_backup import verify
+        self.run_task(lambda:verify(folder),lambda info:QMessageBox.information(self,'전체 백업 검사 완료',
+            f"운영 기록 {len(info['files'])}개를 확인했어요.\n저장 시각: {info['created_at']}\n현재 기록 변경·복구·주문은 하지 않았어요."),
+            '전체 운영 백업 검사 완료')
+
+    def inspect_saved_backup(self):
+        """Inspect an explicitly selected snapshot; never overwrite or restore."""
+        if self.work and self.work.isRunning():
+            self.statusBar().showMessage('진행 중인 작업이 끝난 뒤 백업을 확인해 주세요.')
+            return
+        mode=current_mode(self.cfg)
+        folder=QFileDialog.getExistingDirectory(self,mode.title+' · 확인할 백업 폴더 선택')
+        if not folder: return
+        from app.record_backup import inspect_backup
+        self.run_task(
+            lambda:inspect_backup(folder,expected_mode=mode.key),
+            lambda info:QMessageBox.information(
+                self,'백업 검증 완료',
+                f"{mode.title} 기록 사본을 확인했어요.\n"
+                f"저장 시각: {info['created_at']}\n"
+                f"검색 기록: {info['scan_count']}건\n"
+                f"매매 기록: {info['trade_count']}건\n"
+                f"추천 묶음: {info['recommendation_count']}건\n"
+                '현재 데이터는 변경하지 않았어요. 실제 복원·주문은 하지 않았어요.'),
+            '현재 모드 기록 백업 검증 완료')
 
     def backup_current_records(self):
         if self.work and self.work.isRunning():
@@ -2119,18 +2733,28 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self,event):
         self.timer.stop()
+        capture=getattr(self,'quote_capture_worker',None)
+        if capture is not None and capture.isRunning():
+            self.stop_quote_capture()
+            self.pending_operating_request=None
+            QMessageBox.information(self,'시세 수집 종료 중','시세 수집이 끝난 뒤 다시 닫아 주세요.')
+            event.ignore()
+            return
         if self.mock_watch_worker and self.mock_watch_worker.isRunning():
             self.stop_mock_notices()
             QMessageBox.information(self,'모의 연결 종료 중','모의 알림 연결이 끝난 뒤 다시 닫아 주세요.')
+            self.pending_operating_request=None
             event.ignore()
             return
         if self.telegram_order_worker and self.telegram_order_worker.isRunning():
             self.stop_telegram_orders()
             QMessageBox.information(self, '수신 종료 중', '텔레그램 수신이 종료된 뒤 다시 닫아주세요. 확인 대기는 철회했습니다.')
+            self.pending_operating_request=None
             event.ignore()
             return
         if self.work and self.work.isRunning():
             QMessageBox.information(self,'조회 진행 중','진행 중인 요청이 종료된 뒤 닫아주세요.')
+            self.pending_operating_request=None
             event.ignore()
             return
         event.accept()
@@ -2138,8 +2762,26 @@ class MainWindow(QMainWindow):
 
 def main():
     import sys
+    from app.runtime_lock import ReceiverLock,ReceiverAlreadyRunning
     app = QApplication(sys.argv)
     app.setFont(QFont('Malgun Gothic',10))
-    win = MainWindow()
-    win.show()
-    sys.exit(app.exec())
+    try:
+        with ReceiverLock(data_dir()/'application.lock'):
+            win = MainWindow()
+            win.show()
+            result=app.exec()
+    except ReceiverAlreadyRunning:
+        QMessageBox.information(None,'프로그램 사용 중','이미 프로그램이 켜져 있거나 운영 기록을 백업 중이에요. 기존 창이나 백업을 먼저 종료해 주세요.')
+        return
+    request=getattr(win,'pending_operating_request',None)
+    win.pending_operating_request=None
+    if request is not None and result==0:
+        from app.operating_backup_request import execute
+        outcome=execute(request)
+        if outcome['ok']:
+            title='전체 백업 완료' if outcome['action']=='backup' else '새 폴더 복구 완료'
+            QMessageBox.information(None,title,'저장 위치: '+outcome['path']+
+                '\n키·설정은 제외했어요. 현재 데이터 위치와 주문 허용은 바뀌지 않았어요.'+
+                '\n복구한 기록의 미실행·미확인 요청을 확인하세요. 자동 재시작·주문은 하지 않았어요.')
+        else:QMessageBox.information(None,'기록 작업 실패',outcome['message'])
+    sys.exit(result)

@@ -30,9 +30,13 @@ class DailyBatch(list):
         self.received_count=received_count
 
 
-def normalize_day(block,market,day):
+def normalize_day(block,market,day,*,require_date=False):
     if not isinstance(block,list):
         raise ValueError('일별 응답 목록을 확인해야 합니다.')
+    expected=session_day(day).strftime('%Y%m%d')
+    if any((require_date and (not isinstance(raw,dict) or 'BAS_DD' not in raw))
+           or (isinstance(raw,dict) and 'BAS_DD' in raw and raw['BAS_DD']!=expected) for raw in block):
+        raise ValueError('KRX 응답의 기준일자가 요청 날짜와 다르거나 없어요. 기존 자료는 바꾸지 않았어요.')
     rows=[bar for raw in block if isinstance(raw,dict)
           if (bar:=normalize_krx(raw,market,day)) is not None]
     return DailyBatch(rows,len(block))
@@ -115,7 +119,7 @@ class KRXDailyClient:
         block = raw.get('OutBlock_1') if isinstance(raw,dict) else None
         if not isinstance(block,list):
             raise RuntimeError('KRX 응답 형식 오류: 서비스 승인과 요청 날짜를 확인해 주세요.')
-        return normalize_day(block,market,day)
+        return normalize_day(block,market,day,require_date=True)
 
 
 class HistoryStore:
@@ -202,9 +206,11 @@ class HistoryStore:
         with self.connect() as db:
             return db.execute('SELECT COUNT(*),COUNT(DISTINCT day),COUNT(DISTINCT code),MIN(day),MAX(day) FROM daily_bars WHERE source=?',(source,)).fetchone()
 
-    def recommendation_bars(self, source, begin, end):
+    def recommendation_bars(self, source, begin, end, *, now=None):
         if source != 'KRX':
             return self.load_bars(source,begin,end)
+        moment=now or datetime.now(KST)
+        if moment.tzinfo is None or moment.utcoffset() is None:raise ValueError('시세 확인 시각을 확인해 주세요.')
         # Reuse only snapshots fetched after their data day; same-day cache may
         # still contain intraday values even when evaluation happens tomorrow.
         with self.connect() as db:
@@ -217,7 +223,7 @@ class HistoryStore:
                 AND julianday(f.checked_at)<=julianday(?)
                 AND f.count=(SELECT COUNT(*) FROM daily_bars x WHERE x.source=f.source
                     AND x.market=f.market AND x.day=f.day) ORDER BY b.day,b.code''',
-                (begin,end,datetime.now(KST).isoformat())).fetchall()
+                (begin,end,moment.isoformat())).fetchall()
             return [Bar(*tuple(row)) for row in rows]
 
     def load_evidence(self,source,begin,end,*,nxt_mode=None):
@@ -309,10 +315,12 @@ class HistoryStore:
         return {'rows':total,'requests':days}
 
     def save_run(self,source,settings,report):
+        if report.get('method_version')=='ROLLING_WFO_V1' and report.get('source')!=source:raise ValueError('저장 연구의 출처가 달라요.')
+        encoded=json.dumps(report,ensure_ascii=False,allow_nan=False)
         stamp=datetime.now().isoformat(timespec='seconds')
         with self.connect() as db:
             cur=db.execute('INSERT INTO research_runs(ts,source,data_begin,data_end,universe_count,settings_json,report_json) VALUES(?,?,?,?,?,?,?)',
-                (stamp,source,report['data_begin'],report['data_end'],report['symbols'],json.dumps(settings,ensure_ascii=False),json.dumps(report,ensure_ascii=False)))
+                (stamp,source,report['data_begin'],report['data_end'],report['symbols'],json.dumps(settings,ensure_ascii=False),encoded))
             rid=cur.lastrowid
             rows=[]
             for signal in report['top_signals']:
@@ -321,22 +329,41 @@ class HistoryStore:
                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',rows)
         return rid
 
-    def decide_research(self,source,run_id,variant,approve):
+    def decide_research(self,source,run_id,variant,approve,*,method="HOLDOUT_V1"):
         """Research preset ONLY. Never writes real-time Kiwoom filter or orders."""
         with self.connect() as db:
+            identifier=variant['id']
+            existing=db.execute('SELECT report_json FROM research_runs WHERE id=? AND source=?',(run_id,source)).fetchone()
+            if existing is not None and json.loads(existing[0]).get('method_version','HOLDOUT_V1')!=method:raise ValueError('저장 결과의 연구 방법이 달라요.')
+            if method=='ROLLING_WFO_V1':
+                row=db.execute('SELECT report_json FROM research_runs WHERE id=? AND source=?',(run_id,source)).fetchone()
+                if row is None:raise ValueError('저장 연구의 출처를 확인해 주세요.')
+                report=json.loads(row[0])
+                stored=next((item for item in report.get('variants',[]) if item['id']==identifier),None)
+                if report.get('method_version')!=method or report.get('source')!=source or stored!=variant:raise ValueError('저장 연구의 방법·후보가 달라요.')
+                if approve and (report['markets'][variant['market']]['valid_folds']<3 or report['latest_candidates'].get(variant['market'])!=identifier):
+                    raise ValueError('충분한 반복평가와 최신 훈련 후보를 먼저 확인해 주세요.')
+                identifier='WFO1:'+identifier
+            elif method!='HOLDOUT_V1':raise ValueError('연구 방법을 확인해 주세요.')
             db.execute("""INSERT INTO approved_research(source,strategy_id,params_json,run_id,approved_at,state)
                 VALUES(?,?,?,?,?,?) ON CONFLICT(source,strategy_id) DO UPDATE SET
                 params_json=excluded.params_json, run_id=excluded.run_id,
                 approved_at=excluded.approved_at, state=excluded.state""",
-                (source,variant['id'],json.dumps(variant['params'],ensure_ascii=False),run_id,
+                (source,identifier,json.dumps(variant['params'],ensure_ascii=False),run_id,
                  datetime.now().isoformat(timespec='seconds'),'APPROVED_RESEARCH' if approve else 'REJECTED'))
 
-    def research_states(self,source):
+    def research_states(self,source,*,method="HOLDOUT_V1"):
         with self.connect() as db:
-            return {x['strategy_id']:x['state'] for x in db.execute(
-                'SELECT strategy_id,state FROM approved_research WHERE source=?',(source,))}
+            rows=db.execute('SELECT strategy_id,state FROM approved_research WHERE source=?',(source,)).fetchall()
+            if method=='ROLLING_WFO_V1':return {x['strategy_id'][5:]:x['state'] for x in rows if x['strategy_id'].startswith('WFO1:')}
+            if method!='HOLDOUT_V1':raise ValueError('연구 방법을 확인해 주세요.')
+            return {x['strategy_id']:x['state'] for x in rows if not x['strategy_id'].startswith('WFO1:')}
 
-    def last_run(self,source):
+    def last_run(self,source,*,method=None):
         with self.connect() as db:
-            row=db.execute('SELECT id,ts,report_json FROM research_runs WHERE source=? ORDER BY id DESC LIMIT 1',(source,)).fetchone()
+            query='SELECT id,ts,report_json FROM research_runs WHERE source=? ORDER BY id DESC'
+            if method is None:row=db.execute(query+' LIMIT 1',(source,)).fetchone()
+            else:
+                rows=db.execute(query,(source,))
+                row=next((r for r in rows if json.loads(r['report_json']).get('method_version','HOLDOUT_V1')==method),None)
         return (row['id'],row['ts'],json.loads(row['report_json'])) if row else None
